@@ -774,7 +774,196 @@ applicantos_session_active                          applicantos_http_request_dur
 
 ---
 
-## 17. Desktop app — `desktop/`
+## 17. Application status sync — `app/tracking/`
+
+Closes the loop: an application's outcome finds its own way into the database. Runs automatically
+on app launch and continuously in the background, so a Microsoft rejection updates itself whether
+or not the user ever opens the app.
+
+**Design premise (binding).** Email is the channel. Every ATS, and LinkedIn itself, notifies by
+email — so one well-built email pipeline covers LinkedIn, Glassdoor, Indeed and every ATS at once,
+including sources we never explicitly integrated. Glassdoor has no application-status surface at
+all (it redirects to the ATS), and LinkedIn has no status API and forbids scraping. **We therefore
+do not scrape any of them.** An optional portal tracker adds direct checks only for providers where
+a session already exists.
+
+```
+app/tracking/
+  base.py        StatusTracker ABC, StatusSignal, TrackerResult, SyncReport
+  classifier.py  StatusClassifier — deterministic patterns + LLM fallback
+  matcher.py     SignalMatcher — bind a signal to an Application
+  service.py     StatusSyncService
+  email/         base.py  imap.py  gmail.py  outlook.py
+  trackers/      email_tracker.py  portal_tracker.py
+```
+
+### 17.1 Enums (added to `app/models/enums.py`)
+
+```python
+PluginKind:      + TRACKER = "tracker"
+SignalSource:    email_gmail email_imap email_outlook ats_portal manual webhook
+SignalKind:      application_received viewed assessment_requested interview_invite
+                 offer rejection withdrawn ghosted_inferred unknown
+MailProvider:    gmail outlook imap
+StatusSource:    manual email portal inferred pipeline
+```
+
+### 17.2 Models
+
+| Model | Table | Key columns |
+|---|---|---|
+| `EmailAccount` | `email_accounts` | `user_id` FK, `provider` (MailProvider), `address`, `credential_ref` (**keychain key only — never the secret**), `enabled`, `last_sync_at`, `cursor` (Gmail `historyId` / IMAP `UIDVALIDITY:UID`), `folders` JSON, `last_error`, **UNIQUE(user_id, address)** |
+| `StatusSignal` | `status_signals` | `user_id` FK, `application_id` FK nullable, `source` (SignalSource), `kind` (SignalKind), `external_ref` (message id) , `sender`, `sender_domain`, `subject`, `snippet` (≤500 chars), `received_at`, `detected_status` (ApplicationStatus, nullable), `confidence` float, `applied` bool, `needs_review` bool, `match_evidence` JSON, **UNIQUE(user_id, source, external_ref)** |
+
+`Application` gains: `last_synced_at`, `status_source` (StatusSource, default `manual`),
+`status_confidence` float nullable.
+
+### 17.3 Contracts
+
+```python
+@dataclass(slots=True) class StatusSignal:          # transport shape, pre-persistence
+    source: SignalSource; external_ref: str; received_at: datetime
+    sender: str; sender_domain: str; subject: str; body: str
+    company_hint: str | None = None; title_hint: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+@dataclass(slots=True) class Classification:
+    kind: SignalKind; status: ApplicationStatus | None
+    confidence: float; evidence: str; matched_rule: str | None; model_used: str | None
+
+@dataclass(slots=True) class Match:
+    application_id: uuid.UUID | None; confidence: float; evidence: dict[str, Any]
+
+@dataclass(slots=True) class SyncReport:
+    account_id: uuid.UUID | None; fetched: int; classified: int; matched: int
+    applied: int; needs_review: int; skipped: int
+    duration_seconds: float; errors: list[str]
+
+class StatusTracker(BasePlugin, abc.ABC):           # PluginKind.TRACKER
+    meta: ClassVar[PluginMeta]
+    @abc.abstractmethod
+    async def poll(self, user_id, *, since: datetime | None = None) -> AsyncIterator[StatusSignal]
+    async def healthcheck(self) -> bool
+
+class MailBox(Protocol):                            # app/tracking/email/base.py
+    async def connect(self) -> None
+    async def search(self, *, since: datetime | None, cursor: str | None,
+                     senders: list[str] | None) -> AsyncIterator[RawMessage]
+    async def cursor(self) -> str
+    async def close(self) -> None
+GmailMailbox | OutlookMailbox | ImapMailbox         # all READ-ONLY
+
+class StatusClassifier:
+    def classify_rules(self, sig: StatusSignal) -> Classification    # pure, sync, deterministic
+    async def classify(self, sig: StatusSignal, *, use_llm: bool = True) -> Classification
+
+class SignalMatcher:
+    async def match(self, user_id, sig: StatusSignal, cls: Classification) -> Match
+
+class StatusSyncService:
+    async def sync_all(self, user_id, *, since=None) -> list[SyncReport]
+    async def sync_account(self, account_id, *, since=None) -> SyncReport
+    async def apply_signal(self, signal_id) -> Application | None
+    async def pending_review(self, user_id) -> list[StatusSignal]
+    async def resolve(self, signal_id, *, application_id, status) -> Application
+    async def dismiss(self, signal_id) -> None
+    async def detect_ghosted(self, user_id) -> int
+```
+
+### 17.4 Classification
+
+`classify_rules` runs first and is **pure, synchronous and deterministic**. High-precision phrase
+sets per `SignalKind`, matched case-insensitively with word boundaries:
+
+| Kind | Representative phrases | → status |
+|---|---|---|
+| `application_received` | "thank you for applying", "we received your application", "application submitted" | `SUBMITTED` |
+| `viewed` | "your application was viewed", "your resume was viewed" | *(no change)* |
+| `assessment_requested` | "coding challenge", "online assessment", "take-home", "HackerRank", "CodeSignal" | `NEEDS_REVIEW` |
+| `interview_invite` | "schedule an interview", "phone screen", "invite you to interview", "availability for a call" | `INTERVIEW` |
+| `offer` | "pleased to offer", "offer of employment", "extend an offer" | `OFFER` |
+| `rejection` | "move forward with other candidates", "not moving forward", "no longer under consideration", "pursue other applicants", "decided not to proceed" | `REJECTED` |
+
+The LLM is consulted **only** when rules return `unknown` or confidence `< 0.7`, and may never
+override a high-confidence rule match. It never sees more than the subject plus the first 2,000
+characters of the body.
+
+### 17.5 Matching
+
+`SignalMatcher.match` scores each candidate `Application` for the user and returns the best:
+
+1. **Sender domain → company domain** exact match (strongest signal).
+2. **ATS relay domains** — `greenhouse.io`, `lever.co`, `ashbyhq.com`, `myworkday.com`,
+   `icims.com`, `smartrecruiters.com`, `workable.com`, `jobvite.com`, `taleo.net` — the sender
+   domain identifies the ATS, not the employer, so the company is parsed from the display name,
+   the reply-to, or the body.
+3. **Company name** fuzzy match via `normalize_company` from `app/jobs/dedupe.py`.
+4. **Posting title** appearing in subject or body.
+5. **Time window** — the application must have been submitted *before* `received_at`, within a
+   configurable lookback.
+6. **`external_application_id` / `confirmation_id`** appearing in the body — decisive when present.
+
+Below `settings.status_sync_min_confidence` the signal is stored with `needs_review=True` and
+surfaced in the desktop app for one-click confirmation. **Ambiguous outcomes are never guessed** —
+same principle as the application pipeline.
+
+### 17.6 Settings (added to §1)
+
+```python
+status_sync_enabled: bool = True
+status_sync_on_launch: bool = True
+status_sync_interval_minutes: int = 30
+status_sync_lookback_days: int = 120
+status_sync_min_confidence: float = 0.80
+status_sync_auto_apply: bool = True          # apply high-confidence signals without asking
+status_sync_max_messages_per_run: int = 500
+ghosted_after_days: int = 45
+gmail_client_id / gmail_client_secret / outlook_client_id / outlook_client_secret: str | None
+imap_host / imap_port / imap_use_ssl                      # generic IMAP
+```
+
+### 17.7 Workers, API, events
+
+```
+sync.poll_all           -> maintenance   (beat: every status_sync_interval_minutes)
+sync.poll_account       -> maintenance
+sync.detect_ghosted     -> maintenance   (beat: daily)
+sync.on_launch          -> maintenance   (fired by the desktop app on startup)
+```
+
+| Method | Path |
+|---|---|
+| GET / POST / DELETE | `/api/v1/tracking/accounts` |
+| POST | `/api/v1/tracking/accounts/{id}/test` |
+| POST | `/api/v1/tracking/sync` |
+| GET | `/api/v1/tracking/signals` |
+| POST | `/api/v1/tracking/signals/{id}/resolve` |
+| POST | `/api/v1/tracking/signals/{id}/dismiss` |
+
+Events: `tracking.sync_started`, `tracking.sync_progress`, `tracking.signal_found`,
+`tracking.status_changed`, `tracking.sync_finished`.
+
+### 17.8 Privacy invariants (non-negotiable)
+
+1. **Read-only, always.** Request read-only scopes (`gmail.readonly`,
+   `Mail.Read`); IMAP opens mailboxes with `readonly=True`. The code contains no send, delete,
+   move, or flag-modifying call — verifiable by grep.
+2. **Narrow queries, never a full mailbox sweep.** Search is constrained to the lookback window
+   and to sender domains derived from companies the user actually applied to, plus known ATS relay
+   domains.
+3. **Minimal retention.** Persist message id, sender, subject, a snippet capped at 500 characters,
+   the timestamp, and the classification. **Full message bodies are never written to the
+   database** — they live in memory for the duration of classification only.
+4. **Credentials never touch the database.** `EmailAccount.credential_ref` holds an OS-keychain
+   key; tokens live in the keychain (`keyring`). Refresh tokens are never logged.
+5. **Redaction applies.** Email addresses and subjects pass through the existing structlog
+   redaction chain before any log line.
+6. **Off by default until connected.** No mailbox is read until the user explicitly connects one,
+   and disconnecting deletes the stored credential reference and cursor.
+
+---
+
+## 18. Desktop app — `desktop/`
 
 ```
 desktop/
@@ -813,7 +1002,7 @@ desktop/
 
 ---
 
-## 18. Cross-cutting rules (the golden rules)
+## 19. Cross-cutting rules (the golden rules)
 
 1. **Never apply twice** — `UNIQUE(user_id, posting_id)` *and* a status guard in `Pipeline.submit`.
 2. **Never guess** — low confidence, essay overflow, captcha, MFA, or unknown required field ⇒

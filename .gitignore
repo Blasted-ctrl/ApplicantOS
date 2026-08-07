@@ -116,3 +116,7 @@ desktop.ini
 
 # ── Claude Code local state ─────────────────────────────────────────────────
 .claude/settings.local.json
+
+# Claude Code transient session state
+.claude/scheduled_tasks.lock
+.claude/*.lock

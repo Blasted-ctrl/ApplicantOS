@@ -1,0 +1,75 @@
+# ApplicantOS — packaging and dependency manifest.
+#
+# Everything the backend needs to *import* lives in `[project].dependencies`. Everything it
+# only needs in a particular deployment shape — a database driver, an optional accelerator —
+# is an extra, so a fresh clone can install exactly the stack it is going to run.
+#
+# Two install shapes are supported and both are named here:
+#
+#   pip install -e ".[postgres]"   # the default posture: DATABASE_URL is postgresql+asyncpg
+#   pip install -e ".[sqlite]"     # SQLITE_MODE=true, the zero-infrastructure install
+#
+# `app/database/session.py` builds the engine at import time from `settings.database_url`,
+# so the driver named by that URL must be installed before anything under `app.database`
+# can even be imported. That is why the drivers are extras rather than hard dependencies:
+# they are not optional at runtime, they are *chosen* at install time.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "applicantos"
+version = "0.1.0"
+description = "Knowledge-graph-driven job application automation with a hard kill switch."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+
+# Runtime imports, all of them. See docs/CONTRACTS.md §1-§4 for what each one carries:
+#   sqlalchemy       — the ORM; >=2.0 is mandatory because every model uses `Mapped[]`
+#                      declarative syntax, which does not exist in 1.4.
+#   pydantic         — v2 only: `model_validator(mode="after")`, `model_fields`.
+#   pydantic-settings— `BaseSettings` / `SettingsConfigDict`, split out of pydantic in v2.
+#   structlog        — the logging pipeline, including the `redact_secrets` processor
+#                      that golden rule #4 makes non-negotiable.
+#   alembic          — schema migrations; `alembic/env.py` imports `app.models`.
+dependencies = [
+    "SQLAlchemy>=2.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "structlog>=24.1",
+    "alembic>=1.13",
+]
+
+[project.optional-dependencies]
+# Database drivers. `asyncpg` serves `database_url`; `psycopg` serves the derived
+# `sync_database_url` that Alembic and blocking tooling run on (see
+# `ASYNC_TO_SYNC_DRIVERS` in app/config/settings.py). Both are needed for a Postgres install.
+postgres = [
+    "asyncpg>=0.29",
+    "psycopg[binary]>=3.1",
+]
+# `sqlite_mode` rewrites the URL to sqlite+aiosqlite; the sync half (`sqlite+pysqlite`) is
+# stdlib, so only the async driver has to be installed.
+sqlite = [
+    "aiosqlite>=0.19",
+]
+
+# Optional accelerators. Each import site degrades gracefully when the package is absent:
+#   orjson  — app/cache/base.py falls back to the stdlib json codec (wire-compatible).
+#   redis   — app/cache/redis_cache.py marks itself unavailable and logs once.
+#   pgvector— app/database/types.py stores embeddings as JSON instead of a native vector.
+redis = ["redis>=5.0"]
+orjson = ["orjson>=3.9"]
+pgvector = ["pgvector>=0.2"]
+
+# Convenience aggregates.
+sqlite-all = ["applicantos[sqlite,orjson]"]
+postgres-all = ["applicantos[postgres,redis,orjson,pgvector]"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["config/*.yaml"]

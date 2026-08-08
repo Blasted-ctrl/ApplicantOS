@@ -848,6 +848,9 @@ class Pipeline:
             )
 
         # -- 6. attempt ---------------------------------------------------------------------
+        # Set once `transition(SUBMITTING)` has committed. From that moment a cancellation
+        # would otherwise strand the row mid-flight, so the handler below has to clean up.
+        submitting_committed = False
         try:
             user = await self._load_user(application.user_id)
             provider = self._provider(provider_name)
@@ -872,12 +875,27 @@ class Pipeline:
                 payload={"provider": provider_name, "score": value},
             )
 
+            submitting_committed = True
+
             attempt_started = time.monotonic()
             try:
                 result = await provider.apply(context)
             finally:
                 elapsed = time.monotonic() - attempt_started
         except asyncio.CancelledError:
+            # Golden rule #8. `transition(SUBMITTING)` has already committed, so without this
+            # the row is durably `submitting` with no path out — and the caller cannot tell
+            # the two cases apart: cancelled *before* the provider ran (nothing was sent) or
+            # *after* it returned (the employer really has the application). Guard 3 refuses
+            # to re-submit anything that is not READY, so this cannot double-apply — but it
+            # would sit in the UI as permanently in-flight and never reach the review queue.
+            #
+            # Escalate rather than guess. VERIFICATION_FAILED is exactly right: we do not
+            # know whether it was sent, and a human checking their inbox settles it in
+            # seconds. Shielded so the cleanup is not itself cancelled mid-write.
+            if submitting_committed:
+                await self._abandon_in_flight(application, started, score=value,
+                                              provider=provider_name)
             raise
         except UnsupportedFlowError as exc:
             return await self._escalate(
@@ -1331,6 +1349,66 @@ class Pipeline:
             message=f"Submission failed: {exc}",
             error=str(exc),
         )
+
+    async def _abandon_in_flight(
+        self,
+        application: Application,
+        started: float,
+        *,
+        score: int | None,
+        provider: str,
+    ) -> None:
+        """Move a cancelled, mid-submission application out of ``SUBMITTING``.
+
+        Called only from the :class:`asyncio.CancelledError` handler in :meth:`submit`, after
+        the transition to ``SUBMITTING`` has committed. A Celery warm shutdown, a Ctrl-C or a
+        task revocation can land anywhere between that commit and :meth:`_finalize`, and the
+        two ends of that window are indistinguishable afterwards: the provider may never have
+        run, or it may have submitted successfully and been interrupted while recording the
+        result.
+
+        Guard 3 in :meth:`submit` refuses anything that is not ``READY``, so a stranded row can
+        never be silently re-submitted. But it would sit in the interface as permanently
+        in-flight and never reach the review queue, which is the failure golden rule #8 exists
+        to prevent — and in the worst case the user would not know they had applied at all.
+
+        So the row is parked in review with :attr:`~app.models.enums.ReviewReason.VERIFICATION_FAILED`,
+        which is precisely the situation: the outcome is unknown. A human confirms it from their
+        inbox in seconds.
+
+        Every step is best-effort and never raises. The caller is already unwinding a
+        cancellation; failing to tidy up must not replace that with a different exception.
+
+        Args:
+            application: The row currently sitting in ``SUBMITTING``.
+            started: Monotonic timestamp from the start of :meth:`submit`, for the duration.
+            score: The posting's score, when it was computed.
+            provider: Name of the ATS provider the attempt was routed to.
+        """
+        log = self._log.bind(application_id=str(application.id), provider=provider)
+        try:
+            # Shielded: this is cleanup running *during* a cancellation, so without the shield
+            # the first await would be cancelled too and the row would stay stranded.
+            await asyncio.shield(
+                self._applications.mark_needs_review(
+                    application,
+                    ReviewReason.VERIFICATION_FAILED,
+                    payload={
+                        "provider": provider,
+                        "score": score,
+                        "cause": "cancelled_mid_submission",
+                        "duration_seconds": round(time.monotonic() - started, 3),
+                        "note": (
+                            "Submission was interrupted after it began. It is not known "
+                            "whether the employer received this application — check your "
+                            "email for a confirmation before resubmitting."
+                        ),
+                    },
+                )
+            )
+            log.warning("pipeline.submit_cancelled_parked_for_review")
+        except Exception:  # noqa: BLE001 - cleanup must never mask the cancellation
+            log.exception("pipeline.submit_cancelled_cleanup_failed")
 
     async def _escalate(
         self,

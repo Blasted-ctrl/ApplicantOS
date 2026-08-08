@@ -1361,3 +1361,11 @@ authoritative. `field_answer.py` is the safer first target.
 now regression-tested". Neither was true — there is no `tests/` directory; both were verified
 with throwaway scripts. Both claims now state the real status and carry a note to delete when
 the test phase lands. Full analysis in `docs/RESEARCH_EVOLVEAGENT.md`.
+
+### J. `AutoFiller.fill` skips FILE fields entirely (note for the apply driver)
+`fill()` `continue`s on `FieldKind.FILE`, so a required resume upload appears in **neither**
+the `filled` nor the `needs_review` list. Not a defect today — no caller exists — but the
+driver that wires the browser layer to `Pipeline.submit` must reconcile file fields from
+`discover_fields()` output itself and route an `UploadFailedError` to
+`ReviewReason.FILE_UPLOAD_FAILED`. Iterating only `needs_review` would submit an application
+with no resume attached.

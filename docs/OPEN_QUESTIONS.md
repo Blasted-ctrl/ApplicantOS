@@ -1339,3 +1339,25 @@ measured quality gain, 6x token cost), the LLM judge (never calls an LLM — sco
 length and whether the text contains "##"), `DurableWorkflowService` (simulated execution,
 checkpoints with zero readers, `resume_run` that cannot resume a crash), and their usage ledger
 (flat $0.002/call, `response.usage` discarded).
+
+### G. Three zero-caller subsystems (verified 2026-08-07)
+- `MemoryStore.as_prompt_context` — fully implemented, 600-token budget, graceful truncation,
+  **zero call sites**. Memory is recorded, embedded, ranked, attached to `RetrievalResult`, and
+  dropped. `MemoryStore.reinforce()` likewise has zero callers.
+- `ApplicationVerifier` — no caller outside its own module. Better designed than anything in
+  the researched repo; the gap is wiring, not design.
+- `CheckpointService` — spec'd in CONTRACTS §13, never written.
+
+### H. Wiring memory into prompts is unsafe without a PII screen first
+`ReviewService._remember` stores the human's literal answer to a form field. A reviewer typing
+an SSN, DOB or salary creates a `MemoryEntry` whose text is that value. `redact_secrets` is
+key-based and log-scoped — it would not catch a bare value in a memory body and does not run on
+prompts at all. Screen before injecting. Inject into the **system** prompt as style/preference
+constraints only, never into `$facts`, so golden rule 7 and the resume validators stay
+authoritative. `field_answer.py` is the safer first target.
+
+### I. Documentation honesty fix applied
+`docs/SAFETY.md` claimed the kill switch "is verified by a test" and that the redaction fix "is
+now regression-tested". Neither was true — there is no `tests/` directory; both were verified
+with throwaway scripts. Both claims now state the real status and carry a note to delete when
+the test phase lands. Full analysis in `docs/RESEARCH_EVOLVEAGENT.md`.

@@ -36,8 +36,13 @@ if dry_run or not settings.auto_apply_enabled:
     return False          # nothing below this line runs
 ```
 
-This is verified by a test that asserts on the fake page's **recorded clicks**, not on the return
-value — because a function can return `False` and still have clicked something.
+`AutoFiller` exposes `submit_attempted` / `submit_clicked` hooks specifically so this can be
+asserted on the **recorded clicks** rather than the return value — a function can return `False`
+and still have clicked something.
+
+> **Honest status:** the hooks are in place; the committed test that asserts on them is not.
+> This behaviour has been verified manually, not in CI. There is currently no `tests/` directory —
+> it lands in the test phase, and this note gets deleted then, not before.
 
 ---
 
@@ -145,7 +150,8 @@ docstring. Adding a provider means making that call honestly.
   password / token / api_key / secret / authorization / cookie / ssn / dob — through nested dicts
   and lists. Traceback rendering runs with `show_locals=False`, because frame locals otherwise dump
   your API key into the log while the same key is correctly redacted two fields over. That bug
-  shipped once here and is now regression-tested.
+  shipped once here and was fixed; the fix has been verified manually (a secret in a frame local
+  no longer reaches the log) but is not yet covered by a committed regression test.
 - **Email access is read-only.** The status-sync feature requests read-only scopes and contains no
   send, delete, move, or flag call anywhere — grep-verifiable. It queries a bounded window scoped
   to companies you actually applied to, never a full mailbox sweep, and persists only a message id,

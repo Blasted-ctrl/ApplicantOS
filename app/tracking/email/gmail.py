@@ -29,6 +29,27 @@ routine poll into one small request. History is retained by Google for about a w
 cursor older than that returns ``404``; that is expected rather than exceptional, and the
 adapter falls back to the bounded ``q=`` search for the configured window. Re-reading is
 free because ``UNIQUE(user_id, source, external_ref)`` de-duplicates on the way in.
+
+Two-phase incremental fetch (§17.8.2)
+-------------------------------------
+
+``users.history.list`` returns *ids*, and it cannot be filtered by sender: what changed is
+what changed. Turning those ids into messages therefore happens in two phases, and the
+split is the privacy control:
+
+1. **Metadata.** Each id is fetched with
+   ``format=metadata&metadataHeaders=From,Reply-To,Subject,Date``. Google returns headers
+   and ``internalDate`` and **no body at all** — not a payload part, not a snippet — so no
+   message content is transferred for mail this adapter is about to discard.
+2. **Bodies, for survivors only.** The metadata is checked against
+   :meth:`~app.tracking.email.base.MailQuery.matches`, and only the ids inside the window
+   *and* inside the sender allowlist are re-fetched with ``format=full``.
+
+Fetching ``format=full`` first and filtering afterwards would pull the body of every
+message that arrived in the user's inbox since the last poll — personal mail included —
+into this process before rejecting it. The saving is logged as ``gmail.history_two_phase``
+(``fetched_metadata`` / ``matched`` / ``fetched_full``). The non-incremental path needs no
+such split: ``q=`` already applied both bounds on Google's servers.
 """
 
 from __future__ import annotations
@@ -81,6 +102,20 @@ MAX_PAGES: Final[int] = 50
 #: History type requested. Only *new mail* can change an application's status; label edits,
 #: deletions and read-state changes are irrelevant and are not asked for.
 HISTORY_TYPE_MESSAGE_ADDED: Final[str] = "messageAdded"
+
+#: ``users.messages.get`` projection that returns the whole MIME tree, bodies included.
+FORMAT_FULL: Final[str] = "full"
+
+#: ``users.messages.get`` projection that returns headers and ``internalDate`` and no body.
+#: Phase one of the incremental path (§17.8.2).
+FORMAT_METADATA: Final[str] = "metadata"
+
+#: Headers requested alongside ``format=metadata``. Exactly what
+#: :meth:`~app.tracking.email.base.MailQuery.matches` reads (``From`` and ``Date``) plus the
+#: two the tracker needs to identify a relayed message (``Reply-To``, ``Subject``). Asking
+#: for a named set rather than all headers keeps recipients, routing and tracking headers
+#: off the wire as well.
+METADATA_HEADERS: Final[tuple[str, ...]] = ("From", "Reply-To", "Subject", "Date")
 
 #: Gmail answers ``404`` when the requested ``startHistoryId`` has aged out of its roughly
 #: one-week retention. That is a routine fallback condition, not a failure.
@@ -182,12 +217,12 @@ class GmailMailbox(OAuthMailbox):
 
         Two paths, one guarantee. With a usable *cursor* the adapter asks
         ``users.history.list`` for what has changed since that revision — a small request
-        that usually returns nothing. Otherwise it runs the bounded ``q=`` search built by
+        that usually returns nothing — and turns those ids into messages in the two phases
+        described in the module docstring, so a body is only ever downloaded for a message
+        the allowlist already admitted. Otherwise it runs the bounded ``q=`` search built by
         :meth:`_build_q`, which pushes both the window and the allowlist onto Google's
-        servers. Either way every candidate is re-checked against
-        :meth:`~app.tracking.email.base.MailQuery.matches` before it is yielded, so the
-        history path — which cannot express an allowlist server-side — discards anything
-        outside it inside this adapter.
+        servers. Either way every candidate is checked against
+        :meth:`~app.tracking.email.base.MailQuery.matches` before it is yielded.
 
         A run that hits ``status_sync_max_messages_per_run`` yields the **oldest** matches
         and logs ``gmail.run_truncated``; the remainder is picked up incrementally, because
@@ -208,17 +243,21 @@ class GmailMailbox(OAuthMailbox):
         """
         query = build_query(since, senders, settings=self._settings, limit=self._max_messages)
 
-        message_ids: list[str] | None = None
+        history_ids: list[str] | None = None
         if cursor and cursor.strip().isdigit():
-            message_ids = await self._ids_from_history(cursor.strip())
-        if message_ids is None:
-            message_ids = await self._ids_from_search(query)
+            history_ids = await self._ids_from_history(cursor.strip())
 
-        collected: list[RawMessage] = []
-        for message_id in message_ids:
-            message = await self._fetch_message(message_id)
-            if message is not None and query.matches(message):
-                collected.append(message)
+        collected: list[RawMessage]
+        if history_ids is None:
+            message_ids = await self._ids_from_search(query)
+            collected = []
+            for message_id in message_ids:
+                message = await self._fetch_message(message_id)
+                if message is not None and query.matches(message):
+                    collected.append(message)
+        else:
+            message_ids = history_ids
+            collected = await self._fetch_incremental(history_ids, query)
 
         collected.sort(key=lambda item: item.received_at)
         if len(collected) > query.limit:
@@ -321,19 +360,74 @@ class GmailMailbox(OAuthMailbox):
                 break
         return list(found)
 
-    async def _fetch_message(self, message_id: str) -> RawMessage | None:
+    async def _fetch_incremental(
+        self, message_ids: Sequence[str], query: MailQuery
+    ) -> list[RawMessage]:
+        """Turn history ids into messages without downloading unauthorised bodies.
+
+        Phase one fetches every id with ``format=metadata``, which returns no body; phase
+        two re-fetches with ``format=full`` only the ids whose metadata satisfied *query*.
+        This is privacy invariant §17.8.2 applied to the one path where Gmail cannot apply
+        it server-side.
+
+        Args:
+            message_ids: Ids reported by ``users.history.list``.
+            query: The bounded query — the window, the allowlist and the ceiling.
+
+        Returns:
+            Fully-populated messages for the ids that matched, oldest first.
+        """
+        matched: list[RawMessage] = []
+        for message_id in message_ids:
+            header_only = await self._fetch_message(message_id, metadata_only=True)
+            if header_only is not None and query.matches(header_only):
+                matched.append(header_only)
+
+        # Oldest first *before* the ceiling is applied, so a truncated run fetches the
+        # bodies of the oldest matches and the newest arrive on the next incremental run.
+        matched.sort(key=lambda item: item.received_at)
+        if len(matched) > query.limit:
+            self.logger.warning(
+                "gmail.run_truncated", matched=len(matched), limit=query.limit
+            )
+            matched = matched[: query.limit]
+
+        collected: list[RawMessage] = []
+        for header_only in matched:
+            message = await self._fetch_message(header_only.message_id)
+            if message is not None:
+                collected.append(message)
+
+        self.logger.info(
+            "gmail.history_two_phase",
+            fetched_metadata=len(message_ids),
+            matched=len(matched),
+            fetched_full=len(collected),
+        )
+        return collected
+
+    async def _fetch_message(
+        self, message_id: str, *, metadata_only: bool = False
+    ) -> RawMessage | None:
         """Fetch one message and reduce it to a :class:`RawMessage`.
 
         Args:
             message_id: Gmail's message id.
+            metadata_only: When ``True``, request ``format=metadata`` with
+                :data:`METADATA_HEADERS` — headers and ``internalDate`` only, no body. The
+                resulting :class:`RawMessage` has an empty :attr:`~RawMessage.body`, which
+                is all :meth:`~app.tracking.email.base.MailQuery.matches` needs.
 
         Returns:
             The message, or ``None`` when it has since been removed or could not be read —
             one bad message must not end a sync with hundreds left.
         """
+        params: dict[str, Any] = {"format": FORMAT_FULL}
+        if metadata_only:
+            params = {"format": FORMAT_METADATA, "metadataHeaders": list(METADATA_HEADERS)}
         try:
             payload = await self._get_json(
-                f"{GMAIL_API_BASE}/messages/{message_id}", params={"format": "full"}
+                f"{GMAIL_API_BASE}/messages/{message_id}", params=params
             )
         except MailboxError as exc:
             self.logger.debug(

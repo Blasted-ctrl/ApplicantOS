@@ -1350,9 +1350,10 @@ checkpoints with zero readers, `resume_run` that cannot resume a crash), and the
 
 ### H. Wiring memory into prompts is unsafe without a PII screen first
 `ReviewService._remember` stores the human's literal answer to a form field. A reviewer typing
-an SSN, DOB or salary creates a `MemoryEntry` whose text is that value. `redact_secrets` is
-key-based and log-scoped — it would not catch a bare value in a memory body and does not run on
-prompts at all. Screen before injecting. Inject into the **system** prompt as style/preference
+an SSN, DOB or salary creates a `MemoryEntry` whose text is that value. `redact_secrets` now
+scrubs values as well as key names, but it is still log-scoped and its value patterns target
+addresses, credentials and opaque blobs — it would not catch a bare SSN or salary in a memory
+body, and it does not run on prompts at all. Screen before injecting. Inject into the **system** prompt as style/preference
 constraints only, never into `$facts`, so golden rule 7 and the resume validators stay
 authoritative. `field_answer.py` is the safer first target.
 

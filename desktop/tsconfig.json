@@ -1,0 +1,47 @@
+{
+  // The renderer project. `docs/CONTRACTS.md` §18 makes `src/lib/api/types.ts` the mirror of
+  // the backend's pydantic schemas, so the type checker is the only thing standing between a
+  // renamed DTO field and a blank screen — it runs with everything on.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
+
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+
+    // Strictness. `noUncheckedIndexedAccess` is the one that matters most here: every table
+    // row, chart series, and virtualised list item is reached by index, and without it
+    // `items[i]` lies about being defined on an out-of-range read.
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    // Unused locals and parameters are caught by ESLint instead, whose version of the rule
+    // understands the `_name` convention for "required by the signature, deliberately
+    // unused" — a distinction tsc's flags cannot make, which is why enabling both would make
+    // every event handler that ignores its argument an error.
+
+    // No `baseUrl`: it is deprecated as of TypeScript 6 and unnecessary here, because path
+    // mappings without one resolve relative to this file — which is what we want anyway.
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  // `vite.config.ts` is checked by this project rather than being split into a referenced
+  // build project: it is the file that defines `__APP_VERSION__` and the `@` alias, and a
+  // mistake there breaks the renderer, not the tooling.
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["dist", "src-tauri", "node_modules"]
+}

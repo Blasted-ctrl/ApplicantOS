@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <title>ApplicantOS</title>
+
+    <!--
+      White-flash prevention, layer 3 of 3 (docs/UI.md §5.2). Layers 1 and 2 are
+      `visible: false` in tauri.conf.json plus the window `backgroundColor`; this is the
+      one that covers the gap between the webview painting its first frame and the app
+      stylesheet arriving. It MUST stay above every stylesheet link and must not move.
+
+      Three-state theme resolution (docs/UI.md §2.3): an explicit `data-theme` written by
+      the renderer wins, otherwise `prefers-color-scheme` decides. The colours are
+      `--bg-chrome` for each theme, because the shell — not the content plane — is what
+      occupies the viewport at frame zero.
+
+      No inline <script> here on purpose: the CSP in tauri.conf.json ships `script-src
+      'self'` with no `'unsafe-inline'`, and the window stays hidden until the renderer
+      has applied the persisted theme and called `show()`, so there is nothing an inline
+      boot script would buy.
+    -->
+    <style>
+      html {
+        background: #08090c;
+        color-scheme: dark;
+      }
+      html[data-theme='light'] {
+        background: #eceef1;
+        color-scheme: light;
+      }
+      html[data-theme='dark'] {
+        background: #08090c;
+        color-scheme: dark;
+      }
+      @media (prefers-color-scheme: light) {
+        html:not([data-theme='dark']) {
+          background: #eceef1;
+          color-scheme: light;
+        }
+      }
+      html,
+      body,
+      #root {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        overscroll-behavior: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -33,11 +33,28 @@ where the allowlist is applied:
   sender allowlist and the received-date floor. Nothing outside the query ever leaves
   Microsoft's servers.
 * **Incremental run.** The delta feed returns what changed in the inbox since the token,
-  which Graph cannot narrow by sender. Every message is therefore re-checked against
-  :meth:`~app.tracking.email.base.MailQuery.matches` **inside this adapter**, and anything
-  outside the window or the allowlist is discarded before it reaches the tracker. That keeps
-  §17.8.2's guarantee — no unauthorised message is ever handed to anything that could
-  persist it — while paying one delta request instead of a full re-scan.
+  and Graph cannot narrow it by sender. The allowlist must therefore be applied inside this
+  adapter — but *never* to mail that has already been downloaded in full.
+
+Two-phase delta (§17.8.2)
+-------------------------
+
+The incremental path reads the delta feed **twice**, and the split is the privacy control:
+
+1. **Metadata.** The delta page is requested with
+   ``$select=id,receivedDateTime,from,replyTo,subject`` — :data:`GRAPH_METADATA_FIELDS`,
+   which contains no ``body`` and no ``bodyPreview``. Graph therefore transfers no message
+   content at all, whoever the sender turns out to be.
+2. **Bodies, for survivors only.** Each metadata item is checked against
+   :meth:`~app.tracking.email.base.MailQuery.matches`, and only the ids that pass — inside
+   the window *and* inside the sender allowlist — are re-requested individually with the
+   body-bearing :data:`GRAPH_SELECT_FIELDS`.
+
+A single-phase delta would pull the body of every message that arrived in the user's inbox
+since the last run, including the personal mail that could never match, and only then throw
+it away — the content having already crossed the network and entered this process. The
+fan-out saved is logged as ``outlook.delta_two_phase``
+(``fetched_metadata`` / ``matched`` / ``fetched_full``).
 
 A delta token that Graph no longer recognises answers ``410 Gone``; that is a routine
 condition after a long pause, and the adapter falls back to the bounded ``$search``.
@@ -48,7 +65,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import structlog
 
@@ -90,6 +107,14 @@ OUTLOOK_REFRESH_SCOPE: Final[str] = f"offline_access {OUTLOOK_MAIL_READ_SCOPE}"
 GRAPH_SELECT_FIELDS: Final[str] = (
     "id,receivedDateTime,subject,from,replyTo,body,bodyPreview,internetMessageId"
 )
+
+#: Fields requested in phase one of the incremental path. Deliberately **without** ``body``
+#: and ``bodyPreview``: this is exactly what
+#: :meth:`~app.tracking.email.base.MailQuery.matches` reads — arrival time and sender — and
+#: nothing more, so a message the allowlist would reject never has its content transferred
+#: (§17.8.2). ``replyTo`` and ``subject`` are carried because the tracker matches on the
+#: reply-to address of relayed mail and because a subject-only signal is still a signal.
+GRAPH_METADATA_FIELDS: Final[str] = "id,receivedDateTime,from,replyTo,subject"
 
 #: Messages per page. Graph's practical maximum for ``$search`` is well above this; smaller
 #: pages keep one response bounded.
@@ -220,10 +245,12 @@ class OutlookMailbox(OAuthMailbox):
     ) -> AsyncIterator[RawMessage]:
         """Yield messages inside the window and inside the sender allowlist, oldest first.
 
-        With a usable *cursor* the inbox delta feed supplies only what changed; otherwise the
-        bounded ``$search`` runs. Both paths end at the same filter — every message is
-        checked against :meth:`~app.tracking.email.base.MailQuery.matches` before it is
-        yielded, so nothing the query did not authorise leaves this adapter.
+        With a usable *cursor* the inbox delta feed supplies only what changed, in the two
+        phases described in the module docstring — metadata for everything, bodies only for
+        what the allowlist admits. Otherwise the bounded ``$search`` runs, which expresses
+        both bounds server-side. Both paths end at the same filter: every message is checked
+        against :meth:`~app.tracking.email.base.MailQuery.matches` before it is yielded, so
+        nothing the query did not authorise leaves this adapter.
 
         A run that hits ``status_sync_max_messages_per_run`` yields the **oldest** matches
         and logs ``outlook.run_truncated``; the rest arrives incrementally, because the
@@ -246,7 +273,7 @@ class OutlookMailbox(OAuthMailbox):
 
         candidates: list[dict[str, Any]] | None = None
         if cursor and cursor.strip():
-            candidates = await self._delta_page_through(cursor.strip(), query)
+            candidates = await self._delta_candidates(cursor.strip(), query)
         if candidates is None:
             candidates = await self._search_page_through(query)
 
@@ -346,26 +373,112 @@ class OutlookMailbox(OAuthMailbox):
                 url, params = next_link, None
         return collected
 
+    async def _delta_candidates(
+        self, token: str, query: MailQuery
+    ) -> list[dict[str, Any]] | None:
+        """Run the incremental path: metadata for everything, bodies for survivors only.
+
+        This is where privacy invariant §17.8.2 is enforced on the one path where Graph
+        cannot enforce it for us. Phase one transfers no message content whatsoever; the
+        allowlist and the window are then applied to that metadata; phase two asks for the
+        bodies of the ids that survived, one request each.
+
+        Args:
+            token: The delta token from the previous run.
+            query: The bounded query — the window, the allowlist and the ceiling.
+
+        Returns:
+            Body-bearing payloads for matching messages only, or ``None`` when Graph no
+            longer recognises the token and the caller should fall back to ``$search``.
+        """
+        metadata = await self._delta_page_through(token, query)
+        if metadata is None:
+            return None
+
+        matched: list[RawMessage] = []
+        seen: set[str] = set()
+        for payload in metadata:
+            message = self._build_message(payload)
+            if not message.message_id or message.message_id in seen:
+                continue
+            seen.add(message.message_id)
+            if query.matches(message):
+                matched.append(message)
+
+        # Oldest first *before* the ceiling is applied, so a truncated run fetches the
+        # bodies of the oldest matches and the newest arrive on the next incremental run.
+        matched.sort(key=lambda item: item.received_at)
+        if len(matched) > query.limit:
+            self.logger.warning(
+                "outlook.run_truncated", matched=len(matched), limit=query.limit
+            )
+            matched = matched[: query.limit]
+
+        hydrated: list[dict[str, Any]] = []
+        for message in matched:
+            payload = await self._fetch_body(message.message_id)
+            if payload is not None:
+                hydrated.append(payload)
+
+        self.logger.info(
+            "outlook.delta_two_phase",
+            fetched_metadata=len(metadata),
+            matched=len(matched),
+            fetched_full=len(hydrated),
+        )
+        return hydrated
+
+    async def _fetch_body(self, message_id: str) -> dict[str, Any] | None:
+        """Re-request one already-matched message, this time with its body.
+
+        Args:
+            message_id: A Graph message id that passed :meth:`MailQuery.matches`.
+
+        Returns:
+            The body-bearing payload, or ``None`` when the message has since moved or been
+            deleted — one unreadable message must not end a sync with hundreds left.
+        """
+        url = f"{GRAPH_API_BASE}/mailFolders/inbox/messages/{quote(message_id, safe='')}"
+        try:
+            payload = await self._get_json(
+                url, params={"$select": GRAPH_SELECT_FIELDS}, headers=BODY_TEXT_PREFERENCE
+            )
+        except MailboxError as exc:
+            self.logger.debug(
+                "outlook.message_unavailable",
+                message_id=message_id,
+                error=type(exc).__name__,
+            )
+            return None
+        return payload or None
+
     async def _delta_page_through(
         self, token: str, query: MailQuery
     ) -> list[dict[str, Any]] | None:
-        """Collect message payloads from the inbox delta feed.
+        """Page the inbox delta feed for **metadata only** (phase one).
+
+        The ``$select`` is :data:`GRAPH_METADATA_FIELDS`, which carries neither ``body`` nor
+        ``bodyPreview``. Graph cannot express the sender allowlist on a delta feed, so the
+        guarantee that unauthorised mail is never downloaded has to come from asking for
+        less: what comes back is arrival time, sender, reply-to and subject, for messages
+        this adapter is about to discard as well as for the ones it keeps.
 
         Args:
             token: The delta token from the previous run.
             query: The bounded query, used only to cap the volume collected — the allowlist
-                itself is applied by the caller, because Graph cannot express it here.
+                is applied by :meth:`_delta_candidates`, because Graph cannot express it
+                here.
 
         Returns:
-            Raw message payloads, or ``None`` when Graph no longer recognises the token and
-            the caller should fall back to the bounded ``$search``.
+            Metadata payloads, or ``None`` when Graph no longer recognises the token and the
+            caller should fall back to the bounded ``$search``.
         """
         collected: list[dict[str, Any]] = []
         url = self._delta_url()
-        params: dict[str, Any] | None = {"$deltatoken": token, "$select": GRAPH_SELECT_FIELDS}
+        params: dict[str, Any] | None = {"$deltatoken": token, "$select": GRAPH_METADATA_FIELDS}
         for _ in range(MAX_PAGES):
             try:
-                payload = await self._get_json(url, params=params, headers=BODY_TEXT_PREFERENCE)
+                payload = await self._get_json(url, params=params)
             except MailboxError as exc:
                 if exc.status_code == HTTP_GONE:
                     self.logger.info("outlook.delta_token_expired")

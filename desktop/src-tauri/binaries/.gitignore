@@ -1,0 +1,6 @@
+# Frozen backend sidecars are build artefacts: 30–60MB each, one per target triple, and
+# reproducible with `python ../sidecar/build_sidecar.py`. Only this file and README.md are
+# tracked.
+*
+!.gitignore
+!README.md

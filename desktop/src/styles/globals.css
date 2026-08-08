@@ -1,0 +1,727 @@
+/**
+ * Global stylesheet — Tailwind wiring, the token→utility bridge, and the handful of shared
+ * behaviour classes `docs/UI.md` names explicitly.
+ *
+ * Three jobs, in this order:
+ *
+ *  1. Load Tailwind and the token file. `source('../')` scopes class detection to `src/`
+ *     rather than letting Tailwind walk the whole repository, which here also contains a
+ *     Python backend whose docstrings are full of things that look like class names.
+ *  2. Map the tokens onto Tailwind's theme namespaces. Every default scale Tailwind ships
+ *     that we do not use is cleared with `--namespace-*: initial`, so `bg-red-500`,
+ *     `text-3xl` and `rounded-2xl` do not exist. `docs/UI.md` §3.3 says "nothing outside
+ *     this table ships" and this is how that is enforced at build time rather than in review.
+ *  3. Define the shared classes: `.pressable` / `.lift` (§7 preamble), `.label-caps` /
+ *     `.chip-mono` (§3.6), `.skeleton` (§7.16), the universal focus ring (§7 preamble), and
+ *     the reduced-motion policy (§6.7).
+ *
+ * Decorative keyframes (`shimmer`, `pulse-ring`, `indeterminate`) are defined **inside**
+ * `@media (prefers-reduced-motion: no-preference)`. That is stricter than overriding them
+ * later and it is deliberate (§6.7): for a user who opted out, the animation does not exist
+ * rather than existing and being suppressed.
+ */
+
+@import 'tailwindcss' source('../');
+@import './tokens.css';
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Colour namespace. `inline` so utilities emit the themed variable directly instead of a
+   second indirection — `bg-surface` compiles to `background-color: var(--bg-surface)`, which
+   follows `data-theme` with no extra hop.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@theme inline {
+  --color-*: initial;
+
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-inherit: inherit;
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  /* Surfaces — the elevation ladder (§4.4). Background and border move together.
+     `--bg-base` is registered as `page`, not `base`: the colour namespace and the font-size
+     namespace share the `text-` prefix, so a colour called `base` would make `text-base`
+     mean two different things. The raw token keeps its spec name; only the utility differs,
+     and the utility is `bg-page`. */
+  --color-chrome: var(--bg-chrome);
+  --color-page: var(--bg-base);
+  --color-surface: var(--bg-surface);
+  --color-elevated: var(--bg-elevated);
+  --color-overlay: var(--bg-overlay);
+  --color-inset: var(--bg-inset);
+
+  /* Borders — three luminance steps, one width. */
+  --color-subtle: var(--border-subtle);
+  --color-default: var(--border-default);
+  --color-strong: var(--border-strong);
+
+  /* Text tiers. */
+  --color-primary: var(--fg-primary);
+  --color-secondary: var(--fg-secondary);
+  --color-muted: var(--fg-muted);
+  --color-disabled: var(--fg-disabled);
+  --color-on-accent: var(--fg-on-accent);
+  --color-on-status: var(--fg-on-status);
+
+  /* Accent — one hue. `accent-text` is the only accent legible as text on dark. */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-text: var(--accent-text);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-wash: var(--accent-wash);
+  --color-accent-border: var(--accent-border);
+
+  /* State layers — valid on every surface. */
+  --color-state-hover: var(--state-hover);
+  --color-state-selected: var(--state-selected);
+  --color-state-pressed: var(--state-pressed);
+  --color-state-divider: var(--state-divider);
+  --color-state-track: var(--state-track);
+  --color-focus-ring: var(--focus-ring);
+
+  /* Semantic status families (§2.4). */
+  --color-st-neutral: var(--st-neutral);
+  --color-st-dim: var(--st-dim);
+  --color-st-progress: var(--st-progress);
+  --color-st-success: var(--st-success);
+  --color-st-review: var(--st-review);
+  --color-st-danger: var(--st-danger);
+  --color-st-rejected: var(--st-rejected);
+  --color-st-interview: var(--st-interview);
+  --color-st-offer: var(--st-offer);
+
+  /* Score bands (§2.5) — an ordinal ramp, never the status palette. */
+  --color-score-0: var(--score-0);
+  --color-score-1: var(--score-1);
+  --color-score-2: var(--score-2);
+  --color-score-3: var(--score-3);
+  --color-score-4: var(--score-4);
+  --color-score-threshold: var(--score-threshold);
+
+  /* Chart chrome and the validated categorical slots (§11.2). */
+  --color-chart-surface: var(--chart-surface);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-axis: var(--chart-axis);
+  --color-chart-ink: var(--chart-ink);
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  --color-series-5: var(--series-5);
+  --color-series-6: var(--series-6);
+  --color-series-7: var(--series-7);
+  --color-series-8: var(--series-8);
+  --color-series-mid: var(--series-mid);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Type scale, radius, easing, weights. Static values, so a plain `@theme` block; Tailwind
+   emits them as custom properties on `:root`, which is also how raw CSS reads them.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text',
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono:
+    'Geist Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', 'Segoe UI Mono', 'Roboto Mono',
+    Menlo, Consolas, monospace;
+
+  /* §3.4 — fractional axis values keep medium from reading as semibold on dark. */
+  --font-weight-normal: 400;
+  --font-weight-medium: 510;
+  --font-weight-semibold: 590;
+  --font-weight-bold: 650;
+
+  /* §3.3 — the complete type scale. Nothing outside this table ships. */
+  --text-*: initial;
+
+  --text-micro: 0.6875rem; /* 11px */
+  --text-micro--line-height: 1;
+  --text-micro--letter-spacing: 0.06em;
+  --text-micro--font-weight: 590;
+
+  --text-mini: 0.75rem; /* 12px */
+  --text-mini--line-height: 1.25;
+  --text-mini--letter-spacing: 0.005em;
+
+  --text-sm: 0.8125rem; /* 13px — the workhorse */
+  --text-sm--line-height: 1.35;
+
+  --text-base: 0.875rem; /* 14px */
+  --text-base--line-height: 1.5;
+
+  --text-md: 0.9375rem; /* 15px */
+  --text-md--line-height: 1.4;
+  --text-md--letter-spacing: -0.005em;
+
+  --text-lg: 1.125rem; /* 18px */
+  --text-lg--line-height: 1.25;
+  --text-lg--letter-spacing: -0.011em;
+  --text-lg--font-weight: 590;
+
+  --text-xl: 1.375rem; /* 22px — page title */
+  --text-xl--line-height: 1.2;
+  --text-xl--letter-spacing: -0.018em;
+  --text-xl--font-weight: 590;
+
+  --text-2xl: 1.75rem; /* 28px — stat-tile value */
+  --text-2xl--line-height: 1.1;
+  --text-2xl--letter-spacing: -0.022em;
+  --text-2xl--font-weight: 590;
+
+  --text-hero: 2.5rem; /* 40px — the one hero figure */
+  --text-hero--line-height: 1.05;
+  --text-hero--letter-spacing: -0.028em;
+  --text-hero--font-weight: 650;
+
+  /* §4.1 — 4px base. `p-1.5` = 6px and `p-2.5` = 10px, both on the scale. */
+  --spacing: 0.25rem;
+
+  /* §4.3 — cleared first so `rounded-2xl` and friends cannot be typed by accident. */
+  --radius-*: initial;
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  /* §6.2 — the five easings. `ease-in` is deliberately absent. */
+  --ease-*: initial;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-out-quad: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  /* Elevation is expressed with backgrounds and borders (§4.4); the three floating shadows
+     are theme-dependent and therefore live in tokens.css, reached through `@utility` below. */
+  --shadow-*: initial;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Base layer.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  /* Tailwind's preflight falls back to `currentColor` for an unset border colour, which is
+     never what we want. Pinning the default here means a bare `border` is always correct. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border-default);
+  }
+
+  html {
+    /* §3.2 — 16px root, not 14px. Density is bought explicitly through the type scale and
+       the component heights, not by silently rescaling every rem in the system. */
+    font-size: 16px;
+    height: 100%;
+    background: var(--bg-chrome);
+  }
+
+  body {
+    height: 100%;
+    margin: 0;
+    overscroll-behavior: none;
+    background: var(--bg-base);
+    color: var(--fg-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    line-height: 1.35;
+    /* No-ops on system faces; active the moment a variable face is swapped in (§3.1). */
+    font-feature-settings: 'cv01', 'cv02', 'ss01';
+    /* Belt-and-braces for the rare proportional number in a column (§3.5). Stat tiles and
+       the hero figure opt back out with `.nums-proportional`. */
+    font-variant-numeric: tabular-nums;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    height: 100%;
+    isolation: isolate;
+  }
+
+  /* The frameless titlebar drags the window; nothing else may (§5.2). Every interactive
+     child inside the bar sets `.no-drag`, and forgetting it is the #1 frameless bug. */
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  /* §7 preamble — one focus ring, everywhere. Never `:focus`; never removed without a
+     replacement. `outline-offset` rather than a ring-offset colour token, because the
+     apparent offset colour is then whatever surface the element actually sits on and can
+     never go stale on an elevated surface. */
+  :where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: inherit;
+  }
+
+  /* Selection uses the accent wash rather than the platform blue, which would be the one
+     colour on screen outside the palette. */
+  ::selection {
+    background: var(--accent-subtle);
+    color: var(--fg-primary);
+  }
+
+  /* Windows WebView2 ships classic non-overlay scrollbars, so an overflowing route is 15px
+     narrower than one without. `scrollbar-gutter` is mandatory on every scroll container
+     (§10.13) and the skin keeps the reserved gutter from reading as a grey stripe. */
+  * {
+    scrollbar-color: var(--border-strong) transparent;
+    scrollbar-width: thin;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: var(--radius-full);
+    background-clip: content-box;
+    background-color: var(--border-strong);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--fg-disabled);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Inputs inherit the product face rather than the platform's form face. */
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  ::placeholder {
+    color: var(--fg-muted);
+    opacity: 1;
+  }
+
+  /* The number spinners are never used — every numeric field in the product steps with
+     ↑/↓ (§9.6) and the spinner buttons only steal 16px of a 30px control. */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+
+  input[type='number'] {
+    appearance: textfield;
+  }
+
+  /* WKWebView is the strictest of the three target webviews and still paints a tap
+     highlight on interactive elements. */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Shared behaviour and recipe classes (docs/UI.md §3.6, §7 preamble).
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@layer components {
+  /* §3.6 A — the caps eyebrow. `text-transform: uppercase` has exactly one use in this
+     product and this is it. No uppercase buttons, badges, or table headers. */
+  .label-caps {
+    font-family: var(--font-sans);
+    font-size: var(--text-micro);
+    font-weight: 590;
+    line-height: 1;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+
+  /* §3.6 B — the inset mono chip. A machine *value*, recessed below its card so it reads as
+     data rather than as a button. The darker background is the whole trick. */
+  .chip-mono {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 20px;
+    padding: 0 6px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--bg-inset);
+    font-family: var(--font-mono);
+    font-size: var(--text-micro);
+    font-weight: 400;
+    line-height: 1;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--fg-secondary);
+    white-space: nowrap;
+  }
+
+  /* §7 preamble — transform only, 100ms. A press must feel instant, so it is faster than
+     the hover transition it interrupts. */
+  .pressable {
+    transition: transform var(--dur-1) var(--ease-out);
+  }
+
+  .pressable:active {
+    transform: scale(0.97);
+  }
+
+  /* §7 preamble — cards and card-like tiles only. Gated on a real pointer so a touch or
+     pen device never leaves a card stuck in its hover state. */
+  .lift {
+    transition:
+      transform var(--dur-2) var(--ease-out),
+      border-color var(--dur-2) var(--ease-out),
+      box-shadow var(--dur-2) var(--ease-out);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .lift:hover {
+      transform: translateY(-1px);
+      border-color: var(--border-strong);
+    }
+  }
+
+  /* A disabled or archived surface drops both classes so it *structurally* cannot respond,
+     rather than responding and then being visually contradicted. */
+  .lift[data-disabled='true'],
+  .pressable[data-disabled='true'] {
+    transition: none;
+    transform: none;
+  }
+
+  /* §2.7 rule 6 — the one sanctioned gradient in the product: a 1px accent hairline on the
+     top edge of dialogs, sheets, and the command palette. */
+  .accent-hairline::before {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    height: 1px;
+    opacity: 0.55;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    pointer-events: none;
+  }
+
+  /* §4.4 — backdrop blur is rationed to exactly two places: the dialog scrim and the
+     command-palette scrim. Never a card, a tile, or the sidebar. */
+  .scrim {
+    background: var(--scrim);
+    backdrop-filter: blur(var(--scrim-blur));
+    -webkit-backdrop-filter: blur(var(--scrim-blur));
+  }
+
+  /* §7.16 — every skeleton declares explicit width and height at the call site so there is
+     zero layout shift on fill. This class supplies only the surface and the shimmer. */
+  .skeleton {
+    background: var(--state-track);
+    border-radius: var(--radius-sm);
+  }
+
+  /* §12.3 — first focusable in the DOM, visually hidden until focused. */
+  .skip-link {
+    position: fixed;
+    top: var(--space-2);
+    left: var(--space-2);
+    z-index: 100;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--bg-overlay);
+    color: var(--fg-primary);
+    box-shadow: var(--shadow-float);
+    transform: translateY(calc(-100% - var(--space-4)));
+  }
+
+  .skip-link:focus-visible {
+    transform: translateY(0);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Utilities that carry a theme-dependent value or a spec rule Tailwind has no namespace
+   for. Everything here is a single declaration by design.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@utility shadow-raised {
+  box-shadow: var(--shadow-raised);
+}
+
+@utility shadow-float {
+  box-shadow: var(--shadow-float);
+}
+
+@utility shadow-dialog {
+  box-shadow: var(--shadow-dialog);
+}
+
+@utility shadow-accent {
+  box-shadow: var(--shadow-accent);
+}
+
+@utility shadow-selected {
+  box-shadow: 0 0 48px -22px var(--accent-glow);
+}
+
+@utility shadow-none {
+  box-shadow: none;
+}
+
+/* §10.13 — mandatory on every scroll container. Both edges, so a route with overflow and a
+   route without occupy the same box. */
+@utility scroll-region {
+  overflow: auto;
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior: contain;
+}
+
+/* §3.5 — large standalone numbers use proportional figures; tabular figures make a 28–40px
+   number look loose. Everything else inherits `tabular-nums` from `body`. */
+@utility nums-proportional {
+  font-variant-numeric: proportional-nums;
+}
+
+@utility nums-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* §7.10 — one line of truncation, the only wrapping mode allowed inside a virtualised row. */
+@utility truncate-1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* §12.4 — visually hidden but announced. */
+@utility sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Radix overlay motion, as CSS.
+
+   These are the exact CSS form of `T.pop` / `T.popOut` and `V.popIn` from `lib/motion.ts`
+   (§6.3) — same durations, same curves, same transform strings. They exist as CSS rather
+   than as Motion components because a popover, a select and a tooltip open dozens of times
+   an hour: driving them through `AnimatePresence` would mount a Motion tree per open, while
+   `data-state` costs one class. Dialogs and sheets are rarer and higher-ceremony, so those
+   *do* use Motion — see `components/ui/dialog.tsx`.
+
+   Not defined inside `no-preference`: unlike a shimmer, this motion carries the "this opened,
+   and it came from there" cue, so §6.7's policy is to shorten it rather than delete it. The
+   reduced-motion backstop below does exactly that.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@keyframes aos-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0px);
+  }
+}
+
+@keyframes aos-pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0px);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.98) translateY(-2px);
+  }
+}
+
+@keyframes aos-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes aos-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@layer components {
+  /* Popovers, dropdowns, select panels, tooltips. */
+  .overlay-pop[data-state='open'],
+  .overlay-pop[data-state='delayed-open'] {
+    animation: aos-pop-in var(--dur-3) var(--ease-out);
+  }
+
+  .overlay-pop[data-state='closed'] {
+    animation: aos-pop-out var(--dur-3-out) var(--ease-exit);
+  }
+
+  /* The second tooltip within 300ms skips the delay *and* the animation (§7.14). */
+  .overlay-pop[data-instant='true'] {
+    animation-duration: 0ms;
+  }
+
+  .overlay-fade[data-state='open'] {
+    animation: aos-fade-in var(--dur-3) var(--ease-out);
+  }
+
+  .overlay-fade[data-state='closed'] {
+    animation: aos-fade-out var(--dur-3-out) var(--ease-exit);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Decorative keyframes. Defined inside `no-preference` so they do not exist at all for a
+   user who opted out of motion (§6.7), rather than being defined and then overridden.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes aos-shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+  @keyframes aos-pulse-ring {
+    from {
+      transform: scale(1);
+      opacity: 0.5;
+    }
+    to {
+      transform: scale(1.9);
+      opacity: 0;
+    }
+  }
+
+  @keyframes aos-indeterminate {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(433%);
+    }
+  }
+
+  .skeleton {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--state-hover) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: aos-shimmer 1.4s linear infinite;
+  }
+
+  /* §7.7 — the in-flight ring. `will-change` is set because this element is on screen
+     dozens of times at once in a table and must stay on the compositor. */
+  .status-dot-pulse::after {
+    animation: aos-pulse-ring 2.4s var(--ease-in-out) infinite;
+    will-change: transform, opacity;
+  }
+
+  /* §7.22 — a 30%-wide accent segment travelling left→right across the toolbar's bottom
+     edge. 433% is the translate that carries a 30%-wide child fully off the right edge. */
+  .indeterminate-segment {
+    animation: aos-indeterminate 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Reduced motion (docs/UI.md §6.7). Reduced motion means *less and gentler* motion, not
+   zero feedback: opacity and colour transitions survive because they carry the "this
+   changed" comprehension cue. Transforms and position changes go.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* …but explicitly re-enable the comprehension cues. */
+  [data-motion-safe-color] {
+    transition-duration: 140ms !important;
+  }
+
+  .skeleton {
+    animation: none !important;
+    background: var(--state-track);
+  }
+
+  /* The in-flight dot degrades to a static filled ring at 35% opacity plus its text label,
+     which preserves the "still moving" signal without motion. */
+  .status-dot-pulse::after {
+    animation: none !important;
+    opacity: 0.35;
+  }
+
+  .pressable:active {
+    transform: none;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .lift:hover {
+      transform: none;
+    }
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Forced colours / print. §12.2 keeps a non-colour channel available in both.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  .skeleton {
+    animation: none;
+    background: Canvas;
+    border: 1px solid CanvasText;
+  }
+
+  :where(button, a, input, textarea, select, [tabindex]):focus-visible {
+    outline-color: Highlight;
+  }
+}

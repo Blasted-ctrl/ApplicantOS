@@ -1,0 +1,33 @@
+# Dependencies and build output
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Frozen backend sidecars are excluded by src-tauri/binaries/.gitignore, which lives next to
+# the README that explains how to rebuild them.
+
+# PyInstaller scratch from src-tauri/sidecar/build_sidecar.py
+src-tauri/sidecar/build/
+
+# Written by scripts/dev-with-backend.mjs so the Rust shell can find the running backend.
+# Machine-specific and deleted on a clean exit.
+.dev-backend.json
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

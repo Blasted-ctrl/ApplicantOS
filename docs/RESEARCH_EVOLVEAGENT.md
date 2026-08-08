@@ -167,8 +167,9 @@ dropped on the floor. `reinforce()` likewise has zero callers.
 
 But wiring it naively is unsafe: our only memory writer is `ReviewService._remember`, which stores
 **the human's literal answer to a form field**. A reviewer typing an SSN, a DOB or a salary creates
-a `MemoryEntry` whose text is that value. Our `redact_secrets` processor is *key-based* and
-*log-scoped* — it would not catch a bare value in a memory body, and it does not run on prompts at
+a `MemoryEntry` whose text is that value. Our `redact_secrets` processor scrubs values as well as
+key names, but it is *log-scoped* and its value patterns target addresses, credentials and opaque
+blobs — it would not catch a bare SSN or salary in a memory body, and it does not run on prompts at
 all. **Screen before injecting, not after.**
 
 Also: inject memories into the **system** prompt as style/preference constraints only, never into
@@ -211,7 +212,7 @@ point yet. The gap is wiring, not design. **Do not build a second verifier.**
 | Structured output | Impossible — the interface is `str → str` | Forced tool call / JSON mode + repair retry |
 | Token accounting | `"units": 1` per call; `response.usage` discarded | Real `input_tokens`/`output_tokens` + enforced daily budget |
 | Verification | Judge that cannot score below 75 | 4 independent signals, asymmetric verdict |
-| Secret redaction | 7 content regexes on user input | Recursive key-based processor + `show_locals=False` |
+| Secret redaction | 7 content regexes on user input | Recursive key **and** value processor + `show_locals=False` |
 | Memory | No expiry, no delete path, hash-bucket embeddings | Half-life weighting, dedup-reinforcement, real embedder |
 | Mock mode | 51 lines of canned prose, returns `success=True` on outage | Schema-walking, prompt-grounded `NullModel` |
 | Type safety | **No `tsconfig.json` exists** | TS5 strict, enums mirrored from `enums.py` |

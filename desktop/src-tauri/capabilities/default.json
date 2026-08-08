@@ -1,0 +1,39 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Least-privilege permission set for the ApplicantOS main window. Every entry is justified in the module documentation at the top of src/lib.rs; nothing may be added here without a corresponding line there.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-theme",
+    "core:window:allow-set-background-color",
+
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/applicantos-server",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
+
+    "dialog:allow-open",
+
+    "store:default",
+
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive",
+    "fs:allow-appdata-meta-recursive"
+  ]
+}

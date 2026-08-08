@@ -1,0 +1,402 @@
+/**
+ * ApplicantOS design tokens — the machine-readable form of `docs/UI.md` §2, §3, §4 and §6.
+ *
+ * Nothing in this file is a preference. Every hex value here is the measured value from the
+ * spec (contrast ratios in §2.6 were computed against these exact colours), every duration is
+ * from §6.2, and every size is from §4.2. A value that is not in `docs/UI.md` does not belong
+ * in this file, and a value that is in `docs/UI.md` belongs *only* here.
+ *
+ * Three parallel colour systems, and they never mix (§2.1):
+ *
+ *   1. Surface tokens  — opaque hex; the structural elevation ladder.
+ *   2. State layers    — alpha-on-white (alpha-on-ink in light); valid on *every* surface.
+ *   3. Semantic colours— opaque hex, fixed; never derived from the accent so a future accent
+ *                        swap cannot silently repaint "failed".
+ *
+ * The accent is stored as space-separated RGB channels rather than hex so that every alpha
+ * wash comes off one variable: changing the product's accent is a one-line change here.
+ *
+ * Theme resolution has three states, exactly as the platform expects (§2.3):
+ *
+ *   `data-theme="dark"`   explicit dark  → the `:root, :root[data-theme="dark"]` block
+ *   `data-theme="light"`  explicit light → the `:root[data-theme="light"]` block
+ *   attribute absent      follow the OS  → the `prefers-color-scheme: light` block
+ *
+ * The light palette is therefore written twice, deliberately. `docs/UI.md` §2.3 forbids a
+ * colour existing *only* inside a media query — a token defined once in an unmatched media
+ * query is an undefined token, and an undefined custom property renders as nothing rather
+ * than as an error. The two blocks are adjacent so they are reviewed as one edit.
+ */
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Dark theme — the binding token set (docs/UI.md §2.2). Dark is the product's default, so
+   it is written on bare `:root` and mirrored under the explicit attribute.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* ── Surfaces: a 5-step ladder. Chrome is DARKEST; content is the lit plane. ── */
+  --bg-chrome: #08090c; /* titlebar, sidebar, status bar — recedes below content     */
+  --bg-base: #0c0e12; /* the content region / page ground                          */
+  --bg-surface: #12151a; /* cards, table containers, panels, inputs' parent           */
+  --bg-elevated: #171b21; /* selected/hovered rows, featured cards                     */
+  --bg-overlay: #1b1f26; /* dialogs, popovers, command palette, tooltips, dropdowns   */
+  --bg-inset: #08090c; /* recessed wells INSIDE a surface: mono chips, code, gutter */
+
+  /* ── Borders: three luminance steps, one width (1px). Never a border-width scale. ── */
+  --border-subtle: #1a1e25; /* intra-card dividers, table row rules, disabled edges */
+  --border-default: #262b33; /* every card, panel, input, and button edge            */
+  --border-strong: #363c46; /* hover, selected, focused-within, featured            */
+
+  /* ── Text: 3 tiers + disabled. Never pure #FFF. ── */
+  --fg-primary: #f2f4f8; /* company, role, headings, values                     */
+  --fg-secondary: #a8b0bd; /* descriptions, secondary cells, sidebar labels       */
+  --fg-muted: #7e8795; /* metadata: "applied 3d ago", counts, axis labels     */
+  --fg-disabled: #4f5764; /* disabled controls only — exempt from WCAG 1.4.3     */
+  --fg-on-accent: #ffffff; /* text on a solid accent fill                         */
+  --fg-on-status: #08090c; /* text on a solid status fill (offer badge only)      */
+
+  /* ── Accent: ONE hue. Channels, not hex. ── */
+  --accent-rgb: 91 95 214; /* #5B5FD6 "Iris" — OKLCH(0.55 0.17 278)   */
+  --accent: rgb(var(--accent-rgb)); /* solid fill                              */
+  --accent-hover: #6165de; /* +1 lightness step                       */
+  --accent-active: #5155c4; /* −1 lightness step (pressed)             */
+  --accent-text: #8e93ff; /* accent as TEXT/ICON — never the fill    */
+  --accent-subtle: rgb(var(--accent-rgb) / 0.12); /* active pill / selected row  */
+  --accent-wash: rgb(var(--accent-rgb) / 0.06); /* highlighted region          */
+  --accent-border: rgb(var(--accent-rgb) / 0.45); /* active filter pill edge     */
+  --accent-glow: rgb(var(--accent-rgb) / 0.35); /* coloured shadow on primary  */
+
+  /* ── State layers: alpha-on-white, valid on every surface above. ── */
+  --state-hover: rgb(255 255 255 / 0.045);
+  --state-selected: rgb(255 255 255 / 0.075);
+  --state-pressed: rgb(255 255 255 / 0.11);
+  --state-divider: rgb(255 255 255 / 0.05); /* intra-card hairlines     */
+  --state-track: rgb(255 255 255 / 0.07); /* progress/score bar track */
+  --focus-ring: rgb(var(--accent-rgb) / 0.75);
+
+  /* ── Semantic status families (§2.4 maps ApplicationStatus onto these) ── */
+  --st-neutral: #8a93a1; /* idle / not-started       */
+  --st-dim: #5c6472; /* dormant / dead-ended     */
+  --st-progress: #4d9bff; /* machine is working       */
+  --st-success: #35c67c; /* it worked                */
+  --st-review: #f0a93b; /* a human is required      */
+  --st-danger: #f05c56; /* it broke                 */
+  --st-rejected: #c4636e; /* a negative human outcome */
+  --st-interview: #e97bc8; /* a positive human outcome */
+  --st-offer: #2fe0a6; /* the best outcome         */
+
+  /* ── Score bands: an ORDINAL ramp of the accent hue. Not the status palette. ── */
+  --score-0: #454b61; /*  0–39  reject              */
+  --score-1: #4f55b4; /* 40–59  weak                */
+  --score-2: #5a60d0; /* 60–69  borderline          */
+  --score-3: #7074f2; /* 70–84  at/above auto-apply */
+  --score-4: #9ba2ff; /* 85–100 strong              */
+  --score-threshold: #a8b0bd; /* the min_score tick mark    */
+
+  /* ── Shadows: dark alphas are ~5× light. Only on layers that genuinely float. ── */
+  --shadow-raised:
+    0 1px 2px 0 rgb(0 0 0 / 0.45), inset 0 1px 0 0 rgb(255 255 255 / 0.03);
+  --shadow-float:
+    0 8px 28px -6px rgb(0 0 0 / 0.6), 0 2px 6px -2px rgb(0 0 0 / 0.45),
+    inset 0 1px 0 0 rgb(255 255 255 / 0.05);
+  --shadow-dialog:
+    0 24px 64px -12px rgb(0 0 0 / 0.72), 0 4px 12px -4px rgb(0 0 0 / 0.5),
+    inset 0 1px 0 0 rgb(255 255 255 / 0.06);
+  --shadow-accent: 0 4px 16px -6px var(--accent-glow);
+
+  /* ── Scrim: the only two places backdrop-blur is permitted (§4.4). ── */
+  --scrim: rgb(6 7 10 / 0.55);
+  --scrim-blur: 3px;
+
+  /* ── Chart chrome (§11.3) ── */
+  --chart-surface: var(--bg-surface);
+  --chart-grid: #1f242b;
+  --chart-axis: #2b313a;
+  --chart-ink: var(--fg-muted);
+
+  /* ── Categorical series palette (§11.2). Validated; do not modify. ── */
+  --series-1: #3987e5; /* blue    */
+  --series-2: #d95926; /* orange  */
+  --series-3: #199e70; /* aqua    */
+  --series-4: #c98500; /* yellow  */
+  --series-5: #d55181; /* magenta */
+  --series-6: #008300; /* green   */
+  --series-7: #9085e9; /* violet  */
+  --series-8: #e66767; /* red     */
+  --series-mid: #383835; /* diverging midpoint — grey, never a hue */
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Light theme (docs/UI.md §2.3) — a real theme, not an inversion. The structural invariant
+   is preserved: chrome stays one step away from the content plane. In light that means
+   chrome is *darker* than the white content plane, which is the same relationship.
+
+   Block 1 of 2: the explicit user choice.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-chrome: #eceef1;
+  --bg-base: #f4f5f7;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff; /* separation comes from border-strong + shadow-raised */
+  --bg-overlay: #ffffff;
+  --bg-inset: #f4f5f7;
+
+  --border-subtle: #eceef1;
+  --border-default: #dde1e6;
+  --border-strong: #c3c9d2;
+
+  --fg-primary: #14161a;
+  --fg-secondary: #4c545f;
+  --fg-muted: #6e7684;
+  --fg-disabled: #a2a9b4;
+  --fg-on-accent: #ffffff;
+  --fg-on-status: #ffffff;
+
+  --accent-rgb: 79 83 201; /* #4F53C9 */
+  --accent: rgb(var(--accent-rgb));
+  --accent-hover: #454ab8; /* light mode DARKENS on hover */
+  --accent-active: #3c4099;
+  --accent-text: #4a4ec4;
+  --accent-subtle: rgb(var(--accent-rgb) / 0.1);
+  --accent-wash: rgb(var(--accent-rgb) / 0.05);
+  --accent-border: rgb(var(--accent-rgb) / 0.4);
+  --accent-glow: rgb(var(--accent-rgb) / 0.28);
+
+  --state-hover: rgb(9 11 15 / 0.04);
+  --state-selected: rgb(9 11 15 / 0.065);
+  --state-pressed: rgb(9 11 15 / 0.095);
+  --state-divider: rgb(9 11 15 / 0.07);
+  --state-track: rgb(9 11 15 / 0.08);
+  --focus-ring: rgb(var(--accent-rgb) / 0.7);
+
+  --st-neutral: #5d6673;
+  --st-dim: #8b929c;
+  --st-progress: #1f6feb;
+  --st-success: #127c48;
+  --st-review: #96590a;
+  --st-danger: #c0322c;
+  --st-rejected: #9a3f49;
+  --st-interview: #a0369c;
+  --st-offer: #0a7a5b;
+
+  --score-0: #b6bbc6;
+  --score-1: #8e93d8;
+  --score-2: #6e73d2;
+  --score-3: #4f53c9;
+  --score-4: #3a3ea8;
+  --score-threshold: #6e7684;
+
+  --shadow-raised:
+    0 1px 2px 0 rgb(9 11 15 / 0.06), 0 0 0 1px rgb(9 11 15 / 0.02);
+  --shadow-float:
+    0 8px 24px -6px rgb(9 11 15 / 0.12), 0 2px 6px -2px rgb(9 11 15 / 0.08);
+  --shadow-dialog:
+    0 24px 56px -12px rgb(9 11 15 / 0.2), 0 4px 12px -4px rgb(9 11 15 / 0.1);
+  --shadow-accent: 0 4px 16px -6px var(--accent-glow);
+
+  --scrim: rgb(6 7 10 / 0.55);
+  --scrim-blur: 3px;
+
+  --chart-surface: #ffffff;
+  --chart-grid: #eceef1;
+  --chart-axis: #dde1e6;
+  --chart-ink: var(--fg-muted);
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-mid: #f0efec;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Light theme, block 2 of 2: the OS preference, applying only when the user has made no
+   explicit choice. Byte-identical to block 1 — see the file header for why it is repeated
+   rather than referenced.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+
+    --bg-chrome: #eceef1;
+    --bg-base: #f4f5f7;
+    --bg-surface: #ffffff;
+    --bg-elevated: #ffffff;
+    --bg-overlay: #ffffff;
+    --bg-inset: #f4f5f7;
+
+    --border-subtle: #eceef1;
+    --border-default: #dde1e6;
+    --border-strong: #c3c9d2;
+
+    --fg-primary: #14161a;
+    --fg-secondary: #4c545f;
+    --fg-muted: #6e7684;
+    --fg-disabled: #a2a9b4;
+    --fg-on-accent: #ffffff;
+    --fg-on-status: #ffffff;
+
+    --accent-rgb: 79 83 201;
+    --accent: rgb(var(--accent-rgb));
+    --accent-hover: #454ab8;
+    --accent-active: #3c4099;
+    --accent-text: #4a4ec4;
+    --accent-subtle: rgb(var(--accent-rgb) / 0.1);
+    --accent-wash: rgb(var(--accent-rgb) / 0.05);
+    --accent-border: rgb(var(--accent-rgb) / 0.4);
+    --accent-glow: rgb(var(--accent-rgb) / 0.28);
+
+    --state-hover: rgb(9 11 15 / 0.04);
+    --state-selected: rgb(9 11 15 / 0.065);
+    --state-pressed: rgb(9 11 15 / 0.095);
+    --state-divider: rgb(9 11 15 / 0.07);
+    --state-track: rgb(9 11 15 / 0.08);
+    --focus-ring: rgb(var(--accent-rgb) / 0.7);
+
+    --st-neutral: #5d6673;
+    --st-dim: #8b929c;
+    --st-progress: #1f6feb;
+    --st-success: #127c48;
+    --st-review: #96590a;
+    --st-danger: #c0322c;
+    --st-rejected: #9a3f49;
+    --st-interview: #a0369c;
+    --st-offer: #0a7a5b;
+
+    --score-0: #b6bbc6;
+    --score-1: #8e93d8;
+    --score-2: #6e73d2;
+    --score-3: #4f53c9;
+    --score-4: #3a3ea8;
+    --score-threshold: #6e7684;
+
+    --shadow-raised:
+      0 1px 2px 0 rgb(9 11 15 / 0.06), 0 0 0 1px rgb(9 11 15 / 0.02);
+    --shadow-float:
+      0 8px 24px -6px rgb(9 11 15 / 0.12), 0 2px 6px -2px rgb(9 11 15 / 0.08);
+    --shadow-dialog:
+      0 24px 56px -12px rgb(9 11 15 / 0.2), 0 4px 12px -4px rgb(9 11 15 / 0.1);
+    --shadow-accent: 0 4px 16px -6px var(--accent-glow);
+
+    --chart-surface: #ffffff;
+    --chart-grid: #eceef1;
+    --chart-axis: #dde1e6;
+
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #4a3aa7;
+    --series-8: #e34948;
+    --series-mid: #f0efec;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   Theme-independent tokens: spacing, radius, motion, geometry.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Spacing scale — 4px base (§4.1). 6px and 10px are on the scale; 7/9/14/18 are not. ── */
+  --space-0: 0;
+  --space-px: 1px;
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ── Radius (§4.3). Effectively 7px for controls, 10px for containers, full for pills. ── */
+  --radius-xs: 3px; /* checkbox, tiny inset chips, score-bar ends          */
+  --radius-sm: 5px; /* mono chips, badges, skeletons, keycaps              */
+  --radius-md: 7px; /* buttons, inputs, selects, tabs, menu items, rows    */
+  --radius-lg: 10px; /* cards, panels, table containers, popovers, tooltips */
+  --radius-xl: 14px; /* dialogs, sheets, command palette                   */
+  --radius-full: 9999px; /* status dots, avatars, pills, filter chips       */
+
+  /* ── Motion durations (§6.2). Rationed by frequency: see §6.4 for what may use each. ── */
+  --dur-0: 0ms; /* feedback appears on the same frame            */
+  --dur-1: 100ms; /* press / release                               */
+  --dur-2: 140ms; /* hover, colour change, focus ring              */
+  --dur-3: 180ms; /* dropdown, popover, tooltip, badge swap (enter) */
+  --dur-3-out: 120ms; /* the same, exiting (~2/3 of enter)             */
+  --dur-4: 240ms; /* dialog enter                                  */
+  --dur-4-out: 160ms; /* dialog exit                                   */
+  --dur-5: 320ms; /* sheet / drawer slide                          */
+  --dur-6: 400ms; /* toast enter (exit 200ms)                      */
+
+  /* ── Easings — two families with assigned jobs. `ease-in` is banned on UI. ── */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1); /* interaction feedback      */
+  --ease-out-quad: cubic-bezier(0.25, 0.46, 0.45, 0.94); /* colour / hover  */
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); /* on-screen movement    */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1); /* resizes / slides       */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1); /* exits only                   */
+
+  /* ── Component heights (§4.2). Every interactive control is one of these. ── */
+  --h-control-sm: 26px;
+  --h-control-md: 30px;
+  --h-control-lg: 34px;
+  --h-badge-sm: 18px;
+  --h-badge-md: 20px;
+  --h-badge-lg: 22px;
+  --h-tab: 30px;
+  --h-sidebar-item: 28px;
+  --h-table-header: 32px;
+  --h-row-compact: 30px;
+  --h-row-default: 36px;
+  --h-row-comfortable: 44px;
+  --h-log-line: 20px;
+  --h-palette-row: 40px;
+  --h-toolbar: 44px;
+  --h-page-header: 56px;
+  --h-titlebar: 38px;
+  --h-stat-tile: 92px;
+  --h-status-bar: 24px;
+
+  /* ── Shell geometry (§5). Read by the layout; never hardcode these in a component. ── */
+  --w-sidebar: 232px;
+  --w-sidebar-collapsed: 52px;
+  --w-content-max: 1440px;
+  --w-measure: 760px; /* reading-oriented pages cap here */
+  --w-sheet: 480px;
+  --w-sheet-lg: 640px;
+  --w-palette: 640px;
+  --inset-traffic-lights: 78px; /* macOS: left inset reserved for the window controls */
+  --inset-window-controls: 138px; /* Windows/Linux: right inset for titleBarOverlay   */
+
+  /* ── Table geometry. `--row-h` × `--page-size` is the anti-layout-shift min-height. ── */
+  --row-h: var(--h-row-default);
+  --page-size: 50;
+
+  /* ── Typography (§3.1). System-first for sans: zero bytes, zero font-load frame. ── */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text',
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Aliased on purpose (§3.1): tag every heading `font-display` from day one so swapping in
+     a display face later is a one-line change with zero markup churn. */
+  --font-display: var(--font-sans);
+  --font-mono:
+    'Geist Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', 'Segoe UI Mono', 'Roboto Mono',
+    Menlo, Consolas, monospace;
+}

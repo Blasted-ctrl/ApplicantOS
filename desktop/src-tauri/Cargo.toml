@@ -1,0 +1,57 @@
+# ApplicantOS desktop shell — Tauri v2 (docs/CONTRACTS.md §18).
+#
+# The shell owns three things and nothing else: the window, the Python backend process, and
+# the six commands the renderer needs to find them. All product behaviour lives in the
+# FastAPI backend; all product surface lives in the renderer. Keeping the Rust layer this
+# thin is what makes the installer ~10MB.
+#
+# Feature posture:
+#   tauri "tray-icon"    — src/tray.rs cannot compile without it; `TrayIconBuilder` is
+#                          gated behind this flag. Nothing else is enabled: no `devtools` in
+#                          release, no `protocol-asset` (the renderer reads files through
+#                          the backend's HTTP surface, not through `asset://`).
+#   reqwest default-off  — the only URL this process ever fetches is
+#                          `http://127.0.0.1:<port>/health`. Disabling default features
+#                          drops native-TLS, which is what otherwise drags OpenSSL into a
+#                          Linux build for a loopback health check.
+#   tokio "time"         — `sleep` between health polls. Tauri already runs a Tokio runtime
+#                          (`tauri::async_runtime`), so no `rt-multi-thread` here.
+
+[package]
+name = "applicantos"
+version = "0.1.0"
+description = "ApplicantOS — knowledge-graph-driven job application automation."
+authors = ["ApplicantOS"]
+license = "MIT"
+repository = "https://github.com/applicantos/applicantos"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+# `_lib` because a Windows target cannot have a bin and a lib with the same name, and the
+# mobile entry points require a cdylib. `run()` in src/lib.rs is the single real entry point;
+# src/main.rs only calls it.
+name = "applicantos_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+[profile.release]
+# A desktop shell is shipped, not benchmarked: optimise for binary size, and keep panics
+# unwinding so a panic in the backend supervisor still runs the `Drop` that kills the child.
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

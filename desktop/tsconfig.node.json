@@ -1,0 +1,23 @@
+{
+  // The Node-context project: the dev launcher and the lint config. It exists to type-check
+  // `scripts/dev-with-backend.mjs` — the script that owns the backend process in development
+  // and is therefore the piece of tooling most able to leave an orphaned uvicorn behind
+  // (docs/CONTRACTS.md §18). `checkJs` gives it the same guarantees the TypeScript sources
+  // get without turning a launcher into a build step.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": true,
+    "jsx": "preserve",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    // The launcher runs on the user's Node, not through a bundler, so no path alias applies.
+    "paths": {}
+  },
+  "include": ["scripts/**/*.mjs", "eslint.config.js"],
+  "exclude": ["dist", "src-tauri", "node_modules"]
+}

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ApplicantOS",
+  "version": "0.1.0",
+  "identifier": "com.applicantos.desktop",
+
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+
+  "app": {
+    "withGlobalTauri": false,
+
+    "windows": [
+      {
+        "label": "main",
+        "title": "ApplicantOS",
+        "url": "/",
+
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1120,
+        "minHeight": 720,
+        "center": true,
+        "resizable": true,
+
+        "visible": false,
+        "backgroundColor": "#08090C",
+
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 12 },
+
+        "dragDropEnabled": true,
+        "zoomHotkeysEnabled": false,
+        "shadow": true
+      }
+    ],
+
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*; object-src 'none'; base-uri 'self'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; object-src 'none'; base-uri 'self'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'",
+      "capabilities": ["default"],
+      "assetProtocol": {
+        "enable": false
+      }
+    }
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "ApplicantOS",
+    "category": "Productivity",
+    "copyright": "Copyright © 2026 ApplicantOS",
+    "shortDescription": "Automated job applications with a hard kill switch.",
+    "longDescription": "ApplicantOS discovers job postings from supported ATS platforms, scores them against your preferences, generates a tailored resume and cover letter from a personal knowledge graph, applies automatically where it safely can, and escalates to manual review where it cannot. Two independent switches gate every real submission and both default closed.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/applicantos-server"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}

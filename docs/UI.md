@@ -316,7 +316,7 @@ content plane, which is the same relationship, not a flip). `[E — Cursor Midni
 ```
 
 **Theme resolution.** Three states, exactly as the platform expects: `data-theme="dark"` and
-`data-theme="light"` are explicit user choices persisted in `electron-store`; absent the attribute,
+`data-theme="light"` are explicit user choices persisted via the Tauri store plugin; absent the attribute,
 follow `prefers-color-scheme`. Write the dark palette on bare `:root` (dark is the default), then
 mirror it under `:root[data-theme="dark"]`, and put light under both `:root[data-theme="light"]` and
 `@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { … } }`. Never let a color
@@ -511,7 +511,7 @@ two documented exceptions above (`--st-dim` is non-text; `--fg-disabled` is exem
 }
 ```
 
-**Why system-first for the sans face.** In Electron there is no network, but there *is* a font-load
+**Why system-first for the sans face.** In a packaged desktop app there is no network, but there *is* a font-load
 frame: a bundled webfont paints on the second frame at best and can cause a FOUT on cold start. The
 platform UI face is in memory before the window exists, matches OS text rendering and hinting
 exactly, and costs zero bytes. Given P1, that trade is not close. `[J, forced by the instant-feel
@@ -545,7 +545,7 @@ text-rendering: optimizeLegibility;
 The shipwright research documents a 14px root as the density mechanism — it silently rescales
 Tailwind's entire rem system by 87.5% at once `[E]`. **We reject it**, for three reasons:
 (a) Radix/shadcn primitives compute internal offsets in rem and would rescale invisibly;
-(b) Electron zoom levels multiply on top of it, so a user at 110% zoom lands on non-integer device
+(b) webview zoom levels multiply on top of it, so a user at 110% zoom lands on non-integer device
 pixels and 1px hairlines disappear; (c) a spec whose numbers are all 87.5% of the number written in
 the class name is unreviewable. We buy the same density **explicitly**, via a small type scale and
 small component heights specified below. `[J — dissent from the evidence, stated openly]`
@@ -802,12 +802,12 @@ Intra-card dividers use `--state-divider` (`rgb(255 255 255 / .05)`), one step *
 bar live in the root route; only `<Outlet/>` swaps. This is the single largest contributor to
 "navigation feels instant." `[E — TanStack Router persistent-shell guidance]`
 
-### 5.2 Titlebar (Electron)
+### 5.2 Titlebar (Tauri)
 
 **Frameless on both platforms, with platform-native control affordances.**
 
 ```ts
-// electron/window.ts
+// src-tauri/tauri.conf.json  →  app.windows[0]
 new BrowserWindow({
   show: false,
   backgroundColor: '#08090C',                // must equal --bg-chrome of the persisted theme
@@ -838,7 +838,7 @@ win.once('ready-to-show', () => win.show());
 - **White-flash prevention is three-layered, all required** `[E]`: `show:false` +
   `ready-to-show`; `backgroundColor` on the window; and an inline
   `<style>html,body{background:#08090C}</style>` in `index.html` *above* any stylesheet link.
-  Restore saved bounds from `electron-store` **before** constructing the window.
+  Restore saved bounds from the Tauri store **before** showing the window.
 
 ### 5.3 Sidebar
 
@@ -945,7 +945,7 @@ solid/tinted accent uses on its whole page]`
 40-column data grid wastes a widescreen monitor. Reading-oriented pages (Settings, Onboarding,
 Application detail body) cap at **760px** measure.
 
-**`scrollbar-gutter: stable both-edges` on every scroll container is mandatory.** Windows Electron
+**`scrollbar-gutter: stable both-edges` on every scroll container is mandatory.** Windows WebView2
 uses classic non-overlay scrollbars, so a route with overflow is 15px narrower than one without;
 without the gutter, every navigation shifts the layout. `[E]`
 
@@ -2491,7 +2491,7 @@ blank-then-pop flash earlier in the boot. `[E]`
 **Cache invalidation safety.**
 - `buster = ${appVersion}:${API_SCHEMA_VERSION}`; bump `API_SCHEMA_VERSION` (a constant in
   `src/lib/api/types.ts`) on **any** DTO shape change.
-- At boot, `GET /health`; compare `build_id` against the value in `electron-store`; on mismatch,
+- At boot, `GET /health`; compare `build_id` against the value in the Tauri store; on mismatch,
   `queryClient.clear()` + clear the IDB store, then refetch everything.
 - `Settings → Reset Local Cache` does the same on demand.
 - **`shouldDehydrateMutation: () => false` — never persist mutations.** A resumed `apply.submit`
@@ -2546,11 +2546,11 @@ read.
 
 - **Do not code-split the renderer.** Ship one chunk: Vite `build.rollupOptions.output.manualChunks:
   undefined`, no `React.lazy` on routes. Code-splitting optimizes *network transfer*, which does not
-  exist in Electron — it only introduces a per-route async chunk fetch that can become the one
+  exist in a packaged desktop app — it only introduces a per-route async chunk fetch that can become the one
   visible navigation delay. `[E]`
 - Split exactly two heavy leaves that most sessions never open: the **PDF preview** (`/resumes`) and
   the **graph canvas** (`/knowledge`).
-- `build.target: 'chrome130'` (match the shipped Electron's Chromium) removes all downlevel
+- `build.target: ['edge120','safari17']` (the WebView2 / WKWebView baseline) removes most downlevel
   transpilation and shrinks parse time. `build.sourcemap: true`.
 - Serve production from a **privileged `app://` scheme** via `protocol.handle` + `net.fetch` with an
   SPA fallback and a path-traversal guard — not `file://` (not a secure context; breaks relative
@@ -2568,10 +2568,10 @@ CONTRACTS §14 specifies `GET /ws` (WebSocket) and `app/api/events.py` publishes
 > still applies in full and is adopted below. If SSE is ever revisited, file it in
 > `docs/OPEN_QUESTIONS.md`.
 
-**Host the socket in the Electron main process**, relay to the renderer via
+**Host the socket in the Rust shell**, relay to the renderer via
 `webContents.send('events:message', msg)`. This (a) survives renderer reloads and devtools, (b) is
 immune to renderer background throttling — so `backgroundThrottling` stays at its default `true`,
-avoiding electron#42378's blank-window bug and the battery cost, and (c) shares one connection
+avoiding renderer background-throttling stalls and the battery cost, and (c) shares one connection
 across windows. Separately, always
 `app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')` on Windows — it is
 the cause of "the app was frozen when I uncovered it." `[E]`
@@ -2977,7 +2977,7 @@ One shared announcer element (`#a11y-announcer`) is mounted in the root route; c
 - `Settings → Appearance → Reduce motion` can force the reduced branch independent of the OS.
 - **Hover animations are gated** behind `@media (hover: hover) and (pointer: fine)`. `[E]`
 - **Zoom:** the layout must survive `⌘+`/`⌘-` to 150% without horizontal page scroll. Fixed pixel
-  heights are in CSS pixels, so Electron's zoom scales them correctly.
+  heights are in CSS pixels, so webview zoom scales them correctly.
 - **`forced-colors: active`:** borders switch to `CanvasText`, the accent to `Highlight`, and chart
   fills switch to the texture channel. Never rely on `background-color` alone for state in
   forced-colors mode.
@@ -3022,15 +3022,15 @@ One shared announcer element (`#a11y-announcer`) is mounted in the root route; c
 | Seed detail views with `placeholderData` | Seed them with `initialData` | `initialData` writes a partial object into the cache and respects `staleTime` — it persists a lie |
 | Use fixed row heights in the virtualizer | Use `measureElement` | Per-row `ResizeObserver` + layout reads every frame is the #1 cause of sub-60fps tables |
 | Keep the log tail in a ring buffer | Model log lines as a query | Append-per-line churns the cache and triggers the persister on every line |
-| Ship the renderer as one chunk | Code-split routes | There is no network in Electron; splitting only adds a chunk fetch that can be the visible delay |
-| Host the WebSocket in the Electron **main** process | Run it in the renderer with `backgroundThrottling: false` | The main-process socket survives reloads and avoids electron#42378's blank-window bug |
+| Ship the renderer as one chunk | Code-split routes | Assets are local; splitting only adds a chunk fetch that can be the visible delay |
+| Host the WebSocket in the **Rust shell** | Run it in the renderer | The shell-side socket survives reloads and is not background-throttled |
 | Give `layoutId` to at most one indicator per view | Put `layout` on table rows or grid cards | Shared-layout runs a FLIP cycle with forced sync layout on every participant |
 | Cap stagger at 30ms × 6 items | Use `staggerChildren: 0.15` + `delayChildren: 0.3` | On a 12-row list that is over two seconds before the last row lands |
 | Ship zero animation on ⌘K, tabs, nav, and route changes | Add a 200ms fade "for polish" | An action performed 100×/day must be instant; Raycast ships none |
 | Swap live numbers instantly | Count-up animate them | Users read the number, not the animation, and count-up reflows unless it is tabular |
 | Gate a reachable skeleton at 400ms with a 500ms minimum | Show it immediately | A 150ms skeleton flash is strictly worse than nothing |
 | Use `outline` + `outline-offset` for the focus ring | Use `box-shadow` rings or remove the ring | Chromium follows `border-radius` on outline, and the offset can never go stale |
-| Put `scrollbar-gutter: stable both-edges` on every scroll container | Ignore it | Windows Electron scrollbars are non-overlay; every navigation shifts 15px without it |
+| Put `scrollbar-gutter: stable both-edges` on every scroll container | Ignore it | Windows WebView2 scrollbars are non-overlay; every navigation shifts 15px without it |
 | Use the validated `dataviz` slots in fixed order | Generate a 9th hue for a 9th series | A generated hue is indistinguishable under CVD and breaks every check |
 | Use the status palette when the series *are* statuses | Use categorical hues for status series | Otherwise "failed" ends up a random color |
 | Ship a table view for every chart | Rely on the chart alone | It is the accessibility relief channel, and it is mandatory when a slot is sub-3:1 |

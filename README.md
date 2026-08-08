@@ -63,7 +63,7 @@ Being built in the open, phase by phase. Honest state:
 | Browser automation + submission | ⬜ next |
 | REST API + WebSocket events + background workers | ⬜ |
 | Automatic status sync (reads your email for rejections/interviews) | ⬜ spec'd |
-| Desktop app (Electron) | ⬜ |
+| Desktop app (Tauri) | ⬜ |
 
 ~69,000 lines across 104 modules so far. **Not usable end-to-end yet** — there's no UI and no
 submission path until those phases land.
@@ -161,7 +161,7 @@ app/
   services/      orchestration
   api/           FastAPI + WebSocket events
   workers/       Celery tasks
-desktop/         Electron + React app
+desktop/         Tauri shell + React app
 docs/            architecture, contracts, design system
 ```
 

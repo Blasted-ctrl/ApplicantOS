@@ -56,7 +56,7 @@ These are invariants, not guidelines. Every one is enforced in code and checked 
 | `app/api/` | FastAPI routes + the WebSocket event bus |
 | `app/workers/` | Celery tasks across the `discovery` / `ai` / `apply` / `knowledge` / `maintenance` queues |
 | `app/observability/` | Prometheus collectors + request middleware |
-| `desktop/` | Electron shell + React/Vite renderer |
+| `desktop/` | Tauri shell (Rust) + React/Vite renderer |
 
 ---
 

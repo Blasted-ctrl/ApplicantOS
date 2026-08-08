@@ -7,7 +7,8 @@
 
 **Runtime:** Python 3.12+ (async-first, SQLAlchemy 2.0 `Mapped[]`, Pydantic v2).
 **Desktop:** React 19 + TypeScript 5 + Vite + Tailwind v4 + shadcn/ui + TanStack Query v5 +
-TanStack Router + Zustand + Framer Motion, shipped in Electron via `electron-vite`.
+TanStack Router + Zustand + Framer Motion, shipped in **Tauri v2** (Rust shell, system webview),
+with the Python backend bundled as a sidecar process.
 **Design system:** `docs/UI.md` is binding for all frontend work.
 
 ---
@@ -47,7 +48,7 @@ ApplicantOS/
     workers/       celery_app.py  poll_jobs.py  apply_jobs.py  index_knowledge.py
                    cleanup.py  retry.py  healthcheck.py
     observability/ metrics.py  middleware.py
-  desktop/         electron/  src/  electron.vite.config.ts  package.json
+  desktop/         src-tauri/  src/  vite.config.ts  package.json
   alembic/  docker/  scripts/  tests/  docs/  .claude/agents/
 ```
 
@@ -965,10 +966,19 @@ Events: `tracking.sync_started`, `tracking.sync_progress`, `tracking.signal_foun
 
 ## 18. Desktop app — `desktop/`
 
+Shipped as a **Tauri v2** application: a Rust shell hosting the system webview
+(WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux), with the Python backend bundled
+as a **sidecar** process. Chosen over Electron for size and startup (~10MB installer, ~80MB
+resident) while keeping the entire React/Tailwind/shadcn/TanStack stack and `docs/UI.md` intact.
+
 ```
 desktop/
-  package.json  electron.vite.config.ts  tsconfig*.json  tailwind config via CSS
-  electron/  main.ts  preload.ts  ipc.ts  window.ts  menu.ts  backend.ts  store.ts
+  package.json  vite.config.ts  tsconfig*.json  index.html
+  src-tauri/
+    Cargo.toml  tauri.conf.json  build.rs
+    src/  main.rs  lib.rs  sidecar.rs  commands.rs  menu.rs  tray.rs  store.rs
+    capabilities/  default.json          # Tauri v2 permission manifest
+    binaries/      applicantos-server-<target-triple>[.exe]   # PyInstaller sidecar
   src/
     main.tsx  app.tsx  router.tsx
     routes/      onboarding/  index  applications/  postings/  reviews/
@@ -976,26 +986,52 @@ desktop/
     components/  ui/ (shadcn primitives)  + app components
     lib/         api/client.ts  api/endpoints.ts  api/types.ts
                  query/client.ts  query/keys.ts  query/persist.ts
-                 ws.ts  utils.ts  shortcuts.ts
+                 tauri.ts  ws.ts  utils.ts  shortcuts.ts
     stores/      ui.ts  session.ts  filters.ts
     hooks/       use-*.ts
     styles/      globals.css  tokens.css
 ```
 
+### Tauri shell contract — `src-tauri/src/`
+
+```rust
+// sidecar.rs — owns the Python backend process lifecycle
+fn spawn_backend(app: &AppHandle) -> Result<CommandChild>   // random free port, health-poll /health
+fn shutdown_backend(child: CommandChild)                    // graceful SIGTERM, then kill
+// The sidecar MUST be killed on window close AND on app exit — an orphaned uvicorn
+// holding the SQLite file is the most common failure mode for this architecture.
+
+// commands.rs — #[tauri::command] surface exposed to the renderer
+backend_port() -> u16            backend_status() -> BackendStatus
+open_path(path: String)          reveal_in_folder(path: String)
+app_data_dir() -> String         restart_backend()
+```
+
+`tauri.conf.json`: `app.windows[0].visible = false` (shown on the frontend's `ready` event — no
+white flash), `withGlobalTauri = false`, a CSP allowing only `self` plus the localhost backend
+origin, and an `externalBin` entry for the sidecar. Capabilities are least-privilege: only
+`shell:allow-execute` for the sidecar, `fs` scoped to the app data dir, and `dialog:allow-open`.
+
+Backend startup: the Rust shell picks a free port, launches the sidecar bound to `127.0.0.1`,
+polls `/health` until ready (with a timeout and a visible error state), then exposes the port to
+the renderer via `backend_port()`. The renderer never hardcodes a port.
+
 **Binding frontend rules:**
 - `src/lib/api/types.ts` mirrors `app/schemas/` and `app/models/enums.py` — **enum string values
   must match exactly.**
 - All server state goes through TanStack Query. No `useEffect` fetching.
-- Query cache is persisted to disk and hydrated **before first paint** — a cold start renders
-  real data, not skeletons.
+- Query cache is persisted and hydrated **before first paint** — a cold start renders real data,
+  not skeletons. Two layers: a synchronous hot snapshot before `createRoot`, then a per-query
+  async persister.
 - The WebSocket feeds `queryClient.setQueryData`; live updates never produce a loading state.
 - Routes preload on hover/focus intent. Navigation between visited routes is instant.
 - Mutations are optimistic with rollback.
 - Never render a spinner for data already in cache. Skeletons only past 200ms of genuinely
   uncached load.
 - Long lists (>100 rows) are virtualized.
-- Electron window uses `show: false` + `ready-to-show` (no white flash); renderer↔main IPC only
-  via `contextBridge` (`contextIsolation: true`, `nodeIntegration: false`).
+- **Webview differences are the frontend's problem, not the user's.** Target baseline is
+  WebView2 / WKWebView / WebKitGTK — no Chromium-only APIs, and every CSS feature used must have
+  Safari support (WKWebView is the strictest of the three). Verify on macOS before shipping.
 - **`docs/UI.md` governs all visual and motion decisions.** Performance budget is enforceable:
   route change < 100ms, interaction-to-paint < 50ms, list scroll 60fps, cold start to
   interactive < 1.5s.

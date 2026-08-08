@@ -714,8 +714,7 @@ class _SchemaSynthesizer:
         high = schema.get("maximum", DEFAULT_INTEGER_MAXIMUM)
         low = int(low) if isinstance(low, (int, float)) and not isinstance(low, bool) else 0
         high = int(high) if isinstance(high, (int, float)) and not isinstance(high, bool) else low
-        if high < low:
-            high = low
+        high = max(high, low)
         return self._rng.randint(low, high)
 
     def _number(self, schema: dict[str, Any], *, name: str) -> float:
@@ -735,9 +734,12 @@ class _SchemaSynthesizer:
             low = schema.get("minimum", 0.0)
             high = schema.get("maximum", 1.0)
             low = float(low) if isinstance(low, (int, float)) and not isinstance(low, bool) else 0.0
-            high = float(high) if isinstance(high, (int, float)) and not isinstance(high, bool) else 1.0
-        if high < low:
-            high = low
+            high = (
+                float(high)
+                if isinstance(high, (int, float)) and not isinstance(high, bool)
+                else 1.0
+            )
+        high = max(high, low)
         return round(self._rng.uniform(low, high), FLOAT_PRECISION)
 
     def _string(self, schema: dict[str, Any], *, name: str) -> str:
@@ -794,9 +796,7 @@ class _SchemaSynthesizer:
     def _uuid(self) -> str:
         """Return a deterministic, canonically formatted UUID drawn from the seeded RNG."""
         digits = f"{self._rng.getrandbits(128):032x}"
-        return "-".join(
-            (digits[:8], digits[8:12], digits[12:16], digits[16:20], digits[20:32])
-        )
+        return "-".join((digits[:8], digits[8:12], digits[12:16], digits[16:20], digits[20:32]))
 
     @staticmethod
     def _bound(value: str, schema: dict[str, Any]) -> str:
@@ -938,9 +938,7 @@ class NullModel(ModelPlugin):
         digest.update(prompt.encode("utf-8"))
         digest.update(b"\x00")
         if json_schema is not None:
-            digest.update(
-                json.dumps(json_schema, sort_keys=True, default=str).encode("utf-8")
-            )
+            digest.update(json.dumps(json_schema, sort_keys=True, default=str).encode("utf-8"))
         return int.from_bytes(digest.digest(), "big")
 
     async def healthcheck(self) -> bool:

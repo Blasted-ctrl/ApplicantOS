@@ -243,6 +243,5 @@ class Company(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def __repr__(self) -> str:
         """Return a debugger-friendly summary that never triggers a lazy load."""
         return (
-            f"Company(id={self.id!r}, name={self.name!r}, "
-            f"normalized_name={self.normalized_name!r})"
+            f"Company(id={self.id!r}, name={self.name!r}, normalized_name={self.normalized_name!r})"
         )

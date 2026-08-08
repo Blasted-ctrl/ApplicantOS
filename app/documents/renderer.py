@@ -52,7 +52,13 @@ from app.documents.models import (
     lines_per_page,
 )
 from app.models.enums import DocumentKind, PluginKind
-from app.plugins.base import BasePlugin, PluginDisabled, PluginError, PluginMeta, PluginNotFound
+from app.plugins.base import (
+    BasePlugin,
+    PluginDisabled,
+    PluginError,
+    PluginMeta,
+    PluginNotFound,
+)
 from app.plugins.registry import registry
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
@@ -64,7 +70,6 @@ __all__ = [
     "DEFAULT_MARGIN_IN",
     "DEFAULT_TEMPLATE",
     "DOCUMENT_KIND_META_KEY",
-    "DocumentRenderError",
     "ESCAPED_META_KEY",
     "LATEX_ESCAPE_ORDER",
     "MIN_BULLET_DROP",
@@ -74,11 +79,12 @@ __all__ = [
     "OPTION_MARGIN_IN",
     "OPTION_MAX_PAGES",
     "OPTION_STEP",
-    "RenderResult",
     "SHRINK_LADDER",
+    "UNDERESTIMATE_FLOOR_LINES",
+    "DocumentRenderError",
+    "RenderResult",
     "ShrinkStep",
     "TemplatePlugin",
-    "UNDERESTIMATE_FLOOR_LINES",
     "cover_letter_to_resume_document",
     "escape_document",
     "escape_latex",
@@ -182,9 +188,7 @@ LATEX_ESCAPE_ORDER: Final[tuple[tuple[str, str], ...]] = (
 
 _LATEX_ESCAPES: Final[dict[str, str]] = dict(LATEX_ESCAPE_ORDER)
 
-_LATEX_PATTERN: Final[re.Pattern[str]] = re.compile(
-    "[" + re.escape("".join(_LATEX_ESCAPES)) + "]"
-)
+_LATEX_PATTERN: Final[re.Pattern[str]] = re.compile("[" + re.escape("".join(_LATEX_ESCAPES)) + "]")
 
 
 def escape_latex(s: str) -> str:
@@ -803,7 +807,7 @@ def _page_count_pypdf(path: Path) -> int:
 
     try:
         return len(PdfReader(str(path)).pages)
-    except Exception as exc:  # noqa: BLE001 - a page count must never break a render
+    except Exception as exc:
         logger.warning("documents.pypdf_failed", path=str(path), error=str(exc))
         return 0
 
@@ -1002,9 +1006,7 @@ async def render_resume(
                 log.warning("documents.shrink_exhausted", attempt=attempt)
                 break
 
-        result = await _attempt(
-            plugin_instance, working, out, fmt, step, max_pages, attempt, log
-        )
+        result = await _attempt(plugin_instance, working, out, fmt, step, max_pages, attempt, log)
 
         if result.page_count <= 0:
             log.warning(
@@ -1078,7 +1080,7 @@ async def _attempt(
         result = await plugin_instance.render(doc, Path(out), fmt=fmt, options=options)
     except DocumentRenderError:
         raise
-    except Exception as exc:  # noqa: BLE001 - normalised into the document error type
+    except Exception as exc:
         raise DocumentRenderError(
             f"template {plugin_instance.name!r} failed on attempt {attempt} "
             f"({step.label or 'unnamed step'}): {exc}",
@@ -1198,7 +1200,7 @@ async def render_cover_letter(
         )
     except DocumentRenderError:
         raise
-    except Exception as exc:  # noqa: BLE001 - normalised into the document error type
+    except Exception as exc:
         raise DocumentRenderError(
             f"template {template_name!r} failed to render the cover letter: {exc}",
             template=template_name,

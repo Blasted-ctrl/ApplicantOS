@@ -93,7 +93,9 @@ from app.knowledge import KnowledgeIndexer, KnowledgeRetriever
 from app.knowledge.analyzers import SourceRef
 from app.models.enums import SourceKind
 
-src = await indexer.add_source(user.id, SourceRef(kind=SourceKind.PROJECT_FOLDER, uri="~/code/my-project"))
+src = await indexer.add_source(
+    user.id, SourceRef(kind=SourceKind.PROJECT_FOLDER, uri="~/code/my-project")
+)
 print(await indexer.index_source(src.id))
 print(await retriever.retrieve(user.id, "embedded systems firmware C++"))
 ```

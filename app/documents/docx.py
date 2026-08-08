@@ -854,15 +854,11 @@ class AtsPlainTemplate(TemplatePlugin):
         if fmt == DOCX_FORMAT:
             written = _save(document, out)
             self.logger.info("docx.cover_letter_rendered", path=str(out), bytes=written)
-            return RenderResult.from_path(
-                out, engine=DOCX_ENGINE, template=self.name, page_count=1
-            )
+            return RenderResult.from_path(out, engine=DOCX_ENGINE, template=self.name, page_count=1)
 
         await self._convert(document, out, values)
         result = RenderResult.from_path(out, engine=SOFFICE_ENGINE, template=self.name)
-        self.logger.info(
-            "docx.cover_letter_rendered_pdf", path=str(out), pages=result.page_count
-        )
+        self.logger.info("docx.cover_letter_rendered_pdf", path=str(out), pages=result.page_count)
         return result
 
     async def _convert(

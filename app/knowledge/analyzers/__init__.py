@@ -23,6 +23,12 @@ from __future__ import annotations
 
 import structlog
 
+# Imported for their registration side effect. Each module's `@plugin` decorator runs at
+# import time; the names themselves are deliberately not re-exported.
+from app.knowledge.analyzers import document as _document  # noqa: F401
+from app.knowledge.analyzers import linkedin_export as _linkedin_export  # noqa: F401
+from app.knowledge.analyzers import project_folder as _project_folder  # noqa: F401
+from app.knowledge.analyzers import resume_parser as _resume_parser  # noqa: F401
 from app.knowledge.analyzers.base import (
     AnalysisResult,
     Analyzer,
@@ -42,13 +48,6 @@ from app.knowledge.analyzers.base import (
     get_analyzer,
     http_client,
 )
-
-# Imported for their registration side effect. Each module's `@plugin` decorator runs at
-# import time; the names themselves are deliberately not re-exported.
-from app.knowledge.analyzers import document as _document  # noqa: F401
-from app.knowledge.analyzers import linkedin_export as _linkedin_export  # noqa: F401
-from app.knowledge.analyzers import project_folder as _project_folder  # noqa: F401
-from app.knowledge.analyzers import resume_parser as _resume_parser  # noqa: F401
 
 __all__ = [
     "AnalysisResult",
@@ -99,7 +98,7 @@ def _import_optional(name: str) -> None:
                 missing=missing,
                 error=str(exc),
             )
-    except Exception as exc:  # noqa: BLE001 - one broken analyzer must not break the rest
+    except Exception as exc:
         logger.warning("analyzers.optional_import_failed", module=qualified, error=str(exc))
 
 

@@ -423,7 +423,9 @@ async def handle_render_error(request: Request, exc: Exception) -> Response:
         request,
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         error=ERROR_RENDER_FAILED,
-        detail=message if isinstance(message, str) and message else "The document could not be rendered.",
+        detail=message
+        if isinstance(message, str) and message
+        else "The document could not be rendered.",
         extra={"engine": engine, "template": template},
     )
 

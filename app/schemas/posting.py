@@ -42,8 +42,8 @@ from app.schemas.scoring import (
 )
 
 __all__ = [
-    "CompanyRead",
     "DEFAULT_DISCOVER_LIMIT",
+    "CompanyRead",
     "DiscoverRequest",
     "PostingFilter",
     "PostingRead",

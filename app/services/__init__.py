@@ -42,18 +42,14 @@ logger = structlog.get_logger(__name__)
 try:
     from app.services.dedupe_service import DedupeService as DedupeService
 except ImportError as exc:  # pragma: no cover - depends on build order
-    logger.debug(
-        "services.optional_import_failed", service="DedupeService", error=str(exc)
-    )
+    logger.debug("services.optional_import_failed", service="DedupeService", error=str(exc))
 else:
     __all__.append("DedupeService")
 
 try:
     from app.services.discovery_service import DiscoveryService as DiscoveryService
 except ImportError as exc:  # pragma: no cover - depends on build order
-    logger.debug(
-        "services.optional_import_failed", service="DiscoveryService", error=str(exc)
-    )
+    logger.debug("services.optional_import_failed", service="DiscoveryService", error=str(exc))
 else:
     __all__.append("DiscoveryService")
 
@@ -69,18 +65,14 @@ try:
     )
     from app.services.application_service import InvalidTransition as InvalidTransition
 except ImportError as exc:  # pragma: no cover - depends on build order
-    logger.debug(
-        "services.optional_import_failed", service="ApplicationService", error=str(exc)
-    )
+    logger.debug("services.optional_import_failed", service="ApplicationService", error=str(exc))
 else:
     __all__ += ["ALLOWED_TRANSITIONS", "ApplicationService", "InvalidTransition"]
 
 try:
     from app.services.review_service import ReviewService as ReviewService
 except ImportError as exc:  # pragma: no cover - depends on build order
-    logger.debug(
-        "services.optional_import_failed", service="ReviewService", error=str(exc)
-    )
+    logger.debug("services.optional_import_failed", service="ReviewService", error=str(exc))
 else:
     __all__.append("ReviewService")
 
@@ -96,18 +88,14 @@ try:
     from app.services.checkpoint_service import owner_key as owner_key
     from app.services.checkpoint_service import step_key as step_key
 except ImportError as exc:  # pragma: no cover - depends on build order
-    logger.debug(
-        "services.optional_import_failed", service="CheckpointService", error=str(exc)
-    )
+    logger.debug("services.optional_import_failed", service="CheckpointService", error=str(exc))
 else:
     __all__ += ["STEPS_BY_OWNER", "CheckpointService", "owner_key", "step_key"]
 
 try:
     from app.services.session_service import SessionService as SessionService
 except ImportError as exc:  # pragma: no cover - depends on build order
-    logger.debug(
-        "services.optional_import_failed", service="SessionService", error=str(exc)
-    )
+    logger.debug("services.optional_import_failed", service="SessionService", error=str(exc))
 else:
     __all__.append("SessionService")
 
@@ -119,18 +107,14 @@ try:
     )
     from app.services.onboarding_service import OnboardingService as OnboardingService
 except ImportError as exc:  # pragma: no cover - depends on build order
-    logger.debug(
-        "services.optional_import_failed", service="OnboardingService", error=str(exc)
-    )
+    logger.debug("services.optional_import_failed", service="OnboardingService", error=str(exc))
 else:
     __all__ += ["ONBOARDING_STEPS", "OnboardingService"]
 
 try:
     from app.services.analytics_service import AnalyticsService as AnalyticsService
 except ImportError as exc:  # pragma: no cover - depends on build order
-    logger.debug(
-        "services.optional_import_failed", service="AnalyticsService", error=str(exc)
-    )
+    logger.debug("services.optional_import_failed", service="AnalyticsService", error=str(exc))
 else:
     __all__.append("AnalyticsService")
 

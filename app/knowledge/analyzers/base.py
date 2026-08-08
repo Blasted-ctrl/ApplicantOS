@@ -65,19 +65,19 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.config.settings import Settings
 
 __all__ = [
-    "AnalysisResult",
-    "Analyzer",
-    "AnalyzerError",
     "CHARS_PER_TOKEN",
-    "ExtractedDocument",
-    "ExtractedEdge",
-    "ExtractedEntity",
-    "ExtractedFact",
     "HTTP_USER_AGENT",
     "MAX_CONFIDENCE",
     "MAX_IMPACT_SCORE",
     "MIN_CONFIDENCE",
     "MIN_IMPACT_SCORE",
+    "AnalysisResult",
+    "Analyzer",
+    "AnalyzerError",
+    "ExtractedDocument",
+    "ExtractedEdge",
+    "ExtractedEntity",
+    "ExtractedFact",
     "SourceAccessDenied",
     "SourceRef",
     "SourceUnavailableError",
@@ -790,8 +790,13 @@ class AnalysisResult:
             [(fact.kind.value, fact.text) for fact in self.facts],
             [(entity.kind.value, entity.name) for entity in self.entities],
             [
-                (edge.source[0].value, edge.source[1], edge.relation.value,
-                 edge.target[0].value, edge.target[1])
+                (
+                    edge.source[0].value,
+                    edge.source[1],
+                    edge.relation.value,
+                    edge.target[0].value,
+                    edge.target[1],
+                )
                 for edge in self.edges
             ],
         )
@@ -994,9 +999,7 @@ def analyzer_for(source: SourceRef) -> Analyzer:
             the analyzers that *are* available, which turns a missing-plugin problem into a
             one-line diagnosis.
     """
-    candidates = [
-        candidate for candidate in _registered_analyzers() if candidate.supports(source)
-    ]
+    candidates = [candidate for candidate in _registered_analyzers() if candidate.supports(source)]
     if not candidates:
         available = ", ".join(registry.names(PluginKind.ANALYZER)) or "none registered"
         raise PluginNotFound(
@@ -1199,7 +1202,7 @@ def _split_pieces(text: str, pattern: re.Pattern[str]) -> list[tuple[str, str]]:
     pending = ""
     cursor = 0
     for match in pattern.finditer(text):
-        body = text[cursor:match.start()]
+        body = text[cursor : match.start()]
         cursor = match.end()
         if body.strip():
             pieces.append((pending, body))
@@ -1231,8 +1234,8 @@ def _hard_split(text: str, separator: str, limit: int) -> list[_Segment]:
     return [
         _Segment(
             separator=separator if offset == 0 else "",
-            text=text[offset:offset + limit],
-            tokens=max(1, estimate_tokens(text[offset:offset + limit])),
+            text=text[offset : offset + limit],
+            tokens=max(1, estimate_tokens(text[offset : offset + limit])),
         )
         for offset in range(0, len(text), limit)
     ]
@@ -1348,9 +1351,7 @@ def chunk_text(
             overlap = settings.knowledge_chunk_overlap
 
     if max_tokens < MIN_CHUNK_TOKENS:
-        raise ValueError(
-            f"max_tokens must be at least {MIN_CHUNK_TOKENS}, got {max_tokens}"
-        )
+        raise ValueError(f"max_tokens must be at least {MIN_CHUNK_TOKENS}, got {max_tokens}")
     if overlap < 0:
         raise ValueError(f"overlap must not be negative, got {overlap}")
     effective_overlap = min(overlap, max_tokens - 1)

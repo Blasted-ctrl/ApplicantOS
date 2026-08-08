@@ -40,7 +40,6 @@ from app.config.settings import get_settings
 __all__ = [
     "BROKER_TIMEOUT_SECONDS",
     "DEGRADED_KEY",
-    "Dispatch",
     "QUEUE_AI",
     "QUEUE_APPLY",
     "QUEUE_DISCOVERY",
@@ -58,6 +57,7 @@ __all__ = [
     "TASK_KNOWLEDGE_REFRESH_STALE",
     "TASK_QUEUES",
     "TASK_SESSION_WATCHDOG",
+    "Dispatch",
     "dispatch",
     "reset_dispatcher",
 ]
@@ -299,9 +299,7 @@ async def dispatch(
 
     client = _celery_client()
     if client is None:
-        return Dispatch(
-            task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_CELERY
-        )
+        return Dispatch(task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_CELERY)
 
     try:
         task_id = await asyncio.wait_for(
@@ -310,10 +308,8 @@ async def dispatch(
         )
     except TimeoutError:
         logger.warning("api.dispatch_timed_out", task=task, queue=target_queue)
-        return Dispatch(
-            task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_BROKER
-        )
-    except Exception as exc:  # noqa: BLE001 - kombu raises a wide family of transport errors
+        return Dispatch(task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_BROKER)
+    except Exception as exc:
         logger.warning(
             "api.dispatch_failed",
             task=task,
@@ -321,9 +317,7 @@ async def dispatch(
             error_type=type(exc).__name__,
             error=str(exc),
         )
-        return Dispatch(
-            task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_BROKER
-        )
+        return Dispatch(task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_BROKER)
 
     logger.info("api.dispatched", task=task, queue=target_queue, task_id=task_id)
     return Dispatch(task=task, queue=target_queue, dispatched=True, task_id=task_id)

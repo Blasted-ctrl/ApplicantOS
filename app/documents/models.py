@@ -52,8 +52,6 @@ __all__ = [
     "BASE_MARGIN_IN",
     "BULLET_INDENT_CHARS",
     "CONTACT_BLOCK_LINES",
-    "Contact",
-    "CoverLetterDocument",
     "ENTRY_SPACING_LINES",
     "LINE_HEIGHT_RATIO",
     "MIN_BULLETS_PER_SECTION",
@@ -62,13 +60,15 @@ __all__ = [
     "PAGE_WIDTH_IN",
     "POINTS_PER_INCH",
     "PRIORITIES_META_KEY",
-    "ResumeDocument",
-    "ResumeEntry",
-    "ResumeSection",
     "SECTION_HEADING_LINES",
     "SKILLS_BLOCK_LINES",
     "SUMMARY_BLOCK_LINES",
     "UNRANKED_BULLET_SCORE",
+    "Contact",
+    "CoverLetterDocument",
+    "ResumeDocument",
+    "ResumeEntry",
+    "ResumeSection",
     "chars_per_line",
     "lines_per_page",
     "wrapped_lines",
@@ -178,9 +178,7 @@ def chars_per_line(
     if text_width_in <= 0 or font_size <= 0:
         return MIN_CHARS_PER_LINE
     base_width_in = PAGE_WIDTH_IN - 2 * BASE_MARGIN_IN
-    scaled = (
-        BASE_CHARS_PER_LINE * (BASE_FONT_SIZE_PT / font_size) * (text_width_in / base_width_in)
-    )
+    scaled = BASE_CHARS_PER_LINE * (BASE_FONT_SIZE_PT / font_size) * (text_width_in / base_width_in)
     return max(MIN_CHARS_PER_LINE, int(scaled))
 
 
@@ -295,7 +293,7 @@ class Contact(_DocumentModel):
         present = {key: value for key, value in self.links.items() if value.strip()}
         ranked = sorted(
             present.items(),
-            key=lambda item: (order.index(item[0]) if item[0] in order else len(order)),
+            key=lambda item: order.index(item[0]) if item[0] in order else len(order),
         )
         return ranked
 
@@ -627,9 +625,7 @@ class ResumeDocument(_DocumentModel):
         # written most-important-first and the tail is the part nobody reads.
         candidates.sort(key=lambda item: (item[0], -item[1]))
 
-        remaining = {
-            s_idx: section.total_bullets() for s_idx, section in enumerate(self.sections)
-        }
+        remaining = {s_idx: section.total_bullets() for s_idx, section in enumerate(self.sections)}
         doomed: set[tuple[int, int, int]] = set()
         for _score, _order, address in candidates:
             if len(doomed) >= n:
@@ -773,9 +769,7 @@ def _normalize_priorities(
     if priorities is None:
         return None
     if isinstance(priorities, Mapping):
-        return {
-            str(key): float(value) for key, value in priorities.items() if _is_number(value)
-        }
+        return {str(key): float(value) for key, value in priorities.items() if _is_number(value)}
     if isinstance(priorities, (str, bytes)):
         return None
     ordered = list(priorities)

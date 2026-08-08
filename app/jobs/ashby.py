@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, ClassVar, Final
 
 import structlog
@@ -63,19 +63,24 @@ from app.jobs.base import (
     SearchQuery,
 )
 from app.jobs.seeds import boards_from_query
-from app.models.enums import ATSProviderName, EmploymentType, PluginKind, WorkArrangement
+from app.models.enums import (
+    ATSProviderName,
+    EmploymentType,
+    PluginKind,
+    WorkArrangement,
+)
 from app.plugins.base import PluginMeta
 from app.plugins.registry import plugin
 
 __all__ = [
     "API_ROOT",
     "APPLY_URL_TEMPLATE",
-    "AshbyProvider",
     "BOARD_FEED_TTL_SECONDS",
     "HEALTHCHECK_BOARD",
     "JOB_URL_TEMPLATE",
     "MAX_LOOKUP_BOARDS",
     "SELECTOR_PACK",
+    "AshbyProvider",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -183,7 +188,7 @@ _NON_LETTER_RE: Final[re.Pattern[str]] = re.compile(r"[^a-z]")
 
 #: Sort key for a posting whose ``publishedAt`` could not be parsed, so that undated postings
 #: sort last under ``reverse=True``. An absent date is not a claim of freshness.
-_UNDATED: Final[datetime] = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_UNDATED: Final[datetime] = datetime(1970, 1, 1, tzinfo=UTC)
 
 #: Markers looked for inside an ``employmentType`` value, in decreasing order of specificity;
 #: the first that appears wins.
@@ -729,7 +734,11 @@ class AshbyProvider(ATSProvider):
                 an employer that has migrated ATS or renamed its board.
             ProviderError: On any other provider failure.
         """
-        from app.cache import NAMESPACES, get_cache, make_key  # noqa: PLC0415 - lazy by policy
+        from app.cache import (
+            NAMESPACES,
+            get_cache,
+            make_key,
+        )
 
         url = f"{API_ROOT}/{board}"
         params = {"includeCompensation": "true"}
@@ -745,9 +754,7 @@ class AshbyProvider(ATSProvider):
             self.logger.warning("ashby.board_feed_malformed", board=board)
             return []
         return [
-            job
-            for job in jobs
-            if isinstance(job, Mapping) and job.get("isListed") is not False
+            job for job in jobs if isinstance(job, Mapping) and job.get("isListed") is not False
         ]
 
     def _remember(self, job_id: str, board: str) -> None:
@@ -784,9 +791,7 @@ class AshbyProvider(ATSProvider):
         locations = _locations_of(job)
         salary_min, salary_max, currency = _salary_of(job)
 
-        url = clean_text(job.get("jobUrl")) or JOB_URL_TEMPLATE.format(
-            board=board, job_id=job_id
-        )
+        url = clean_text(job.get("jobUrl")) or JOB_URL_TEMPLATE.format(board=board, job_id=job_id)
         apply_url = clean_text(job.get("applyUrl")) or APPLY_URL_TEMPLATE.format(
             board=board, job_id=job_id
         )

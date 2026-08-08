@@ -189,9 +189,7 @@ class ResumeDocumentSchema(Schema):
         Returns:
             The total number of bullets in the document.
         """
-        return sum(
-            len(entry.bullets) for section in self.sections for entry in section.entries
-        )
+        return sum(len(entry.bullets) for section in self.sections for entry in section.entries)
 
     def estimated_lines(self) -> int:
         """Estimate how many rendered lines this document occupies.

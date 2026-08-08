@@ -273,9 +273,7 @@ class AnalyticsService:
         """
         identifier = _as_uuid(user_id, "user id")
 
-        discovered = int(
-            await self._session.scalar(select(func.count(JobPosting.id))) or 0
-        )
+        discovered = int(await self._session.scalar(select(func.count(JobPosting.id))) or 0)
         scored = int(
             await self._session.scalar(
                 select(func.count(JobScore.id)).where(JobScore.user_id == identifier)
@@ -484,9 +482,7 @@ class AnalyticsService:
                 .order_by(func.count(Application.id).desc())
             )
         ).all()
-        return {
-            ATSProviderName(provider).value: int(count or 0) for provider, count in rows
-        }
+        return {ATSProviderName(provider).value: int(count or 0) for provider, count in rows}
 
     async def outcomes(self, user_id: uuid.UUID | str) -> dict[str, int]:
         """Return what happened to everything the employer actually received.
@@ -512,9 +508,9 @@ class AnalyticsService:
         }
         outcomes["submitted"] = submitted
         outcomes["responded"] = responded
-        outcomes["awaiting"] = max(0, submitted - responded - counts.get(
-            ApplicationStatus.GHOSTED, 0
-        ))
+        outcomes["awaiting"] = max(
+            0, submitted - responded - counts.get(ApplicationStatus.GHOSTED, 0)
+        )
         return outcomes
 
     # ----------------------------------------------------------------------------------
@@ -559,10 +555,7 @@ class AnalyticsService:
         insights: list[InsightItem] = [
             _insight(
                 key="interview_rate",
-                title=(
-                    f"{interviewed} of {submitted} submitted applications reached an "
-                    "interview"
-                ),
+                title=(f"{interviewed} of {submitted} submitted applications reached an interview"),
                 detail="Your baseline. Every other insight below is measured against it.",
                 metric=_ratio(interviewed, submitted),
                 sample_size=submitted,
@@ -583,9 +576,7 @@ class AnalyticsService:
         if cover_letter is not None:
             insights.append(cover_letter)
 
-        logger.debug(
-            "analytics.insights", user_id=str(identifier), items=len(insights)
-        )
+        logger.debug("analytics.insights", user_id=str(identifier), items=len(insights))
         return insights
 
     async def _baseline_rate(self, user_id: uuid.UUID) -> tuple[int, int]:
@@ -678,9 +669,7 @@ class AnalyticsService:
         for _key, _label, low, high in SCORE_BANDS:
             in_band = (JobScore.normalized >= low) & (JobScore.normalized <= high)
             columns.append(_sum_when(in_band))
-            columns.append(
-                _sum_when(in_band & Application.status.in_(INTERVIEW_OUTCOME_STATES))
-            )
+            columns.append(_sum_when(in_band & Application.status.in_(INTERVIEW_OUTCOME_STATES)))
 
         row = (
             await self._session.execute(
@@ -742,13 +731,9 @@ class AnalyticsService:
             await self._session.execute(
                 self._submitted_scope(user_id).with_only_columns(
                     _sum_when(has_letter),
-                    _sum_when(
-                        has_letter & Application.status.in_(INTERVIEW_OUTCOME_STATES)
-                    ),
+                    _sum_when(has_letter & Application.status.in_(INTERVIEW_OUTCOME_STATES)),
                     _sum_when(~has_letter),
-                    _sum_when(
-                        ~has_letter & Application.status.in_(INTERVIEW_OUTCOME_STATES)
-                    ),
+                    _sum_when(~has_letter & Application.status.in_(INTERVIEW_OUTCOME_STATES)),
                 )
             )
         ).one()
@@ -852,9 +837,7 @@ class AnalyticsService:
             response_rate=_ratio(responded, submitted),
             interview_rate=_ratio(interviewed, submitted),
             offer_rate=_ratio(counts.get(ApplicationStatus.OFFER, 0), submitted),
-            avg_application_seconds=(
-                float(mean_duration) if mean_duration is not None else None
-            ),
+            avg_application_seconds=(float(mean_duration) if mean_duration is not None else None),
             avg_score=float(mean_score) if mean_score is not None else None,
             tokens_used=await self._tokens_used(identifier, window),
             window_days=window,
@@ -899,9 +882,7 @@ class AnalyticsService:
     # Internals
     # ----------------------------------------------------------------------------------
 
-    async def _status_counts(
-        self, user_id: uuid.UUID
-    ) -> dict[ApplicationStatus, int]:
+    async def _status_counts(self, user_id: uuid.UUID) -> dict[ApplicationStatus, int]:
         """Return this user's applications grouped by status.
 
         The single query behind :meth:`overview`, :meth:`funnel`, :meth:`outcomes` and

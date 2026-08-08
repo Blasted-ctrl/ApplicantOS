@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from app.database.base import Base, NAMING_CONVENTION
-from app.database.types import EmbeddingType, GUID, JSONType, UTCDateTime, utcnow
+from app.database.base import NAMING_CONVENTION, Base
+from app.database.types import GUID, EmbeddingType, JSONType, UTCDateTime, utcnow
 
 if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from app.database.session import (
@@ -36,11 +36,11 @@ if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     )
 
 __all__ = [
+    "GUID",
+    "NAMING_CONVENTION",
     "Base",
     "EmbeddingType",
-    "GUID",
     "JSONType",
-    "NAMING_CONVENTION",
     "UTCDateTime",
     "async_session_factory",
     "check_database",

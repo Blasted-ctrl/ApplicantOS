@@ -179,8 +179,7 @@ class SessionService:
             user_id=identifier,
             status=SessionStatus.RUNNING,
             started_at=utcnow(),
-            trigger=(trigger or DEFAULT_SESSION_TRIGGER).strip()
-            or DEFAULT_SESSION_TRIGGER,
+            trigger=(trigger or DEFAULT_SESSION_TRIGGER).strip() or DEFAULT_SESSION_TRIGGER,
             config_snapshot=dict(config_snapshot or {}),
         )
         self._session.add(run)
@@ -279,12 +278,7 @@ class SessionService:
         result = await self._session.execute(
             update(RunSession)
             .where(RunSession.id == identifier)
-            .values(
-                **{
-                    name: getattr(RunSession, name) + delta
-                    for name, delta in changes.items()
-                }
-            )
+            .values(**{name: getattr(RunSession, name) + delta for name, delta in changes.items()})
             .execution_options(synchronize_session=False)
         )
         if int(getattr(result, "rowcount", 0) or 0) == 0:
@@ -427,9 +421,7 @@ class SessionService:
             "manual_review": int(run.manual_review or 0),
             "failures": int(run.failures or 0),
             "applications": sum(by_status.values()),
-            "submitted": sum(
-                by_status.get(status, 0) for status in _POST_SUBMIT_ORDERED
-            ),
+            "submitted": sum(by_status.get(status, 0) for status in _POST_SUBMIT_ORDERED),
             "checkpoints_total": sum(checkpoints.values()),
             "checkpoints_pending": sum(
                 checkpoints.get(status, 0) for status in _OUTSTANDING_CHECKPOINT_STATES
@@ -444,9 +436,7 @@ class SessionService:
     # Maintenance
     # ----------------------------------------------------------------------------------
 
-    async def watchdog(
-        self, stale_after_minutes: int = DEFAULT_STALE_AFTER_MINUTES
-    ) -> int:
+    async def watchdog(self, stale_after_minutes: int = DEFAULT_STALE_AFTER_MINUTES) -> int:
         """Close running sessions that have stopped reporting progress.
 
         A worker killed mid-run leaves its session in ``running`` forever. That is not merely
@@ -564,13 +554,9 @@ def _validated_deltas(deltas: Mapping[str, Any]) -> dict[str, int]:
                 f"expected one of {sorted(SESSION_COUNTER_FIELDS)}"
             )
         if isinstance(value, bool) or not isinstance(value, int):
-            raise TypeError(
-                f"record({name}=...) requires an int, got {type(value).__name__!r}"
-            )
+            raise TypeError(f"record({name}=...) requires an int, got {type(value).__name__!r}")
         if value < COUNTER_FLOOR:
-            raise ValueError(
-                f"record({name}={value}) is negative; counters only ever go up"
-            )
+            raise ValueError(f"record({name}={value}) is negative; counters only ever go up")
         if value:
             changes[name] = value
     return changes

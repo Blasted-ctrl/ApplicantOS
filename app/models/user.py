@@ -151,9 +151,7 @@ class UserPreferences(BaseModel):
     cover_letter_policy: Literal["always", "when_required", "when_high_score", "never"] = (
         "when_required"
     )
-    providers_enabled: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_PROVIDERS_ENABLED)
-    )
+    providers_enabled: list[str] = Field(default_factory=lambda: list(DEFAULT_PROVIDERS_ENABLED))
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -343,9 +341,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             TypeError: If *value* is not a :class:`UserPreferences`.
         """
         if not isinstance(value, UserPreferences):
-            raise TypeError(
-                f"prefs must be a UserPreferences, got {type(value).__name__!r}"
-            )
+            raise TypeError(f"prefs must be a UserPreferences, got {type(value).__name__!r}")
         self.preferences = value.model_dump(mode="json")
 
     def update_prefs(self, **changes: Any) -> UserPreferences:
@@ -367,9 +363,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         """
         unknown = set(changes) - set(UserPreferences.model_fields)
         if unknown:
-            raise ValueError(
-                "unknown preference field(s): " + ", ".join(sorted(unknown))
-            )
+            raise ValueError("unknown preference field(s): " + ", ".join(sorted(unknown)))
         merged = self.prefs.model_dump(mode="json") | dict(changes)
         validated = UserPreferences.model_validate(merged)
         self.prefs = validated

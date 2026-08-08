@@ -293,8 +293,10 @@ class UserPreferences(BaseModel):
     require_no_sponsorship: bool = True
     resume_variant: str | None = None
     resume_template: str = "modern"
-    cover_letter_policy: Literal["always","when_required","when_high_score","never"] = "when_required"
-    providers_enabled: list[str] = ["greenhouse","lever","ashby"]
+    cover_letter_policy: Literal["always", "when_required", "when_high_score", "never"] = (
+        "when_required"
+    )
+    providers_enabled: list[str] = ["greenhouse", "lever", "ashby"]
 ```
 `User.prefs` property parses/defaults it. Imported everywhere as
 `from app.models.user import UserPreferences`.

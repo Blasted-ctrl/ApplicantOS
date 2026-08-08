@@ -260,7 +260,7 @@ async def provider_for_url(url: str) -> ATSProvider | None:
         try:
             if await detector(url):
                 claimants.append(provider)
-        except Exception as exc:  # noqa: BLE001 - one bad provider must not block the rest
+        except Exception as exc:
             logger.warning(
                 "jobs.provider_detect_failed",
                 provider=getattr(provider.meta, "name", "?"),

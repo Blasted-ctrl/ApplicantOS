@@ -62,7 +62,6 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 __all__ = [
     "DEFAULT_FACT_KIND",
     "DOCX_SUFFIXES",
-    "DocumentAnalyzer",
     "HTML_SUFFIXES",
     "MARKDOWN_SUFFIXES",
     "MAX_DOCUMENT_BYTES",
@@ -70,6 +69,7 @@ __all__ = [
     "PDF_SUFFIXES",
     "PLAIN_TEXT_SUFFIXES",
     "SUPPORTED_DOCUMENT_SUFFIXES",
+    "DocumentAnalyzer",
     "TextExtraction",
     "decode_bytes",
     "derive_title",
@@ -283,13 +283,13 @@ def read_pdf_text(data: bytes) -> TextExtraction:
         if reader.is_encrypted:
             try:
                 reader.decrypt("")
-            except Exception as exc:  # noqa: BLE001 - any decrypt failure is the same story
+            except Exception as exc:
                 extraction.record_error(
                     f"PDF is password protected and could not be opened ({exc})."
                 )
                 return extraction
         pages = list(reader.pages)
-    except Exception as exc:  # noqa: BLE001 - a malformed PDF must not kill an index run
+    except Exception as exc:
         extraction.record_error(f"PDF could not be parsed ({type(exc).__name__}: {exc}).")
         return extraction
 
@@ -298,7 +298,7 @@ def read_pdf_text(data: bytes) -> TextExtraction:
     for number, page in enumerate(pages, start=1):
         try:
             parts.append(page.extract_text() or "")
-        except Exception as exc:  # noqa: BLE001 - one bad page, not one bad document
+        except Exception as exc:
             failed_pages += 1
             logger.debug("document.pdf_page_failed", page=number, error=str(exc))
 
@@ -395,7 +395,7 @@ def read_docx_text(data: bytes) -> TextExtraction:
 
     try:
         document = docx.Document(io.BytesIO(data))
-    except Exception as exc:  # noqa: BLE001 - a corrupt archive is a recoverable problem
+    except Exception as exc:
         extraction.record_error(f"DOCX could not be parsed ({type(exc).__name__}: {exc}).")
         return extraction
 
@@ -411,7 +411,7 @@ def read_docx_text(data: bytes) -> TextExtraction:
                 )
                 for table in part.tables:
                     sink.extend(_docx_table_lines(table))
-    except Exception as exc:  # noqa: BLE001 - headers are a bonus, never a requirement
+    except Exception as exc:
         logger.debug("document.docx_headers_failed", error=str(exc))
 
     body_lines: list[str] = []
@@ -482,7 +482,7 @@ def read_html_text(html: str, *, base_url: str | None = None) -> TextExtraction:
 
     try:
         text, metadata = html_to_text(html or "", base_url=base_url)
-    except Exception as exc:  # noqa: BLE001 - malformed markup is a content problem
+    except Exception as exc:
         extraction.record_error(f"HTML could not be converted ({type(exc).__name__}: {exc}).")
         return extraction
 
@@ -539,9 +539,7 @@ def extract_text_from_bytes(
     if _looks_like_pdf(data) or suffix in PDF_SUFFIXES or "pdf" in declared:
         extraction = read_pdf_text(data)
         extraction.metadata.setdefault("format", "pdf")
-    elif suffix in DOCX_SUFFIXES or (
-        _looks_like_zip(data) and "wordprocessingml" in declared
-    ):
+    elif suffix in DOCX_SUFFIXES or (_looks_like_zip(data) and "wordprocessingml" in declared):
         extraction = read_docx_text(data)
         extraction.metadata.setdefault("format", "docx")
     elif suffix in HTML_SUFFIXES or "html" in declared or "xml" in declared:
@@ -623,7 +621,7 @@ async def fetch_text_from_url(url: str) -> TextExtraction:
         raise SourceUnavailableError(
             f"cannot fetch {url}: the 'httpx' package is not installed ({exc})."
         ) from exc
-    except Exception as exc:  # noqa: BLE001 - httpx raises a family of transport errors
+    except Exception as exc:
         raise SourceUnavailableError(
             f"{url} could not be fetched ({type(exc).__name__}: {exc})."
         ) from exc
@@ -770,7 +768,7 @@ def knowledge_extractor() -> KnowledgeExtractor:
         from app.cache import get_cache
 
         cache = get_cache()
-    except Exception as exc:  # noqa: BLE001 - an unavailable cache must not block indexing
+    except Exception as exc:
         logger.debug("analyzer.cache_unavailable", error=str(exc))
     return KnowledgeExtractor(cache=cache)
 
@@ -880,7 +878,7 @@ class DocumentAnalyzer(Analyzer):
         if uri:
             try:
                 response = await http_client().head(uri)
-            except Exception as exc:  # noqa: BLE001 - a failed probe just means "unknown"
+            except Exception as exc:
                 logger.debug("document.head_probe_failed", uri=uri, error=str(exc))
             else:
                 probe = _url_probe_fingerprint(

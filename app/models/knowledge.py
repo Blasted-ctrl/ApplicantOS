@@ -53,6 +53,8 @@ from typing import TYPE_CHECKING, Any, Final
 import structlog
 from sqlalchemy import (
     Enum as SAEnum,
+)
+from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
@@ -63,7 +65,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.database.base import Base
-from app.database.types import EmbeddingType, GUID, JSONType, utcnow
+from app.database.types import GUID, EmbeddingType, JSONType, utcnow
 from app.models.enums import (
     EntityKind,
     FactKind,
@@ -83,6 +85,7 @@ __all__ = [
     "DEFAULT_CONFIDENCE",
     "DEFAULT_EDGE_WEIGHT",
     "DEFAULT_MEMORY_WEIGHT",
+    "URI_MAX_LENGTH",
     "KnowledgeChunk",
     "KnowledgeDocument",
     "KnowledgeEdge",
@@ -90,7 +93,6 @@ __all__ = [
     "KnowledgeFact",
     "KnowledgeSource",
     "MemoryEntry",
-    "URI_MAX_LENGTH",
     "normalize_for_matching",
 ]
 
@@ -263,12 +265,8 @@ class KnowledgeSource(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base)
         index=True,
     )
     uri: Mapped[str] = mapped_column(String(URI_MAX_LENGTH), nullable=False)
-    label: Mapped[str | None] = mapped_column(
-        String(TITLE_MAX_LENGTH), nullable=True, default=None
-    )
-    config: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    label: Mapped[str | None] = mapped_column(String(TITLE_MAX_LENGTH), nullable=True, default=None)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
     index_status: Mapped[IndexStatus] = mapped_column(
         _enum_column_type(IndexStatus, name="index_status"),
@@ -278,9 +276,7 @@ class KnowledgeSource(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base)
     )
     last_indexed_at: Mapped[datetime | None] = mapped_column(nullable=True, default=None)
     last_error: Mapped[str | None] = mapped_column(Text(), nullable=True, default=None)
-    etag: Mapped[str | None] = mapped_column(
-        String(ETAG_MAX_LENGTH), nullable=True, default=None
-    )
+    etag: Mapped[str | None] = mapped_column(String(ETAG_MAX_LENGTH), nullable=True, default=None)
     content_hash: Mapped[str | None] = mapped_column(
         String(CONTENT_HASH_LENGTH), nullable=True, default=None
     )
@@ -349,9 +345,7 @@ class KnowledgeDocument(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Bas
         nullable=False,
         index=True,
     )
-    metadata_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
     token_count: Mapped[int] = mapped_column(nullable=False, default=0)
     indexed_at: Mapped[datetime | None] = mapped_column(nullable=True, default=None)
 
@@ -421,9 +415,7 @@ class KnowledgeChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     embedding: Mapped[list[float] | None] = mapped_column(
         EmbeddingType(), nullable=True, default=None
     )
-    metadata_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
 
     document: Mapped[KnowledgeDocument] = relationship(
         "KnowledgeDocument",
@@ -484,13 +476,9 @@ class KnowledgeEntity(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base)
         index=True,
     )
     summary: Mapped[str | None] = mapped_column(Text(), nullable=True, default=None)
-    attributes: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
     aliases: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
-    confidence: Mapped[float] = mapped_column(
-        Float(), nullable=False, default=DEFAULT_CONFIDENCE
-    )
+    confidence: Mapped[float] = mapped_column(Float(), nullable=False, default=DEFAULT_CONFIDENCE)
     mention_count: Mapped[int] = mapped_column(nullable=False, default=0)
     first_seen_at: Mapped[datetime] = mapped_column(nullable=False, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(nullable=False, default=utcnow)
@@ -604,9 +592,7 @@ class KnowledgeEdge(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
     """
 
     __tablename__ = "knowledge_edges"
-    __table_args__ = (
-        UniqueConstraint("source_entity_id", "target_entity_id", "relation"),
-    )
+    __table_args__ = (UniqueConstraint("source_entity_id", "target_entity_id", "relation"),)
 
     source_entity_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -625,12 +611,8 @@ class KnowledgeEdge(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         nullable=False,
         index=True,
     )
-    weight: Mapped[float] = mapped_column(
-        Float(), nullable=False, default=DEFAULT_EDGE_WEIGHT
-    )
-    evidence: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    weight: Mapped[float] = mapped_column(Float(), nullable=False, default=DEFAULT_EDGE_WEIGHT)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
 
     source_entity: Mapped[KnowledgeEntity] = relationship(
         "KnowledgeEntity",
@@ -701,9 +683,7 @@ class KnowledgeFact(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
     """
 
     __tablename__ = "knowledge_facts"
-    __table_args__ = (
-        Index("ix_knowledge_facts_user_id_is_active", "user_id", "is_active"),
-    )
+    __table_args__ = (Index("ix_knowledge_facts_user_id_is_active", "user_id", "is_active"),)
 
     kind: Mapped[FactKind] = mapped_column(
         _enum_column_type(FactKind, name="fact_kind"),
@@ -728,14 +708,10 @@ class KnowledgeFact(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         String(DATE_TEXT_MAX_LENGTH), nullable=True, default=None
     )
     skills: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
-    technologies: Mapped[list[str]] = mapped_column(
-        JSONType(), nullable=False, default=list
-    )
+    technologies: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
     metrics: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
     impact_score: Mapped[int] = mapped_column(nullable=False, default=0)
-    confidence: Mapped[float] = mapped_column(
-        Float(), nullable=False, default=DEFAULT_CONFIDENCE
-    )
+    confidence: Mapped[float] = mapped_column(Float(), nullable=False, default=DEFAULT_CONFIDENCE)
     embedding: Mapped[list[float] | None] = mapped_column(
         EmbeddingType(), nullable=True, default=None
     )
@@ -905,18 +881,12 @@ class MemoryEntry(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         index=True,
     )
     text: Mapped[str] = mapped_column(Text(), nullable=False)
-    context: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    context: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
     embedding: Mapped[list[float] | None] = mapped_column(
         EmbeddingType(), nullable=True, default=None
     )
-    weight: Mapped[float] = mapped_column(
-        Float(), nullable=False, default=DEFAULT_MEMORY_WEIGHT
-    )
-    expires_at: Mapped[datetime | None] = mapped_column(
-        nullable=True, default=None, index=True
-    )
+    weight: Mapped[float] = mapped_column(Float(), nullable=False, default=DEFAULT_MEMORY_WEIGHT)
+    expires_at: Mapped[datetime | None] = mapped_column(nullable=True, default=None, index=True)
 
     def is_expired(self, at: datetime | None = None) -> bool:
         """Return whether this memory should no longer be retrieved.

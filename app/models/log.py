@@ -124,6 +124,5 @@ class LogEntry(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def __repr__(self) -> str:
         """Return a debugger-friendly summary that never triggers a lazy load."""
         return (
-            f"LogEntry(id={self.id!r}, level={self.level!r}, event={self.event!r}, "
-            f"at={self.at!r})"
+            f"LogEntry(id={self.id!r}, level={self.level!r}, event={self.event!r}, at={self.at!r})"
         )

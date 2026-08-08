@@ -43,10 +43,12 @@ __all__ = [
     "PREFIX_ATTRIBUTE",
     "ROUTER_ATTRIBUTE",
     "TAGS_ATTRIBUTE",
+    "TAG_DESCRIPTIONS",
     "api_router",
     "build_api_router",
     "iter_route_modules",
     "root_routers",
+    "tag_metadata",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -78,7 +80,7 @@ def iter_route_modules() -> list[ModuleType]:
         full_name = f"{__name__}.{info.name}"
         try:
             modules.append(importlib.import_module(full_name))
-        except Exception as exc:  # noqa: BLE001 - one broken group, not eleven
+        except Exception as exc:
             logger.error(
                 "api.route_module_failed",
                 module=full_name,
@@ -154,6 +156,46 @@ def root_routers() -> list[APIRouter]:
         for module in iter_route_modules()
         if _mounts_at_root(module) and (router := _router_of(module)) is not None
     ]
+
+
+#: One-line description per OpenAPI tag, shown as the section blurb in the generated docs.
+#: Kept here rather than in :mod:`app.main` because the tags themselves are declared by the
+#: route modules this package walks, and a description list that lived somewhere else would
+#: silently go stale the first time a group was renamed.
+TAG_DESCRIPTIONS: Final[dict[str, str]] = {
+    "health": "Liveness, readiness and the Prometheus scrape. Unversioned by design.",
+    "onboarding": "The server-driven setup wizard.",
+    "profile": "Identity, the application answer sheet, and the automation policy.",
+    "knowledge": "Sources, facts, entities, the graph, and search over all of them.",
+    "postings": "The discovery feed and the two endpoints that start work on a posting.",
+    "applications": "Applications, their audit trail, and their stored artifacts.",
+    "reviews": "The human review queue — where the automation stopped rather than guessed.",
+    "resumes": "Resume variants, immutable generated versions, and previews.",
+    "sessions": "Automation runs and their rollup counters.",
+    "analytics": "The funnel, the activity series and the insights panel.",
+    "settings": "Runtime configuration, plugins, and the scoring rule pack.",
+    "logs": "The product's own structured log viewer.",
+    "events": "The live WebSocket event stream at /ws.",
+}
+
+
+def tag_metadata() -> list[dict[str, str]]:
+    """Return OpenAPI tag metadata for every group this package mounts.
+
+    Derived from the modules actually present rather than from a hand-written list, so a
+    group that is added, removed or renamed cannot leave a phantom section in the docs.
+    Tags with no description are still returned — an undescribed section is a small gap,
+    while an omitted one makes the endpoints under it look untagged.
+
+    Returns:
+        One ``{"name", "description"}`` mapping per tag, in mount order.
+    """
+    seen: dict[str, str] = {}
+    for module in iter_route_modules():
+        name = module.__name__.rsplit(".", 1)[-1]
+        for tag in getattr(module, TAGS_ATTRIBUTE, [name]):
+            seen.setdefault(str(tag), TAG_DESCRIPTIONS.get(str(tag), ""))
+    return [{"name": name, "description": description} for name, description in seen.items()]
 
 
 #: The aggregated ``/api/v1`` router. Built at import so that the route table is fixed

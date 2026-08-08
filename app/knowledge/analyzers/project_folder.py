@@ -91,17 +91,17 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 __all__ = [
     "ALWAYS_SKIPPED_DIRECTORIES",
     "GIT_TIMEOUT_SECONDS",
-    "GitignoreMatcher",
     "LANGUAGE_BY_FILENAME",
     "LANGUAGE_BY_SUFFIX",
     "MANIFEST_FILENAMES",
     "NON_CODE_LANGUAGES",
+    "SKIPPED_FILENAMES",
+    "SKIPPED_SUFFIXES",
+    "GitignoreMatcher",
     "ProjectFolderAnalyzer",
     "ProjectProfile",
     "ProjectScan",
     "ScannedFile",
-    "SKIPPED_FILENAMES",
-    "SKIPPED_SUFFIXES",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -116,16 +116,59 @@ logger = structlog.get_logger(__name__)
 #: somebody else's project and would drown the user's own work in the graph.
 ALWAYS_SKIPPED_DIRECTORIES: Final[frozenset[str]] = frozenset(
     {
-        ".git", ".hg", ".svn", ".bzr",
-        "node_modules", "bower_components", "jspm_packages",
-        "venv", ".venv", "virtualenv", "site-packages", ".conda",
-        "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox",
-        "dist", "build", "target", "out", "cmake-build-debug", "cmake-build-release",
-        ".next", ".nuxt", ".svelte-kit", ".turbo", ".parcel-cache", ".cache",
-        "vendor", "Pods", "Carthage", ".gradle", ".m2", ".cargo", ".stack-work",
-        ".idea", ".vscode", ".vs", ".terraform", ".serverless",
-        ".pio", ".platformio", "DerivedData", "Debug", "Release", "obj",
-        "coverage", "htmlcov", ".coverage", ".sass-cache", "bin",
+        ".git",
+        ".hg",
+        ".svn",
+        ".bzr",
+        "node_modules",
+        "bower_components",
+        "jspm_packages",
+        "venv",
+        ".venv",
+        "virtualenv",
+        "site-packages",
+        ".conda",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+        "dist",
+        "build",
+        "target",
+        "out",
+        "cmake-build-debug",
+        "cmake-build-release",
+        ".next",
+        ".nuxt",
+        ".svelte-kit",
+        ".turbo",
+        ".parcel-cache",
+        ".cache",
+        "vendor",
+        "Pods",
+        "Carthage",
+        ".gradle",
+        ".m2",
+        ".cargo",
+        ".stack-work",
+        ".idea",
+        ".vscode",
+        ".vs",
+        ".terraform",
+        ".serverless",
+        ".pio",
+        ".platformio",
+        "DerivedData",
+        "Debug",
+        "Release",
+        "obj",
+        "coverage",
+        "htmlcov",
+        ".coverage",
+        ".sass-cache",
+        "bin",
     }
 )
 
@@ -134,26 +177,118 @@ ALWAYS_SKIPPED_DIRECTORIES: Final[frozenset[str]] = frozenset(
 SKIPPED_SUFFIXES: Final[frozenset[str]] = frozenset(
     {
         # compiled / linked artifacts
-        ".exe", ".dll", ".so", ".dylib", ".o", ".obj", ".a", ".lib", ".bin", ".elf",
-        ".hex", ".bit", ".pyc", ".pyo", ".pyd", ".class", ".jar", ".war", ".wasm",
-        ".node", ".nupkg", ".pdb", ".ilk", ".d", ".map", ".lock",
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".o",
+        ".obj",
+        ".a",
+        ".lib",
+        ".bin",
+        ".elf",
+        ".hex",
+        ".bit",
+        ".pyc",
+        ".pyo",
+        ".pyd",
+        ".class",
+        ".jar",
+        ".war",
+        ".wasm",
+        ".node",
+        ".nupkg",
+        ".pdb",
+        ".ilk",
+        ".d",
+        ".map",
+        ".lock",
         # images
-        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff",
-        ".svg", ".psd", ".ai", ".eps", ".heic", ".raw", ".dng",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".bmp",
+        ".ico",
+        ".webp",
+        ".tif",
+        ".tiff",
+        ".svg",
+        ".psd",
+        ".ai",
+        ".eps",
+        ".heic",
+        ".raw",
+        ".dng",
         # archives
-        ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".whl", ".deb",
-        ".rpm", ".dmg", ".iso", ".pkg", ".msi", ".cab",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".tgz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+        ".whl",
+        ".deb",
+        ".rpm",
+        ".dmg",
+        ".iso",
+        ".pkg",
+        ".msi",
+        ".cab",
         # media
-        ".mp3", ".wav", ".ogg", ".flac", ".m4a", ".mp4", ".mov", ".avi", ".mkv",
-        ".webm", ".wmv", ".flv",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".m4a",
+        ".mp4",
+        ".mov",
+        ".avi",
+        ".mkv",
+        ".webm",
+        ".wmv",
+        ".flv",
         # fonts and documents that are not source
-        ".ttf", ".otf", ".woff", ".woff2", ".eot", ".pdf", ".doc", ".ppt", ".pptx",
-        ".xls", ".xlsx",
+        ".ttf",
+        ".otf",
+        ".woff",
+        ".woff2",
+        ".eot",
+        ".pdf",
+        ".doc",
+        ".ppt",
+        ".pptx",
+        ".xls",
+        ".xlsx",
         # data stores and models
-        ".db", ".sqlite", ".sqlite3", ".mdb", ".dat", ".pkl", ".pickle", ".npy",
-        ".npz", ".h5", ".hdf5", ".pt", ".pth", ".onnx", ".tflite", ".pb", ".safetensors",
+        ".db",
+        ".sqlite",
+        ".sqlite3",
+        ".mdb",
+        ".dat",
+        ".pkl",
+        ".pickle",
+        ".npy",
+        ".npz",
+        ".h5",
+        ".hdf5",
+        ".pt",
+        ".pth",
+        ".onnx",
+        ".tflite",
+        ".pb",
+        ".safetensors",
         # 3D / CAD / EDA binaries
-        ".stl", ".step", ".stp", ".3mf", ".fbx", ".blend", ".obj3d", ".brd",
+        ".stl",
+        ".step",
+        ".stp",
+        ".3mf",
+        ".fbx",
+        ".blend",
+        ".obj3d",
+        ".brd",
     }
 )
 
@@ -161,10 +296,26 @@ SKIPPED_SUFFIXES: Final[frozenset[str]] = frozenset(
 #: thousands of lines long, that say nothing about what the user built.
 SKIPPED_FILENAMES: Final[frozenset[str]] = frozenset(
     {
-        "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json",
-        "bun.lockb", "poetry.lock", "pdm.lock", "uv.lock", "pipfile.lock",
-        "cargo.lock", "gemfile.lock", "composer.lock", "go.sum", "packages.lock.json",
-        "flake.lock", "mix.lock", "podfile.lock", "conan.lock", ".ds_store", "thumbs.db",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "npm-shrinkwrap.json",
+        "bun.lockb",
+        "poetry.lock",
+        "pdm.lock",
+        "uv.lock",
+        "pipfile.lock",
+        "cargo.lock",
+        "gemfile.lock",
+        "composer.lock",
+        "go.sum",
+        "packages.lock.json",
+        "flake.lock",
+        "mix.lock",
+        "podfile.lock",
+        "conan.lock",
+        ".ds_store",
+        "thumbs.db",
     }
 )
 
@@ -176,31 +327,111 @@ SKIPPED_FILENAMES: Final[frozenset[str]] = frozenset(
 #: Extension → language. Curated rather than exhaustive: every entry here becomes a graph
 #: node the user may be judged on, so a wrong mapping is worse than a missing one.
 LANGUAGE_BY_SUFFIX: Final[dict[str, str]] = {
-    ".py": "Python", ".pyi": "Python", ".pyx": "Cython", ".ipynb": "Jupyter Notebook",
-    ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
-    ".ts": "TypeScript", ".tsx": "TypeScript", ".mts": "TypeScript", ".cts": "TypeScript",
-    ".c": "C", ".h": "C", ".cpp": "C++", ".cc": "C++", ".cxx": "C++", ".c++": "C++",
-    ".hpp": "C++", ".hh": "C++", ".hxx": "C++", ".ino": "Arduino", ".cu": "CUDA",
-    ".cuh": "CUDA", ".cs": "C#", ".java": "Java", ".kt": "Kotlin", ".kts": "Kotlin",
-    ".swift": "Swift", ".go": "Go", ".rs": "Rust", ".rb": "Ruby", ".php": "PHP",
-    ".lua": "Lua", ".luau": "Luau", ".m": "Objective-C", ".mm": "Objective-C++",
-    ".r": "R", ".jl": "Julia", ".scala": "Scala", ".hs": "Haskell", ".ml": "OCaml",
-    ".ex": "Elixir", ".exs": "Elixir", ".erl": "Erlang", ".dart": "Dart",
-    ".zig": "Zig", ".nim": "Nim", ".pl": "Perl", ".pm": "Perl", ".clj": "Clojure",
-    ".groovy": "Groovy", ".gradle": "Gradle", ".f90": "Fortran", ".f": "Fortran",
-    ".sh": "Shell", ".bash": "Shell", ".zsh": "Shell", ".fish": "Shell",
-    ".ps1": "PowerShell", ".psm1": "PowerShell", ".bat": "Batchfile", ".cmd": "Batchfile",
-    ".sql": "SQL", ".html": "HTML", ".htm": "HTML", ".css": "CSS", ".scss": "SCSS",
-    ".sass": "Sass", ".less": "Less", ".vue": "Vue", ".svelte": "Svelte",
-    ".v": "Verilog", ".sv": "SystemVerilog", ".svh": "SystemVerilog", ".vhd": "VHDL",
-    ".vhdl": "VHDL", ".asm": "Assembly", ".s": "Assembly", ".gd": "GDScript",
-    ".glsl": "GLSL", ".vert": "GLSL", ".frag": "GLSL", ".comp": "GLSL", ".hlsl": "HLSL",
-    ".shader": "ShaderLab", ".tf": "Terraform", ".proto": "Protocol Buffers",
-    ".cmake": "CMake", ".mk": "Makefile", ".tex": "TeX",
-    ".md": "Markdown", ".markdown": "Markdown", ".mdx": "Markdown",
-    ".rst": "reStructuredText", ".adoc": "AsciiDoc", ".txt": "Text",
-    ".json": "JSON", ".yml": "YAML", ".yaml": "YAML", ".toml": "TOML", ".xml": "XML",
-    ".ini": "INI", ".cfg": "INI", ".csv": "CSV",
+    ".py": "Python",
+    ".pyi": "Python",
+    ".pyx": "Cython",
+    ".ipynb": "Jupyter Notebook",
+    ".js": "JavaScript",
+    ".jsx": "JavaScript",
+    ".mjs": "JavaScript",
+    ".cjs": "JavaScript",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript",
+    ".mts": "TypeScript",
+    ".cts": "TypeScript",
+    ".c": "C",
+    ".h": "C",
+    ".cpp": "C++",
+    ".cc": "C++",
+    ".cxx": "C++",
+    ".c++": "C++",
+    ".hpp": "C++",
+    ".hh": "C++",
+    ".hxx": "C++",
+    ".ino": "Arduino",
+    ".cu": "CUDA",
+    ".cuh": "CUDA",
+    ".cs": "C#",
+    ".java": "Java",
+    ".kt": "Kotlin",
+    ".kts": "Kotlin",
+    ".swift": "Swift",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".rb": "Ruby",
+    ".php": "PHP",
+    ".lua": "Lua",
+    ".luau": "Luau",
+    ".m": "Objective-C",
+    ".mm": "Objective-C++",
+    ".r": "R",
+    ".jl": "Julia",
+    ".scala": "Scala",
+    ".hs": "Haskell",
+    ".ml": "OCaml",
+    ".ex": "Elixir",
+    ".exs": "Elixir",
+    ".erl": "Erlang",
+    ".dart": "Dart",
+    ".zig": "Zig",
+    ".nim": "Nim",
+    ".pl": "Perl",
+    ".pm": "Perl",
+    ".clj": "Clojure",
+    ".groovy": "Groovy",
+    ".gradle": "Gradle",
+    ".f90": "Fortran",
+    ".f": "Fortran",
+    ".sh": "Shell",
+    ".bash": "Shell",
+    ".zsh": "Shell",
+    ".fish": "Shell",
+    ".ps1": "PowerShell",
+    ".psm1": "PowerShell",
+    ".bat": "Batchfile",
+    ".cmd": "Batchfile",
+    ".sql": "SQL",
+    ".html": "HTML",
+    ".htm": "HTML",
+    ".css": "CSS",
+    ".scss": "SCSS",
+    ".sass": "Sass",
+    ".less": "Less",
+    ".vue": "Vue",
+    ".svelte": "Svelte",
+    ".v": "Verilog",
+    ".sv": "SystemVerilog",
+    ".svh": "SystemVerilog",
+    ".vhd": "VHDL",
+    ".vhdl": "VHDL",
+    ".asm": "Assembly",
+    ".s": "Assembly",
+    ".gd": "GDScript",
+    ".glsl": "GLSL",
+    ".vert": "GLSL",
+    ".frag": "GLSL",
+    ".comp": "GLSL",
+    ".hlsl": "HLSL",
+    ".shader": "ShaderLab",
+    ".tf": "Terraform",
+    ".proto": "Protocol Buffers",
+    ".cmake": "CMake",
+    ".mk": "Makefile",
+    ".tex": "TeX",
+    ".md": "Markdown",
+    ".markdown": "Markdown",
+    ".mdx": "Markdown",
+    ".rst": "reStructuredText",
+    ".adoc": "AsciiDoc",
+    ".txt": "Text",
+    ".json": "JSON",
+    ".yml": "YAML",
+    ".yaml": "YAML",
+    ".toml": "TOML",
+    ".xml": "XML",
+    ".ini": "INI",
+    ".cfg": "INI",
+    ".csv": "CSV",
 }
 
 #: Extensionless files whose *name* identifies the language.
@@ -221,8 +452,19 @@ LANGUAGE_BY_FILENAME: Final[dict[str, str]] = {
 #: YAML are real file formats and useless as evidence of engineering skill; listing "JSON"
 #: among a candidate's technologies would make the whole graph less credible.
 NON_CODE_LANGUAGES: Final[frozenset[str]] = frozenset(
-    {"Markdown", "reStructuredText", "AsciiDoc", "Text", "JSON", "YAML", "TOML", "XML",
-     "INI", "CSV", "TeX"}
+    {
+        "Markdown",
+        "reStructuredText",
+        "AsciiDoc",
+        "Text",
+        "JSON",
+        "YAML",
+        "TOML",
+        "XML",
+        "INI",
+        "CSV",
+        "TeX",
+    }
 )
 
 
@@ -245,9 +487,20 @@ _README_PATTERN: Final[re.Pattern[str]] = re.compile(r"^readme(\.[^.]+)?$", re.I
 #: lookup is case-insensitive because ``Cargo.toml`` and ``cargo.toml`` both occur.
 MANIFEST_FILENAMES: Final[frozenset[str]] = frozenset(
     {
-        "package.json", "pyproject.toml", "requirements.txt", "cargo.toml", "go.mod",
-        "pom.xml", "build.gradle", "build.gradle.kts", "cmakelists.txt",
-        "platformio.ini", "gemfile", "setup.py", "composer.json", "pubspec.yaml",
+        "package.json",
+        "pyproject.toml",
+        "requirements.txt",
+        "cargo.toml",
+        "go.mod",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "cmakelists.txt",
+        "platformio.ini",
+        "gemfile",
+        "setup.py",
+        "composer.json",
+        "pubspec.yaml",
     }
 )
 
@@ -429,9 +682,7 @@ def _compile_ignore_rule(line: str, *, base: str, source: str) -> _IgnoreRule | 
         return None
 
     negated = pattern.startswith("!")
-    if negated:
-        pattern = pattern[1:]
-    elif pattern.startswith(("\\#", "\\!")):
+    if negated or pattern.startswith(("\\#", "\\!")):
         pattern = pattern[1:]
     if not pattern:
         return None
@@ -913,7 +1164,9 @@ def _parse_pyproject(text: str, manifest: str) -> tuple[str | None, list[Depende
                         Dependency(name, _version_of(requirement, name), manifest, "dev")
                     )
 
-    poetry = payload.get("tool", {}).get("poetry", {}) if isinstance(payload.get("tool"), dict) else {}
+    poetry = (
+        payload.get("tool", {}).get("poetry", {}) if isinstance(payload.get("tool"), dict) else {}
+    )
     if isinstance(poetry, dict):
         for section, scope in (("dependencies", "runtime"), ("dev-dependencies", "dev")):
             block = poetry.get(section)
@@ -931,7 +1184,10 @@ def _parse_pyproject(text: str, manifest: str) -> tuple[str | None, list[Depende
                     )
 
     declared = project.get("name") or (poetry.get("name") if isinstance(poetry, dict) else None)
-    return (declared.strip() if isinstance(declared, str) and declared.strip() else None, dependencies)
+    return (
+        declared.strip() if isinstance(declared, str) and declared.strip() else None,
+        dependencies,
+    )
 
 
 def _parse_requirements(text: str, manifest: str) -> tuple[str | None, list[Dependency]]:
@@ -980,8 +1236,10 @@ def _parse_cargo(text: str, manifest: str) -> tuple[str | None, list[Dependency]
         if not isinstance(block, dict):
             continue
         for name, spec in block.items():
-            version = spec if isinstance(spec, str) else (
-                spec.get("version") if isinstance(spec, dict) else None
+            version = (
+                spec
+                if isinstance(spec, str)
+                else (spec.get("version") if isinstance(spec, dict) else None)
             )
             dependencies.append(
                 Dependency(str(name), str(version) if version else None, manifest, scope)
@@ -1058,9 +1316,7 @@ def _parse_pom(text: str, manifest: str) -> tuple[str | None, list[Dependency]]:
         fields = {local(child.tag): (child.text or "").strip() for child in element}
         artifact = fields.get("artifactId")
         if artifact:
-            dependencies.append(
-                Dependency(artifact, fields.get("version") or None, manifest)
-            )
+            dependencies.append(Dependency(artifact, fields.get("version") or None, manifest))
 
     declared: str | None = None
     for child in tree:
@@ -1119,8 +1375,7 @@ def _parse_cmake(text: str, manifest: str) -> tuple[str | None, list[Dependency]
         ``(project name, dependencies)``.
     """
     dependencies = [
-        Dependency(match.group("name"), None, manifest)
-        for match in _CMAKE_PACKAGE.finditer(text)
+        Dependency(match.group("name"), None, manifest) for match in _CMAKE_PACKAGE.finditer(text)
     ]
     project = _CMAKE_PROJECT.search(text)
     return (project.group("name") if project else None, dependencies)
@@ -1158,9 +1413,7 @@ def _parse_platformio(text: str, manifest: str) -> tuple[str | None, list[Depend
             for entry in re.split(r"[\n,]+", raw):
                 name = _requirement_name(entry)
                 if name:
-                    dependencies.append(
-                        Dependency(name, _version_of(entry, name), manifest, scope)
-                    )
+                    dependencies.append(Dependency(name, _version_of(entry, name), manifest, scope))
     return (None, dependencies)
 
 
@@ -1246,18 +1499,14 @@ def _parse_pubspec(text: str, manifest: str) -> tuple[str | None, list[Dependenc
             if key == "name":
                 declared = stripped.split(":", 1)[-1].strip() or None
             scope = (
-                "runtime" if key == "dependencies"
-                else "dev" if key == "dev_dependencies"
-                else None
+                "runtime" if key == "dependencies" else "dev" if key == "dev_dependencies" else None
             )
             continue
         if scope and raw_line[: len(raw_line) - len(raw_line.lstrip())].count(" ") <= 2:
             name, _, version = stripped.partition(":")
             cleaned = _requirement_name(name)
             if cleaned:
-                dependencies.append(
-                    Dependency(cleaned, version.strip() or None, manifest, scope)
-                )
+                dependencies.append(Dependency(cleaned, version.strip() or None, manifest, scope))
     return (declared, dependencies)
 
 
@@ -1388,9 +1637,7 @@ def _build_profile(root: Path, *, max_files: int, max_file_bytes: int) -> Projec
     for item in scan.files:
         language = _language_of(item)
         if language:
-            bucket = profile.languages.setdefault(
-                language, {"files": 0, "lines": 0, "bytes": 0}
-            )
+            bucket = profile.languages.setdefault(language, {"files": 0, "lines": 0, "bytes": 0})
             bucket["files"] += 1
             bucket["bytes"] += item.size
 
@@ -1474,7 +1721,7 @@ async def _run_git(root: Path, arguments: list[str]) -> str | None:
 
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=GIT_TIMEOUT_SECONDS)
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         logger.debug("project_folder.git_timeout", arguments=arguments)
         try:
             process.kill()
@@ -1709,9 +1956,7 @@ class ProjectFolderAnalyzer(Analyzer):
         readme_uri = self._document_uri(root, profile.readme[0]) if profile.readme else None
 
         self._emit_documents(result, root, profile, project_name, history)
-        aliases = await self._emit_facts(
-            result, source, profile, project_name, history, readme_uri
-        )
+        aliases = await self._emit_facts(result, source, profile, project_name, history, readme_uri)
         self._emit_project(result, root, profile, project_name, history, aliases)
         self._emit_languages(result, profile, project_name)
         self._emit_dependencies(result, profile, project_name)
@@ -1844,9 +2089,7 @@ class ProjectFolderAnalyzer(Analyzer):
 
         aliases = _retarget_project_entities(result, project_name)
         if aliases:
-            logger.debug(
-                "project_folder.project_alias", project=project_name, aliases=aliases
-            )
+            logger.debug("project_folder.project_alias", project=project_name, aliases=aliases)
         return aliases
 
     def _emit_project(
@@ -1951,11 +2194,7 @@ class ProjectFolderAnalyzer(Analyzer):
         """
         # A package that declares an extra of itself ("applicantos[sqlite]" under
         # optional-dependencies) is not a technology the user chose; it is the project.
-        own_names = {
-            name.casefold()
-            for name in (project_name, profile.declared_name)
-            if name
-        }
+        own_names = {name.casefold() for name in (project_name, profile.declared_name) if name}
         seen: set[str] = set()
         emitted = 0
         for dependency in profile.dependencies:

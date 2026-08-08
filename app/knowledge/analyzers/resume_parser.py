@@ -76,13 +76,13 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.knowledge.extractors import KnowledgeExtractor
 
 __all__ = [
-    "ContactBlock",
     "ENTRY_SECTIONS",
+    "SECTION_ALIASES",
+    "SECTION_FACT_KINDS",
+    "ContactBlock",
     "ResumeEntry",
     "ResumeParser",
     "ResumeSection",
-    "SECTION_ALIASES",
-    "SECTION_FACT_KINDS",
     "parse_contact_block",
     "parse_entries",
     "segment_sections",
@@ -100,56 +100,136 @@ logger = structlog.get_logger(__name__)
 #: ``"## technical skills"`` all resolve to ``SKILLS``.
 SECTION_ALIASES: Final[dict[str, tuple[str, ...]]] = {
     "SUMMARY": (
-        "summary", "professional summary", "executive summary", "profile",
-        "professional profile", "about", "about me", "objective", "career objective",
-        "overview", "personal statement",
+        "summary",
+        "professional summary",
+        "executive summary",
+        "profile",
+        "professional profile",
+        "about",
+        "about me",
+        "objective",
+        "career objective",
+        "overview",
+        "personal statement",
     ),
     "EXPERIENCE": (
-        "experience", "work experience", "professional experience", "employment",
-        "employment history", "work history", "relevant experience", "industry experience",
-        "internships", "internship experience", "internship", "engineering experience",
-        "research experience", "career history", "professional background", "work",
-        "relevant work experience", "technical experience",
+        "experience",
+        "work experience",
+        "professional experience",
+        "employment",
+        "employment history",
+        "work history",
+        "relevant experience",
+        "industry experience",
+        "internships",
+        "internship experience",
+        "internship",
+        "engineering experience",
+        "research experience",
+        "career history",
+        "professional background",
+        "work",
+        "relevant work experience",
+        "technical experience",
     ),
     "EDUCATION": (
-        "education", "academic background", "academics", "education and training",
-        "educational background", "degrees", "academic history",
+        "education",
+        "academic background",
+        "academics",
+        "education and training",
+        "educational background",
+        "degrees",
+        "academic history",
     ),
     "PROJECTS": (
-        "projects", "personal projects", "technical projects", "selected projects",
-        "project experience", "side projects", "engineering projects", "academic projects",
-        "notable projects", "portfolio", "featured projects", "independent projects",
+        "projects",
+        "personal projects",
+        "technical projects",
+        "selected projects",
+        "project experience",
+        "side projects",
+        "engineering projects",
+        "academic projects",
+        "notable projects",
+        "portfolio",
+        "featured projects",
+        "independent projects",
     ),
     "SKILLS": (
-        "skills", "technical skills", "core competencies", "competencies", "technologies",
-        "technical proficiencies", "proficiencies", "tools and technologies",
-        "areas of expertise", "expertise", "technical expertise", "skills and tools",
-        "tools", "technical skills and tools", "software and tools",
+        "skills",
+        "technical skills",
+        "core competencies",
+        "competencies",
+        "technologies",
+        "technical proficiencies",
+        "proficiencies",
+        "tools and technologies",
+        "areas of expertise",
+        "expertise",
+        "technical expertise",
+        "skills and tools",
+        "tools",
+        "technical skills and tools",
+        "software and tools",
     ),
     "LEADERSHIP": (
-        "leadership", "leadership experience", "leadership and activities", "activities",
-        "extracurricular activities", "extracurriculars", "involvement",
-        "campus involvement", "volunteer experience", "volunteering", "community service",
-        "service", "organizations", "clubs", "leadership and involvement",
+        "leadership",
+        "leadership experience",
+        "leadership and activities",
+        "activities",
+        "extracurricular activities",
+        "extracurriculars",
+        "involvement",
+        "campus involvement",
+        "volunteer experience",
+        "volunteering",
+        "community service",
+        "service",
+        "organizations",
+        "clubs",
+        "leadership and involvement",
         "activities and leadership",
     ),
     "AWARDS": (
-        "awards", "honors", "honors and awards", "awards and honors", "achievements",
-        "accomplishments", "recognition", "scholarships", "awards and recognition",
+        "awards",
+        "honors",
+        "honors and awards",
+        "awards and honors",
+        "achievements",
+        "accomplishments",
+        "recognition",
+        "scholarships",
+        "awards and recognition",
         "honors and recognition",
     ),
     "PUBLICATIONS": (
-        "publications", "papers", "research publications", "conference papers",
-        "presentations", "patents", "publications and presentations", "research",
+        "publications",
+        "papers",
+        "research publications",
+        "conference papers",
+        "presentations",
+        "patents",
+        "publications and presentations",
+        "research",
     ),
     "CERTIFICATIONS": (
-        "certifications", "certificates", "licenses", "licenses and certifications",
-        "certifications and licenses", "credentials", "training", "professional development",
+        "certifications",
+        "certificates",
+        "licenses",
+        "licenses and certifications",
+        "certifications and licenses",
+        "credentials",
+        "training",
+        "professional development",
     ),
     "LANGUAGES": ("languages", "language proficiency", "spoken languages", "language skills"),
     "COURSEWORK": (
-        "coursework", "relevant coursework", "relevant courses", "courses",
-        "selected coursework", "key coursework",
+        "coursework",
+        "relevant coursework",
+        "relevant courses",
+        "courses",
+        "selected coursework",
+        "key coursework",
     ),
     "INTERESTS": ("interests", "hobbies", "interests and hobbies", "personal interests"),
 }
@@ -221,9 +301,7 @@ _RESUME_FINGERPRINT_TAG: Final[str] = "analyzer.resume.v1"
 # Line-level patterns
 # ======================================================================================
 
-_EMAIL: Final[re.Pattern[str]] = re.compile(
-    r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
-)
+_EMAIL: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 #: US and international phone shapes, with optional country code and extension.
 _PHONE: Final[re.Pattern[str]] = re.compile(
@@ -287,34 +365,107 @@ _BULLET_LINE: Final[re.Pattern[str]] = re.compile(
 )
 
 #: Column separators inside an entry header.
-_HEADER_SPLIT: Final[re.Pattern[str]] = re.compile(
-    r"\s*[|•·‖]\s*|\t+|\s{2,}|\s+[–—]+\s+|\s+-\s+"
-)
+_HEADER_SPLIT: Final[re.Pattern[str]] = re.compile(r"\s*[|•·‖]\s*|\t+|\s{2,}|\s+[–—]+\s+|\s+-\s+")
 
 #: Words that identify a piece of a header line as a job title.
 _ROLE_KEYWORDS: Final[tuple[str, ...]] = (
-    "engineer", "engineering", "developer", "programmer", "scientist", "analyst",
-    "intern", "internship", "co-op", "coop", "manager", "director", "lead", "leader",
-    "president", "vice president", "treasurer", "secretary", "captain", "chair",
-    "founder", "co-founder", "consultant", "designer", "architect", "researcher",
-    "research assistant", "teaching assistant", "assistant", "associate", "specialist",
-    "technician", "administrator", "coordinator", "supervisor", "instructor", "tutor",
-    "mentor", "volunteer", "apprentice", "fellow", "officer", "member", "ambassador",
-    "operator", "machinist", "trainee", "contractor", "freelance", "head",
+    "engineer",
+    "engineering",
+    "developer",
+    "programmer",
+    "scientist",
+    "analyst",
+    "intern",
+    "internship",
+    "co-op",
+    "coop",
+    "manager",
+    "director",
+    "lead",
+    "leader",
+    "president",
+    "vice president",
+    "treasurer",
+    "secretary",
+    "captain",
+    "chair",
+    "founder",
+    "co-founder",
+    "consultant",
+    "designer",
+    "architect",
+    "researcher",
+    "research assistant",
+    "teaching assistant",
+    "assistant",
+    "associate",
+    "specialist",
+    "technician",
+    "administrator",
+    "coordinator",
+    "supervisor",
+    "instructor",
+    "tutor",
+    "mentor",
+    "volunteer",
+    "apprentice",
+    "fellow",
+    "officer",
+    "member",
+    "ambassador",
+    "operator",
+    "machinist",
+    "trainee",
+    "contractor",
+    "freelance",
+    "head",
 )
 
 #: Words that identify a piece of a header line as a school.
 _SCHOOL_KEYWORDS: Final[tuple[str, ...]] = (
-    "university", "college", "institute", "school", "academy", "polytechnic",
-    "conservatory", "seminary", "universität", "universite", "universidad",
+    "university",
+    "college",
+    "institute",
+    "school",
+    "academy",
+    "polytechnic",
+    "conservatory",
+    "seminary",
+    "universität",
+    "universite",
+    "universidad",
 )
 
 #: Words that identify a piece of a header line as a degree.
 _DEGREE_KEYWORDS: Final[tuple[str, ...]] = (
-    "bachelor", "master", "doctor", "doctorate", "associate", "diploma", "certificate",
-    "b.s", "bs.", "b.sc", "bsc", "b.a", "ba.", "m.s", "ms.", "m.sc", "msc", "m.eng",
-    "meng", "b.eng", "beng", "mba", "ph.d", "phd", "high school diploma", "minor in",
-    "major in", "candidate",
+    "bachelor",
+    "master",
+    "doctor",
+    "doctorate",
+    "associate",
+    "diploma",
+    "certificate",
+    "b.s",
+    "bs.",
+    "b.sc",
+    "bsc",
+    "b.a",
+    "ba.",
+    "m.s",
+    "ms.",
+    "m.sc",
+    "msc",
+    "m.eng",
+    "meng",
+    "b.eng",
+    "beng",
+    "mba",
+    "ph.d",
+    "phd",
+    "high school diploma",
+    "minor in",
+    "major in",
+    "candidate",
 )
 
 #: Splits a comma/slash-separated list into items ("C, C++, Python" / "English / Spanish").
@@ -822,7 +973,9 @@ def _peel_location(piece: str) -> tuple[str, str | None]:
     return (piece[: match.start()].strip(), match.group("location").strip())
 
 
-def _classify_pieces(pieces: list[str], *, education: bool) -> tuple[str | None, str | None, str | None]:
+def _classify_pieces(
+    pieces: list[str], *, education: bool
+) -> tuple[str | None, str | None, str | None]:
     """Assign the non-date pieces of a header line to organization, role and location.
 
     Supports the layouts resumes actually use::
@@ -853,9 +1006,7 @@ def _classify_pieces(pieces: list[str], *, education: bool) -> tuple[str | None,
         piece = piece.strip(_NAME_TRIM)
         if not piece:
             continue
-        if location is None and (
-            piece.casefold() in _ARRANGEMENT_WORDS or _LOCATION.match(piece)
-        ):
+        if location is None and (piece.casefold() in _ARRANGEMENT_WORDS or _LOCATION.match(piece)):
             location = piece
             continue
         remaining.append(piece)
@@ -874,11 +1025,7 @@ def _classify_pieces(pieces: list[str], *, education: bool) -> tuple[str | None,
             if organization is None:
                 organization = _clean_name(piece)
 
-    leftovers = [
-        piece
-        for piece in remaining
-        if _clean_name(piece) not in (organization, role)
-    ]
+    leftovers = [piece for piece in remaining if _clean_name(piece) not in (organization, role)]
     if organization is None and leftovers:
         organization = _clean_name(leftovers[0])
         leftovers = leftovers[1:]
@@ -1083,9 +1230,7 @@ class ResumeParser(Analyzer):
             result.fingerprint = probe or compute_fingerprint(
                 _RESUME_FINGERPRINT_TAG, canonical_uri, "empty"
             )
-            logger.warning(
-                "resume.no_text", uri=canonical_uri, errors=len(result.errors)
-            )
+            logger.warning("resume.no_text", uri=canonical_uri, errors=len(result.errors))
             return result
 
         header_lines, sections = segment_sections(extraction.text)
@@ -1354,9 +1499,7 @@ class ResumeParser(Analyzer):
                 )
             return
 
-        relation = (
-            RelationKind.LED if section.name == "LEADERSHIP" else RelationKind.WORKED_AT
-        )
+        relation = RelationKind.LED if section.name == "LEADERSHIP" else RelationKind.WORKED_AT
         if entry.role:
             result.edges.append(
                 ExtractedEdge(
@@ -1406,7 +1549,9 @@ class ResumeParser(Analyzer):
 
         items: list[str] = []
         for line in section.lines:
-            text = _strip_bullet(line) if _is_bullet(line) else _WHITESPACE_RUN.sub(" ", line).strip()
+            text = (
+                _strip_bullet(line) if _is_bullet(line) else _WHITESPACE_RUN.sub(" ", line).strip()
+            )
             if not text:
                 continue
             if section.name == "COURSEWORK":
@@ -1449,9 +1594,7 @@ class ResumeParser(Analyzer):
                 )
             )
 
-    def _emit_skills(
-        self, result: AnalysisResult, section: ResumeSection, source_uri: str
-    ) -> None:
+    def _emit_skills(self, result: AnalysisResult, section: ResumeSection, source_uri: str) -> None:
         """Emit skill entities and one ``skill_usage`` fact per skills line.
 
         The line is kept whole ("Languages: C, C++, Python, MATLAB") because the grouping is
@@ -1464,7 +1607,9 @@ class ResumeParser(Analyzer):
             source_uri: Provenance uri for every fact produced.
         """
         for line in section.lines:
-            text = _strip_bullet(line) if _is_bullet(line) else _WHITESPACE_RUN.sub(" ", line).strip()
+            text = (
+                _strip_bullet(line) if _is_bullet(line) else _WHITESPACE_RUN.sub(" ", line).strip()
+            )
             if not text:
                 continue
 

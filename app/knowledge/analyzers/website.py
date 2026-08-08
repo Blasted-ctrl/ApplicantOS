@@ -424,7 +424,7 @@ class WebsiteAnalyzer(Analyzer):
             from app.cache import get_cache
 
             self._cache = get_cache()
-        except Exception as exc:  # noqa: BLE001 - an absent cache is a slowdown, not a fault
+        except Exception as exc:
             logger.info("website.cache_unavailable", error=str(exc))
             self._cache = None
         return self._cache
@@ -500,9 +500,7 @@ class WebsiteAnalyzer(Analyzer):
             raw = f"https://{raw}"
         url = normalize_url(raw)
         if not is_http_url(url):
-            raise AnalyzerError(
-                f"{source.uri!r} is not an http(s) address", source=source
-            )
+            raise AnalyzerError(f"{source.uri!r} is not an http(s) address", source=source)
         return url
 
     def _budget(self, source: SourceRef) -> _Budget:
@@ -522,9 +520,12 @@ class WebsiteAnalyzer(Analyzer):
             else int(getattr(self.settings, "website_crawl_max_depth", 3))
         )
         return _Budget(
-            pages=max(1, self._option_int(source, "max_pages", int(
-                getattr(self.settings, "website_crawl_max_pages", 40)
-            ))),
+            pages=max(
+                1,
+                self._option_int(
+                    source, "max_pages", int(getattr(self.settings, "website_crawl_max_pages", 40))
+                ),
+            ),
             depth=max(0, self._option_int(source, "max_depth", default_depth, allow_zero=True)),
         )
 
@@ -566,7 +567,7 @@ class WebsiteAnalyzer(Analyzer):
             return None
         try:
             entry = await cache.get(key)
-        except Exception as exc:  # noqa: BLE001 - a failing cache degrades to a miss
+        except Exception as exc:
             logger.debug("website.cache_read_failed", error=str(exc))
             return None
         return entry if isinstance(entry, dict) else None
@@ -584,7 +585,7 @@ class WebsiteAnalyzer(Analyzer):
             return
         try:
             await cache.set(key, envelope, ttl=ttl)
-        except Exception as exc:  # noqa: BLE001 - failing to cache is never fatal
+        except Exception as exc:
             logger.debug("website.cache_write_failed", error=str(exc))
 
     # -- robots.txt ---------------------------------------------------------------------------------
@@ -620,7 +621,9 @@ class WebsiteAnalyzer(Analyzer):
             response = await client.get(url, headers={"Accept": "text/plain,*/*;q=0.1"})
         except httpx.HTTPError as exc:
             logger.info("website.robots_unreachable", url=url, error=str(exc))
-            result.record_error(f"robots.txt at {url} could not be fetched ({exc}); assuming no rules.")
+            result.record_error(
+                f"robots.txt at {url} could not be fetched ({exc}); assuming no rules."
+            )
             parser.parse([])
             return parser
 
@@ -645,7 +648,9 @@ class WebsiteAnalyzer(Analyzer):
             return
         parser.parse(text.splitlines() if status < 400 else [])
 
-    def _crawl_delay(self, parser: RobotFileParser, source: SourceRef, result: AnalysisResult) -> float:
+    def _crawl_delay(
+        self, parser: RobotFileParser, source: SourceRef, result: AnalysisResult
+    ) -> float:
         """Return the pacing interval to use, honouring the site's ``Crawl-delay``.
 
         Args:
@@ -664,7 +669,7 @@ class WebsiteAnalyzer(Analyzer):
 
         try:
             requested = parser.crawl_delay(HTTP_USER_AGENT)
-        except Exception as exc:  # noqa: BLE001 - a malformed directive is not our problem
+        except Exception as exc:
             logger.debug("website.crawl_delay_unreadable", error=str(exc))
             requested = None
         if requested is None:
@@ -978,8 +983,16 @@ class WebsiteAnalyzer(Analyzer):
         visited: set[str] = {root, root_page.url}
         queue: deque[tuple[str, int]] = deque()
 
-        await self._absorb(root_page, depth=0, source=source, result=result, budget=budget,
-                           origin=origin, visited=visited, queue=queue)
+        await self._absorb(
+            root_page,
+            depth=0,
+            source=source,
+            result=result,
+            budget=budget,
+            origin=origin,
+            visited=visited,
+            queue=queue,
+        )
 
         while queue and not budget.exhausted:
             url, depth = queue.popleft()
@@ -995,8 +1008,16 @@ class WebsiteAnalyzer(Analyzer):
             if page.url in visited and page.url != url:
                 continue
             visited.add(page.url)
-            await self._absorb(page, depth=depth, source=source, result=result, budget=budget,
-                               origin=origin, visited=visited, queue=queue)
+            await self._absorb(
+                page,
+                depth=depth,
+                source=source,
+                result=result,
+                budget=budget,
+                origin=origin,
+                visited=visited,
+                queue=queue,
+            )
 
         if budget.remaining_bytes <= 0:
             result.record_error(

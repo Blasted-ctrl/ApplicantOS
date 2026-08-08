@@ -33,7 +33,7 @@ closed. Not "logs a warning and continues" — it never touches the DOM:
 ```python
 if dry_run or not settings.auto_apply_enabled:
     logger.info("autofill.submit_blocked", ...)
-    return False          # nothing below this line runs
+    return False  # nothing below this line runs
 ```
 
 `AutoFiller` exposes `submit_attempted` / `submit_clicked` hooks specifically so this can be

@@ -40,7 +40,7 @@ fact extractor actually runs, rather than documentation of prompts it ignores.
 from __future__ import annotations
 
 import re
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 from string import Template
 from typing import Any, Final
@@ -163,7 +163,7 @@ def prompt_path(name: str) -> Path:
     return PROMPT_DIR / f"{_validate_name(name)}{PROMPT_SUFFIX}"
 
 
-@lru_cache(maxsize=None)
+@cache
 def prompt_text(name: str) -> str:
     """Return the raw text of the prompt called *name*.
 
@@ -212,7 +212,7 @@ def load_prompt(name: str, **variables: Any) -> str:
     return rendered
 
 
-@lru_cache(maxsize=None)
+@cache
 def prompt_variables(name: str) -> tuple[str, ...]:
     """Return the placeholder names the prompt called *name* declares.
 
@@ -251,9 +251,7 @@ def missing_variables(name: str, variables: dict[str, Any]) -> tuple[str, ...]:
         PromptError: If the name is not a legal prompt name.
         PromptNotFound: If no such file exists.
     """
-    return tuple(
-        variable for variable in prompt_variables(name) if variable not in variables
-    )
+    return tuple(variable for variable in prompt_variables(name) if variable not in variables)
 
 
 def _escape_braces(text: str) -> str:
@@ -268,7 +266,7 @@ def _escape_braces(text: str) -> str:
     return text.replace("{", "{{").replace("}", "}}")
 
 
-@lru_cache(maxsize=None)
+@cache
 def as_format_template(name: str) -> str:
     """Return the prompt called *name* rewritten for :meth:`str.format`.
 
@@ -360,9 +358,7 @@ def __getattr__(name: str) -> str:
         return as_format_template(prompt)
     except (PromptError, OSError) as exc:
         logger.warning("prompts.alias_unavailable", alias=name, prompt=prompt, error=str(exc))
-        raise AttributeError(
-            f"module {__name__!r} cannot provide {name!r}: {exc}"
-        ) from exc
+        raise AttributeError(f"module {__name__!r} cannot provide {name!r}: {exc}") from exc
 
 
 def __dir__() -> list[str]:

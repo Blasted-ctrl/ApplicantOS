@@ -154,7 +154,7 @@ async def _probe_redis(redis_url: str, *, required: bool) -> DependencyStatus:
             socket_connect_timeout=REDIS_PROBE_TIMEOUT_SECONDS,
         )
         await client.ping()
-    except Exception as exc:  # noqa: BLE001 - a probe reports, it does not propagate
+    except Exception as exc:
         logger.warning("health.redis_unreachable", error_type=type(exc).__name__)
         return DependencyStatus(
             ok=False,
@@ -167,7 +167,7 @@ async def _probe_redis(redis_url: str, *, required: bool) -> DependencyStatus:
         if client is not None:
             try:
                 await client.aclose()
-            except Exception as exc:  # noqa: BLE001 - closing a probe client is best effort
+            except Exception as exc:
                 logger.debug("health.redis_close_failed", error=str(exc))
 
 

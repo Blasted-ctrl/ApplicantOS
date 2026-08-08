@@ -181,7 +181,7 @@ _CHARACTER_TRANSLATIONS: Final[dict[int, str | None]] = {
     **{point: "-" for point in _BULLET_CODE_POINTS},
     _ELLIPSIS_CODE_POINT: "...",
     _FRACTION_SLASH_CODE_POINT: "/",
-    0x0009: " ",   # TAB
+    0x0009: " ",  # TAB
     0x000B: "\n",  # LINE TABULATION
     0x000C: "\n",  # FORM FEED
     0x000D: "\n",  # CARRIAGE RETURN
@@ -467,7 +467,7 @@ def _html_to_text_selectolax(html: str) -> str | None:
         implementation.
     """
     try:
-        from selectolax.parser import HTMLParser  # noqa: PLC0415 - lazy by policy
+        from selectolax.parser import HTMLParser
     except ImportError:
         return None
 
@@ -487,7 +487,7 @@ def _html_to_text_selectolax(html: str) -> str | None:
             elif tag in _BLOCK_TAGS:
                 parts.append("\n")
         return "".join(parts)
-    except Exception as exc:  # noqa: BLE001 - a parser crash must degrade, never propagate
+    except Exception as exc:
         logger.warning("parsing.selectolax_failed", error=str(exc))
         return None
 
@@ -531,7 +531,7 @@ def html_to_text(html: Any) -> str:
         try:
             extractor.feed(source)
             extractor.close()
-        except Exception as exc:  # noqa: BLE001 - malformed markup must not lose the text
+        except Exception as exc:
             logger.warning("parsing.html_parse_failed", error=str(exc))
         extracted = extractor.result()
     return _tidy_block_text(extracted)
@@ -699,9 +699,7 @@ _HINT_WINDOW: Final[int] = 24
 _GROUPED_THOUSANDS_RE: Final[re.Pattern[str]] = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
 
 #: Grouped thousands followed by a decimal fraction, e.g. ``1.234.567,89``.
-_GROUPED_WITH_DECIMALS_RE: Final[re.Pattern[str]] = re.compile(
-    r"\d{1,3}(?:[.,]\d{3})+[.,]\d{1,2}"
-)
+_GROUPED_WITH_DECIMALS_RE: Final[re.Pattern[str]] = re.compile(r"\d{1,3}(?:[.,]\d{3})+[.,]\d{1,2}")
 
 #: A plain decimal with one or two fractional digits, e.g. ``60.50``.
 _SIMPLE_DECIMAL_RE: Final[re.Pattern[str]] = re.compile(r"\d+[.,]\d{1,2}")
@@ -991,9 +989,7 @@ def infer_arrangement(text: Any) -> WorkArrangement:
     for mention in remote_mentions:
         before = cleaned[max(0, mention.start() - 60) : mention.start()]
         after = cleaned[mention.end() : mention.end() + 60]
-        negated = bool(_NEGATION_BEFORE_RE.search(before)) or bool(
-            _NEGATION_AFTER_RE.search(after)
-        )
+        negated = bool(_NEGATION_BEFORE_RE.search(before)) or bool(_NEGATION_AFTER_RE.search(after))
         if not negated:
             affirmed_remote = True
             break
@@ -1169,8 +1165,8 @@ def _as_utc(value: dt.datetime) -> dt.datetime | None:
     Returns:
         The instant in UTC, or ``None`` when its year is implausible.
     """
-    aware = value.replace(tzinfo=dt.timezone.utc) if value.tzinfo is None else value
-    utc = aware.astimezone(dt.timezone.utc)
+    aware = value.replace(tzinfo=dt.UTC) if value.tzinfo is None else value
+    utc = aware.astimezone(dt.UTC)
     if not _MIN_PLAUSIBLE_YEAR <= utc.year <= _MAX_PLAUSIBLE_YEAR:
         return None
     return utc
@@ -1193,7 +1189,7 @@ def _from_epoch(number: float) -> dt.datetime | None:
     else:
         seconds = float(number)
     try:
-        return _as_utc(dt.datetime.fromtimestamp(seconds, tz=dt.timezone.utc))
+        return _as_utc(dt.datetime.fromtimestamp(seconds, tz=dt.UTC))
     except (OSError, OverflowError, ValueError):
         return None
 

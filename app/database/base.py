@@ -32,9 +32,9 @@ from sqlalchemy import MetaData, inspect
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase
 
-from app.database.types import EmbeddingType, GUID, JSONType, UTCDateTime
+from app.database.types import GUID, EmbeddingType, JSONType, UTCDateTime
 
-__all__ = ["Base", "NAMING_CONVENTION"]
+__all__ = ["NAMING_CONVENTION", "Base"]
 
 
 #: Deterministic constraint naming for every backend, so Alembic can always address a

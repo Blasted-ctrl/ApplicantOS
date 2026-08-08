@@ -49,13 +49,13 @@ from app.schemas.knowledge import SourceCreate
 from app.schemas.user import PreferencesUpdate
 
 __all__ = [
+    "ONBOARDING_PAYLOAD_MODELS",
+    "ONBOARDING_STEP_KEYS",
     "ContactPayload",
     "DemographicsPayload",
     "IdentityPayload",
     "LinksPayload",
     "MasterResumePayload",
-    "ONBOARDING_PAYLOAD_MODELS",
-    "ONBOARDING_STEP_KEYS",
     "OnboardingField",
     "OnboardingStatus",
     "OnboardingStep",

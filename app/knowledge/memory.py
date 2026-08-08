@@ -440,9 +440,7 @@ class MemoryStore(KnowledgeStore):
 
         existing = await self._find_identical(user_id, kind, cleaned)
         if existing is not None:
-            existing.weight = _clamp_weight(
-                float(existing.weight or 0.0) + REPEAT_REINFORCEMENT
-            )
+            existing.weight = _clamp_weight(float(existing.weight or 0.0) + REPEAT_REINFORCEMENT)
             merged = dict(context or {})
             merged.update(existing.context or {})
             existing.context = merged
@@ -626,9 +624,7 @@ class MemoryStore(KnowledgeStore):
         )
         return results
 
-    async def _by_ids(
-        self, user_id: uuid.UUID, ids: Sequence[uuid.UUID]
-    ) -> list[MemoryEntry]:
+    async def _by_ids(self, user_id: uuid.UUID, ids: Sequence[uuid.UUID]) -> list[MemoryEntry]:
         """Load the user's memories by id.
 
         Args:
@@ -677,9 +673,7 @@ class MemoryStore(KnowledgeStore):
             .limit(max(1, limit))
         )
         rows = (await self.session.execute(statement)).scalars().all()
-        words = {
-            token for token in normalize_for_matching(query or "").split() if len(token) > 2
-        }
+        words = {token for token in normalize_for_matching(query or "").split() if len(token) > 2}
         candidates: list[tuple[MemoryEntry, float]] = []
         for row in rows:
             if row.is_expired(now):
@@ -847,9 +841,7 @@ class MemoryStore(KnowledgeStore):
         total = int(
             (
                 await self.session.execute(
-                    select(func.count(MemoryEntry.id)).where(
-                        MemoryEntry.user_id == user_id
-                    )
+                    select(func.count(MemoryEntry.id)).where(MemoryEntry.user_id == user_id)
                 )
             ).scalar_one()
             or 0

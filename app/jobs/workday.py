@@ -62,7 +62,7 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, Final
 from urllib.parse import unquote, urlsplit
 
@@ -97,14 +97,14 @@ from app.plugins.base import PluginMeta
 from app.plugins.registry import plugin
 
 __all__ = [
-    "BoardToken",
     "CXS_PAGE_SIZE",
-    "CareerSite",
     "EXTERNAL_ID_SEPARATOR",
     "FALLBACK_SITE_NAMES",
-    "JobRef",
     "SHARD_CANDIDATES",
     "WORKDAY_HOSTS",
+    "BoardToken",
+    "CareerSite",
+    "JobRef",
     "WorkdayProvider",
     "normalize_external_path",
     "parse_board_token",
@@ -326,9 +326,9 @@ def resolve_posted_on(value: Any, *, now: datetime | None = None) -> datetime | 
     if not text:
         return None
 
-    reference = now or datetime.now(timezone.utc)
+    reference = now or datetime.now(UTC)
     if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=timezone.utc)
+        reference = reference.replace(tzinfo=UTC)
 
     match = _RELATIVE_AGE_RE.search(text)
     if match:
@@ -441,7 +441,9 @@ class JobRef:
     @property
     def detail_url(self) -> str:
         """The CXS endpoint returning the full posting."""
-        return f"https://{self.site.host}/wday/cxs/{self.site.tenant}/{self.site.site}/job/{self.path}"
+        return (
+            f"https://{self.site.host}/wday/cxs/{self.site.tenant}/{self.site.site}/job/{self.path}"
+        )
 
     @property
     def public_url(self) -> str:
@@ -608,9 +610,7 @@ def parse_board_token(token: str) -> BoardToken | None:
         parsed = split_workday_url(text)
         if parsed is not None:
             site, _path = parsed
-            return BoardToken(
-                tenant=site.tenant, shard=site.shard, site=site.site, host=site.host
-            )
+            return BoardToken(tenant=site.tenant, shard=site.shard, site=site.site, host=site.host)
         host = text.split("://")[-1].split("/", 1)[0].rpartition("@")[2].split(":", 1)[0].lower()
         sharded = _SHARDED_HOST_RE.match(host)
         if sharded:
@@ -698,9 +698,7 @@ def _career_site_candidates(final_url: str, body: str, tenant: str) -> list[str]
     if redirected is not None:
         offer(redirected[0].site)
 
-    cxs_pattern = re.compile(
-        _CXS_PATH_RE_TEMPLATE.format(tenant=re.escape(tenant)), re.IGNORECASE
-    )
+    cxs_pattern = re.compile(_CXS_PATH_RE_TEMPLATE.format(tenant=re.escape(tenant)), re.IGNORECASE)
     for pattern in (cxs_pattern, _CAREER_SITE_KEY_RE, _LOCALISED_LINK_RE):
         for found in pattern.finditer(body):
             offer(found.group(1))
@@ -887,9 +885,7 @@ class WorkdayProvider(ATSProvider):
                 postings = document.get("jobPostings")
                 return (postings if isinstance(postings, list) else []), None
 
-            async for stub in self.paginate(
-                fetch, limit=stub_limit, page_size=CXS_PAGE_SIZE
-            ):
+            async for stub in self.paginate(fetch, limit=stub_limit, page_size=CXS_PAGE_SIZE):
                 if not isinstance(stub, Mapping):
                     continue
                 path = normalize_external_path(stub.get("externalPath"))
@@ -964,9 +960,7 @@ class WorkdayProvider(ATSProvider):
             self.logger.debug("workday.posting_gone", url=ref.public_url)
             return None
         except ProviderError as exc:
-            self.logger.warning(
-                "workday.detail_failed", url=ref.detail_url, error=str(exc)
-            )
+            self.logger.warning("workday.detail_failed", url=ref.detail_url, error=str(exc))
             return None
         try:
             return self._decode(response, ref.detail_url)
@@ -1033,8 +1027,10 @@ class WorkdayProvider(ATSProvider):
 
         salary_min, salary_max, currency = parse_salary(description or "")
 
-        resolved_posted = posted_at or resolve_posted_on(info.get("postedOn")) or parse_date(
-            info.get("startDate")
+        resolved_posted = (
+            posted_at
+            or resolve_posted_on(info.get("postedOn"))
+            or parse_date(info.get("startDate"))
         )
 
         company = (
@@ -1171,9 +1167,7 @@ class WorkdayProvider(ATSProvider):
                 ref, stub, detail, SearchQuery(), posted_at=resolve_posted_on(stub.get("postedOn"))
             )
 
-        self.logger.debug(
-            "workday.requisition_not_found", tenant=tenant, requisition=requisition
-        )
+        self.logger.debug("workday.requisition_not_found", tenant=tenant, requisition=requisition)
         return None
 
     # -- career-site resolution ---------------------------------------------------------
@@ -1419,10 +1413,14 @@ class WorkdayProvider(ATSProvider):
             The stored value, or ``None`` on a miss or a backend failure.
         """
         try:
-            from app.cache import NAMESPACES, get_cache, make_key  # noqa: PLC0415 - lazy
+            from app.cache import (
+                NAMESPACES,
+                get_cache,
+                make_key,
+            )
 
             return await get_cache().get(make_key(NAMESPACES.POSTING, "workday", "site", key))
-        except Exception as exc:  # noqa: BLE001 - the cache is an optimisation, never a gate
+        except Exception as exc:
             self.logger.debug("workday.site_cache_unavailable", error=str(exc))
             return None
 
@@ -1435,12 +1433,16 @@ class WorkdayProvider(ATSProvider):
             ttl: Lifetime in seconds.
         """
         try:
-            from app.cache import NAMESPACES, get_cache, make_key  # noqa: PLC0415 - lazy
+            from app.cache import (
+                NAMESPACES,
+                get_cache,
+                make_key,
+            )
 
             await get_cache().set(
                 make_key(NAMESPACES.POSTING, "workday", "site", key), value, ttl=ttl
             )
-        except Exception as exc:  # noqa: BLE001 - the cache is an optimisation, never a gate
+        except Exception as exc:
             self.logger.debug("workday.site_cache_write_failed", error=str(exc))
 
     # -- transport helper ---------------------------------------------------------------

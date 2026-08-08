@@ -234,13 +234,11 @@ class OpenAIModel(GuardedModelPlugin):
         """
         client = self._client()
         field = (
-            MAX_COMPLETION_TOKENS_FIELD
-            if self._uses_max_completion_tokens
-            else MAX_TOKENS_FIELD
+            MAX_COMPLETION_TOKENS_FIELD if self._uses_max_completion_tokens else MAX_TOKENS_FIELD
         )
         try:
             return await client.chat.completions.create(**request, **{field: max_tokens})
-        except Exception as exc:  # noqa: BLE001 - inspected, then re-raised or retried
+        except Exception as exc:
             if field == MAX_COMPLETION_TOKENS_FIELD or not self._rejects_max_tokens(exc):
                 raise
             self._uses_max_completion_tokens = True
@@ -279,7 +277,9 @@ class OpenAIModel(GuardedModelPlugin):
         """
         if JSON_MODE_KEYWORD in f"{system}\n{prompt}".lower():
             return system
-        return f"{system.rstrip()}\n\n{JSON_MODE_REMINDER}" if system.strip() else JSON_MODE_REMINDER
+        return (
+            f"{system.rstrip()}\n\n{JSON_MODE_REMINDER}" if system.strip() else JSON_MODE_REMINDER
+        )
 
     @staticmethod
     def _extract_text(response: Any) -> str:

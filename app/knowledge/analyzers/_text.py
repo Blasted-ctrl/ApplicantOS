@@ -230,23 +230,99 @@ WWW_PREFIX: Final[str] = "www."
 ASSET_EXTENSIONS: Final[frozenset[str]] = frozenset(
     {
         # images
-        "apng", "avif", "bmp", "gif", "heic", "ico", "jpeg", "jpg", "png", "svg", "tif",
-        "tiff", "webp",
+        "apng",
+        "avif",
+        "bmp",
+        "gif",
+        "heic",
+        "ico",
+        "jpeg",
+        "jpg",
+        "png",
+        "svg",
+        "tif",
+        "tiff",
+        "webp",
         # fonts
-        "eot", "otf", "ttf", "woff", "woff2",
+        "eot",
+        "otf",
+        "ttf",
+        "woff",
+        "woff2",
         # media
-        "aac", "avi", "flac", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg", "mpg",
-        "oga", "ogg", "ogv", "opus", "wav", "webm", "wmv",
+        "aac",
+        "avi",
+        "flac",
+        "m4a",
+        "m4v",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "mpeg",
+        "mpg",
+        "oga",
+        "ogg",
+        "ogv",
+        "opus",
+        "wav",
+        "webm",
+        "wmv",
         # archives and binaries
-        "7z", "bin", "bz2", "deb", "dmg", "exe", "gz", "iso", "jar", "msi", "rar", "rpm",
-        "tar", "tgz", "whl", "xz", "zip", "zst",
+        "7z",
+        "bin",
+        "bz2",
+        "deb",
+        "dmg",
+        "exe",
+        "gz",
+        "iso",
+        "jar",
+        "msi",
+        "rar",
+        "rpm",
+        "tar",
+        "tgz",
+        "whl",
+        "xz",
+        "zip",
+        "zst",
         # documents and data dumps
-        "csv", "doc", "docx", "epub", "key", "numbers", "odp", "ods", "odt", "pages",
-        "pdf", "ppt", "pptx", "ps", "rtf", "tsv", "xls", "xlsx",
+        "csv",
+        "doc",
+        "docx",
+        "epub",
+        "key",
+        "numbers",
+        "odp",
+        "ods",
+        "odt",
+        "pages",
+        "pdf",
+        "ppt",
+        "pptx",
+        "ps",
+        "rtf",
+        "tsv",
+        "xls",
+        "xlsx",
         # code and stylesheets served as files
-        "css", "js", "mjs", "map", "wasm",
+        "css",
+        "js",
+        "mjs",
+        "map",
+        "wasm",
         # engineering artefacts a maker's site links to
-        "3mf", "dxf", "f3d", "gcode", "hex", "kicad_pcb", "sch", "step", "stl", "stp",
+        "3mf",
+        "dxf",
+        "f3d",
+        "gcode",
+        "hex",
+        "kicad_pcb",
+        "sch",
+        "step",
+        "stl",
+        "stp",
     }
 )
 
@@ -517,7 +593,7 @@ def _build_with_selectolax(html: str) -> _Element | None:
         from selectolax.parser import HTMLParser as SelectolaxParser
     except ImportError:
         return None
-    except Exception as exc:  # noqa: BLE001 - a broken optional accelerator never wins
+    except Exception as exc:
         logger.debug("html.selectolax_unavailable", error=str(exc))
         return None
 
@@ -528,7 +604,7 @@ def _build_with_selectolax(html: str) -> _Element | None:
             return None
         root = _Element(tag=ROOT_TAG)
         root.children.append(_convert_selectolax(root_node, 1))
-    except Exception as exc:  # noqa: BLE001 - fall back rather than fail the page
+    except Exception as exc:
         logger.debug("html.selectolax_parse_failed", error=str(exc))
         return None
     return root
@@ -952,9 +1028,7 @@ def html_to_text(html: str, *, base_url: str | None = None) -> tuple[str, dict[s
     if not title:
         title = _first_value(meta_index, ("og:title", "twitter:title"))
 
-    description = _first_value(
-        meta_index, ("description", "og:description", "twitter:description")
-    )
+    description = _first_value(meta_index, ("description", "og:description", "twitter:description"))
     metadata["description"] = description or None
 
     containers, scope = _select_scope(root, elements)
@@ -963,8 +1037,7 @@ def html_to_text(html: str, *, base_url: str | None = None) -> tuple[str, dict[s
     headings: list[dict[str, Any]] = []
     text = _finalize(
         _BLOCK_BREAK.join(
-            _render(container, preformatted=False, headings=headings)
-            for container in containers
+            _render(container, preformatted=False, headings=headings) for container in containers
         )
     )
     metadata["headings"] = headings
@@ -1139,8 +1212,7 @@ def _origin(url: str) -> tuple[str, str, int | None] | None:
         return None
     if not host:
         return None
-    if host.startswith(WWW_PREFIX):
-        host = host[len(WWW_PREFIX) :]
+    host = host.removeprefix(WWW_PREFIX)
     scheme = parts.scheme.lower()
     return (scheme, host, port if port is not None else DEFAULT_PORTS.get(scheme))
 

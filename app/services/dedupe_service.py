@@ -48,7 +48,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import structlog
@@ -80,10 +80,10 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 
 __all__ = [
     "COMPANY_HINT_FIELDS",
-    "DedupeService",
     "FUZZY_CANDIDATE_LIMIT",
     "FUZZY_WINDOW_DAYS",
     "MUTABLE_POSTING_FIELDS",
+    "DedupeService",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -232,7 +232,7 @@ def _truncate(value: str, limit: int, *, field: str) -> str:
 
 def _utcnow() -> datetime:
     """Return the current instant as timezone-aware UTC."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _as_aware(moment: datetime | None) -> datetime | None:
@@ -250,8 +250,8 @@ def _as_aware(moment: datetime | None) -> datetime | None:
     if moment is None:
         return None
     if moment.tzinfo is None:
-        return moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc)
+        return moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
 
 
 # ======================================================================================

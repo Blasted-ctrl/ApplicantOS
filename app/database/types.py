@@ -33,24 +33,25 @@ take over. Importing this module must work with nothing installed beyond SQLAlch
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any, Final
 
-from sqlalchemy import CHAR, DateTime, JSON, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PostgresUUID
+from sqlalchemy import CHAR, JSON, DateTime, Text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.types import TypeDecorator, TypeEngine
 
 from app.config.logging import get_logger
 
 __all__ = [
-    "EmbeddingType",
     "GUID",
-    "JSONType",
     "POSTGRES_DIALECT_NAMES",
-    "UTCDateTime",
     "UUID_STRING_LENGTH",
+    "EmbeddingType",
+    "JSONType",
+    "UTCDateTime",
     "needs_vector_extension",
     "utcnow",
 ]
@@ -78,7 +79,7 @@ def utcnow() -> datetime:
     Returns:
         The current instant, with ``tzinfo`` set to UTC.
     """
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _is_postgres(dialect: Dialect) -> bool:
@@ -365,8 +366,8 @@ class UTCDateTime(TypeDecorator[datetime]):
         if not isinstance(value, datetime):
             raise TypeError(f"UTCDateTime requires a datetime, got {type(value).__name__!r}")
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     def process_result_value(self, value: Any, dialect: Dialect) -> datetime | None:
         """Guarantee the value read back is an aware UTC datetime.
@@ -383,5 +384,5 @@ class UTCDateTime(TypeDecorator[datetime]):
         if not isinstance(value, datetime):
             return value
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)

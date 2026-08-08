@@ -40,9 +40,9 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 __all__ = [
     "DEFAULT_PAGE_LIMIT",
-    "ErrorResponse",
     "MAX_PAGE_LIMIT",
     "MIN_PAGE_LIMIT",
+    "ErrorResponse",
     "OkResponse",
     "Page",
     "PaginationParams",

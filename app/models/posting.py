@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import operator
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlalchemy import (
     Enum as SAEnum,
+)
+from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
@@ -61,10 +63,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "EMPLOYMENT_TYPE_COLUMN",
-    "JobPosting",
     "POSTING_STATUS_COLUMN",
     "PROVIDER_COLUMN",
     "WORK_ARRANGEMENT_COLUMN",
+    "JobPosting",
 ]
 
 
@@ -311,7 +313,7 @@ class JobPosting(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         """
         if self.closes_at is None:
             return True
-        return self.closes_at > datetime.now(timezone.utc)
+        return self.closes_at > datetime.now(UTC)
 
     @property
     def salary_range(self) -> tuple[int | None, int | None]:

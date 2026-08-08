@@ -84,15 +84,15 @@ __all__ = [
     "FILTER_KEY_KIND",
     "FILTER_KEY_PATTERN",
     "FILTER_KEY_USER_ID",
-    "Filter",
     "RESERVED_FILTER_KEYS",
     "SCORE_MAX",
     "SCORE_MIN",
+    "ZERO_VECTOR_SCORE",
+    "Filter",
     "VectorHit",
     "VectorRecord",
     "VectorStore",
     "VectorStoreError",
-    "ZERO_VECTOR_SCORE",
     "batch_dimension",
     "check_dimension",
     "cosine_similarity",
@@ -339,9 +339,7 @@ def validate_collection(collection: str) -> str:
             silently become a catch-all partition holding unrelated records.
     """
     if not isinstance(collection, str):
-        raise VectorStoreError(
-            f"collection must be a string, got {type(collection).__name__!r}"
-        )
+        raise VectorStoreError(f"collection must be a string, got {type(collection).__name__!r}")
     normalized = collection.strip()
     if not normalized:
         raise VectorStoreError("collection must be a non-empty string")
@@ -388,8 +386,7 @@ def validate_filters(filters: Filter | None) -> Filter:
     for key in filters:
         if not isinstance(key, str) or not FILTER_KEY_PATTERN.match(key):
             raise VectorStoreError(
-                f"unsupported filter key {key!r}: keys must match "
-                f"{FILTER_KEY_PATTERN.pattern!r}"
+                f"unsupported filter key {key!r}: keys must match {FILTER_KEY_PATTERN.pattern!r}"
             )
     return filters
 
@@ -538,9 +535,7 @@ def dot(a: Sequence[float], b: Sequence[float]) -> float:
         VectorStoreError: If the two widths differ, naming both.
     """
     if len(a) != len(b):
-        raise VectorStoreError(
-            f"embedding dimension mismatch: got {len(a)}, expected {len(b)}"
-        )
+        raise VectorStoreError(f"embedding dimension mismatch: got {len(a)}, expected {len(b)}")
     total = 0.0
     for left, right in zip(a, b, strict=True):
         total += left * right
@@ -566,9 +561,7 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
         VectorStoreError: If the two widths differ, naming both.
     """
     if len(a) != len(b):
-        raise VectorStoreError(
-            f"embedding dimension mismatch: got {len(a)}, expected {len(b)}"
-        )
+        raise VectorStoreError(f"embedding dimension mismatch: got {len(a)}, expected {len(b)}")
     product = 0.0
     norm_a = 0.0
     norm_b = 0.0
@@ -633,7 +626,5 @@ def batch_dimension(records: Sequence[VectorRecord], expected: int | None) -> in
     if expected is not None:
         check_dimension(dimension, expected, context="this collection")
     for record in records[1:]:
-        check_dimension(
-            _require_dimension(record), dimension, context=f"record {record.id!r}"
-        )
+        check_dimension(_require_dimension(record), dimension, context=f"record {record.id!r}")
     return dimension

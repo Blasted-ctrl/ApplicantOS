@@ -38,7 +38,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
-from sqlalchemy import Enum as SAEnum, String, UniqueConstraint
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy import String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
@@ -153,9 +154,7 @@ class UserProfile(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
     # Contact and identity
     # ----------------------------------------------------------------------------------
 
-    phone: Mapped[str | None] = mapped_column(
-        String(PHONE_MAX_LENGTH), nullable=True, default=None
-    )
+    phone: Mapped[str | None] = mapped_column(String(PHONE_MAX_LENGTH), nullable=True, default=None)
     pronouns: Mapped[str | None] = mapped_column(
         String(SHORT_TEXT_MAX_LENGTH), nullable=True, default=None
     )
@@ -166,13 +165,9 @@ class UserProfile(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
     #: Postal address components: ``line1``, ``line2``, ``city``, ``region``,
     #: ``postal_code``, ``country``. Kept as JSON because form field granularity varies
     #: wildly between providers.
-    address: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    address: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
     #: Profile URLs keyed by :data:`PROFILE_LINK_KEYS`.
-    links: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    links: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
 
     # ----------------------------------------------------------------------------------
     # Work authorisation
@@ -230,26 +225,16 @@ class UserProfile(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
     )
     willing_to_relocate: Mapped[bool] = mapped_column(nullable=False, default=False)
     #: Cities/regions the user would move to, as free-text strings.
-    relocation_targets: Mapped[list[str]] = mapped_column(
-        JSONType(), nullable=False, default=list
-    )
+    relocation_targets: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
 
     # ----------------------------------------------------------------------------------
     # Targeting
     # ----------------------------------------------------------------------------------
 
-    desired_roles: Mapped[list[str]] = mapped_column(
-        JSONType(), nullable=False, default=list
-    )
-    desired_industries: Mapped[list[str]] = mapped_column(
-        JSONType(), nullable=False, default=list
-    )
-    excluded_companies: Mapped[list[str]] = mapped_column(
-        JSONType(), nullable=False, default=list
-    )
-    excluded_industries: Mapped[list[str]] = mapped_column(
-        JSONType(), nullable=False, default=list
-    )
+    desired_roles: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
+    desired_industries: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
+    excluded_companies: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
+    excluded_industries: Mapped[list[str]] = mapped_column(JSONType(), nullable=False, default=list)
 
     # ----------------------------------------------------------------------------------
     # Education, availability and overflow
@@ -268,9 +253,7 @@ class UserProfile(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
     #: Provider-specific or one-off answers that do not warrant a column. Written by
     #: :class:`~app.browser.autofill.AutoFiller` when a human resolves an unknown field, so
     #: the same question answers itself next time.
-    extra: Mapped[dict[str, Any]] = mapped_column(
-        JSONType(), nullable=False, default=dict
-    )
+    extra: Mapped[dict[str, Any]] = mapped_column(JSONType(), nullable=False, default=dict)
 
     # ----------------------------------------------------------------------------------
     # Relationships

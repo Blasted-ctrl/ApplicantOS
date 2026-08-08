@@ -159,7 +159,7 @@ def _import_template_module(name: str) -> bool:
                 error=str(exc),
             )
         return False
-    except Exception as exc:  # noqa: BLE001 - one broken template must not break the rest
+    except Exception as exc:
         logger.warning(
             "documents.template_module_import_failed",
             module=qualified,

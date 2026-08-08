@@ -41,9 +41,9 @@ from sqlalchemy.orm import Mapped, declarative_mixin, declared_attr, mapped_colu
 from app.database.types import GUID, UTCDateTime, utcnow
 
 __all__ = [
+    "USER_FOREIGN_KEY_TARGET",
     "SoftDeleteMixin",
     "TimestampMixin",
-    "USER_FOREIGN_KEY_TARGET",
     "UUIDPrimaryKeyMixin",
     "UserOwnedMixin",
 ]
@@ -168,7 +168,7 @@ class UserOwnedMixin:
     """
 
     @declared_attr
-    def user_id(cls) -> Mapped[uuid.UUID]:  # noqa: N805 - declared_attr receives the class
+    def user_id(cls) -> Mapped[uuid.UUID]:
         """Owning user's primary key."""
         return mapped_column(
             GUID(),

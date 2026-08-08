@@ -161,9 +161,7 @@ STATS_RELATION_PREFIX: Final[str] = "relation_"
 _WARNED_EVENTS: set[str] = set()
 
 
-def chunked(
-    values: Sequence[Any], size: int = SQL_IN_CHUNK_SIZE
-) -> Iterable[list[Any]]:
+def chunked(values: Sequence[Any], size: int = SQL_IN_CHUNK_SIZE) -> Iterable[list[Any]]:
     """Yield *values* in lists of at most *size* items.
 
     Used to keep every ``IN (...)`` clause in the knowledge package below SQLite's bound
@@ -267,7 +265,7 @@ class KnowledgeStore:
             from app.knowledge.vector import get_vector_store
 
             self._vector_store = get_vector_store()
-        except Exception as exc:  # noqa: BLE001 - any failure degrades to SQL-only
+        except Exception as exc:
             self._vector_store = None
             self._warn_once(
                 "knowledge.vector_store_unavailable",
@@ -300,7 +298,7 @@ class KnowledgeStore:
             return await embed_texts(list(texts), embedder=self._embedder)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - any failure degrades to SQL-only
+        except Exception as exc:
             self._warn_once(
                 "knowledge.embedder_unavailable",
                 error=str(exc),
@@ -310,9 +308,7 @@ class KnowledgeStore:
 
     # -- guarded vector operations ----------------------------------------------------
 
-    async def vector_upsert(
-        self, collection: str, records: Sequence[VectorRecord]
-    ) -> int:
+    async def vector_upsert(self, collection: str, records: Sequence[VectorRecord]) -> int:
         """Write *records* to *collection*, tolerating an unavailable index.
 
         Args:
@@ -329,7 +325,7 @@ class KnowledgeStore:
             return await store.upsert(collection, list(records))
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - indexing must not fail on the index
+        except Exception as exc:
             logger.warning(
                 "knowledge.vector_upsert_failed",
                 collection=collection,
@@ -364,7 +360,7 @@ class KnowledgeStore:
             return await store.query(collection, embedding, k=k, filters=filters)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - retrieval falls back to SQL
+        except Exception as exc:
             logger.warning(
                 "knowledge.vector_query_failed",
                 collection=collection,
@@ -402,9 +398,7 @@ class KnowledgeStore:
             The reinforced confidence, in ``[0.0, 1.0]``.
         """
         best = max(incumbent, observed)
-        raised = best + (CONFIDENCE_CEILING - best) * (
-            ENTITY_CONFIDENCE_REINFORCEMENT * observed
-        )
+        raised = best + (CONFIDENCE_CEILING - best) * (ENTITY_CONFIDENCE_REINFORCEMENT * observed)
         return min(CONFIDENCE_CEILING, raised)
 
     async def vector_delete(self, collection: str, ids: Sequence[str]) -> int:
@@ -424,7 +418,7 @@ class KnowledgeStore:
             return await store.delete(collection, list(ids))
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a stale vector is not worth an outage
+        except Exception as exc:
             logger.warning(
                 "knowledge.vector_delete_failed",
                 collection=collection,
@@ -604,9 +598,7 @@ class KnowledgeGraph(KnowledgeStore):
             return existing, False
         return entity, True
 
-    async def upsert_entity(
-        self, user_id: uuid.UUID, e: ExtractedEntity
-    ) -> KnowledgeEntity:
+    async def upsert_entity(self, user_id: uuid.UUID, e: ExtractedEntity) -> KnowledgeEntity:
         """Resolve *e* against the user's graph, merging into the incumbent on a hit.
 
         Identity is ``(user_id, kind, normalized_name)``. On a miss the entity is inserted
@@ -646,8 +638,7 @@ class KnowledgeGraph(KnowledgeStore):
         normalized = KnowledgeEntity.normalize(e.name)
         if not normalized:
             raise ValueError(
-                f"entity name {e.name!r} normalises to the empty string and cannot "
-                "identify a node"
+                f"entity name {e.name!r} normalises to the empty string and cannot identify a node"
             )
 
         existing = await self._find_entity(user_id, kind, normalized)
@@ -670,9 +661,7 @@ class KnowledgeGraph(KnowledgeStore):
 
         return await self._merge_entity(existing, e)
 
-    async def _merge_entity(
-        self, existing: KnowledgeEntity, e: ExtractedEntity
-    ) -> KnowledgeEntity:
+    async def _merge_entity(self, existing: KnowledgeEntity, e: ExtractedEntity) -> KnowledgeEntity:
         """Fold one observation into an existing entity, per :meth:`upsert_entity`'s table.
 
         Args:
@@ -749,9 +738,7 @@ class KnowledgeGraph(KnowledgeStore):
         return entity
 
     @staticmethod
-    def _merge_evidence(
-        incumbent: dict[str, Any], incoming: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _merge_evidence(incumbent: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
         """Fold a new observation into an edge's evidence, keeping the log bounded.
 
         Scalar keys ("extractor", "project") are shallow-merged with the incumbent winning,
@@ -771,16 +758,12 @@ class KnowledgeGraph(KnowledgeStore):
             A new dict; the caller assigns it, since the column has no mutation tracking.
         """
         merged = {
-            key: value
-            for key, value in (incumbent or {}).items()
-            if key != EDGE_EVIDENCE_LOG_KEY
+            key: value for key, value in (incumbent or {}).items() if key != EDGE_EVIDENCE_LOG_KEY
         }
         log: list[Any] = list((incumbent or {}).get(EDGE_EVIDENCE_LOG_KEY) or [])
 
         payload = {
-            key: value
-            for key, value in (incoming or {}).items()
-            if key != EDGE_EVIDENCE_LOG_KEY
+            key: value for key, value in (incoming or {}).items() if key != EDGE_EVIDENCE_LOG_KEY
         }
         for key, value in payload.items():
             merged.setdefault(key, value)
@@ -931,9 +914,7 @@ class KnowledgeGraph(KnowledgeStore):
             )
             depth = MAX_NEIGHBOR_DEPTH
 
-        relation_filter = (
-            [RelationKind(relation) for relation in relations] if relations else None
-        )
+        relation_filter = [RelationKind(relation) for relation in relations] if relations else None
 
         visited: set[uuid.UUID] = {entity_id}
         levels: dict[uuid.UUID, int] = {}
@@ -953,9 +934,7 @@ class KnowledgeGraph(KnowledgeStore):
                     )
                 )
                 if relation_filter is not None:
-                    statement = statement.where(
-                        KnowledgeEdge.relation.in_(relation_filter)
-                    )
+                    statement = statement.where(KnowledgeEdge.relation.in_(relation_filter))
                 for source_id, target_id in (await self.session.execute(statement)).all():
                     for candidate in (source_id, target_id):
                         if candidate in visited:
@@ -990,9 +969,7 @@ class KnowledgeGraph(KnowledgeStore):
         )
         return entities
 
-    async def _load_entities(
-        self, entity_ids: Sequence[uuid.UUID]
-    ) -> list[KnowledgeEntity]:
+    async def _load_entities(self, entity_ids: Sequence[uuid.UUID]) -> list[KnowledgeEntity]:
         """Load entities by id in chunked ``IN`` queries.
 
         Args:
@@ -1163,9 +1140,7 @@ class KnowledgeGraph(KnowledgeStore):
     # Maintenance
     # ----------------------------------------------------------------------------------
 
-    async def merge_entities(
-        self, keep_id: uuid.UUID, drop_id: uuid.UUID
-    ) -> KnowledgeEntity:
+    async def merge_entities(self, keep_id: uuid.UUID, drop_id: uuid.UUID) -> KnowledgeEntity:
         """Fold the *drop* entity into the *keep* entity and delete it.
 
         The manual correction path: normalisation cannot know that "MIT" and
@@ -1199,9 +1174,7 @@ class KnowledgeGraph(KnowledgeStore):
 
         drop = await self.session.get(KnowledgeEntity, drop_id)
         if drop is None:
-            logger.debug(
-                "graph.merge_entities_noop", keep_id=str(keep_id), drop_id=str(drop_id)
-            )
+            logger.debug("graph.merge_entities_noop", keep_id=str(keep_id), drop_id=str(drop_id))
             return keep
         if drop.user_id != keep.user_id:
             raise ValueError(

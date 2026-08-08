@@ -135,7 +135,7 @@ def _register_builtin_providers() -> None:
                     missing=missing,
                     error=str(exc),
                 )
-        except Exception as exc:  # noqa: BLE001 - one bad module must not empty the registry
+        except Exception as exc:
             logger.warning(
                 "jobs.provider_import_failed",
                 module=module_name,

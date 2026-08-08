@@ -24,7 +24,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
-from sqlalchemy import ColumnElement, Enum as SAEnum, Float, Integer, String, func
+from sqlalchemy import ColumnElement, Float, Integer, String, func
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -307,8 +308,7 @@ class RunSession(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
                 )
             if isinstance(delta, bool) or not isinstance(delta, int):
                 raise TypeError(
-                    f"RunSession.record({field}=...) requires an int, "
-                    f"got {type(delta).__name__!r}"
+                    f"RunSession.record({field}=...) requires an int, got {type(delta).__name__!r}"
                 )
             current = getattr(self, field)
             updated = (0 if current is None else int(current)) + delta

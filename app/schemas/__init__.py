@@ -29,6 +29,20 @@ the composites that nest them.
 
 from __future__ import annotations
 
+# -- applications and the review queue ----------------------------------------------------------
+from app.schemas.application import (
+    ApplicationDetail,
+    ApplicationEventRead,
+    ApplicationFilter,
+    ApplicationRead,
+    ApplicationUpdate,
+    ArtifactRead,
+    CoverLetterRead,
+    ReviewField,
+    ReviewItem,
+    ReviewResolve,
+)
+
 # -- shared envelopes ------------------------------------------------------------------
 from app.schemas.common import (
     DEFAULT_PAGE_LIMIT,
@@ -42,16 +56,15 @@ from app.schemas.common import (
     paginate,
 )
 
-# -- identity and policy ---------------------------------------------------------------
-from app.schemas.user import (
-    CoverLetterPolicy,
-    PreferencesRead,
-    PreferencesUpdate,
-    ProfileRead,
-    ProfileUpdate,
-    UserCreate,
-    UserRead,
-    UserUpdate,
+# -- dashboard and analytics -----------------------------------------------------------------------
+from app.schemas.dashboard import (
+    MIN_INSIGHT_SAMPLE_SIZE,
+    AnalyticsOverview,
+    DashboardStats,
+    FunnelStage,
+    InsightItem,
+    InsightSentiment,
+    TimeseriesPoint,
 )
 
 # -- knowledge engine -------------------------------------------------------------------
@@ -91,17 +104,6 @@ from app.schemas.onboarding import (
     WorkAuthorizationPayload,
 )
 
-# -- scoring -------------------------------------------------------------------------------
-from app.schemas.scoring import (
-    MAX_NORMALIZED_SCORE,
-    MIN_NORMALIZED_SCORE,
-    ScoreComponentRead,
-    ScoreRead,
-    ScoreRuleSchema,
-    ScoreVerdict,
-    ScoringRulesUpdate,
-)
-
 # -- postings and companies ------------------------------------------------------------------
 from app.schemas.posting import (
     DEFAULT_DISCOVER_LIMIT,
@@ -127,18 +129,15 @@ from app.schemas.resume import (
     ResumeVersionRead,
 )
 
-# -- applications and the review queue ----------------------------------------------------------
-from app.schemas.application import (
-    ApplicationDetail,
-    ApplicationEventRead,
-    ApplicationFilter,
-    ApplicationRead,
-    ApplicationUpdate,
-    ArtifactRead,
-    CoverLetterRead,
-    ReviewField,
-    ReviewItem,
-    ReviewResolve,
+# -- scoring -------------------------------------------------------------------------------
+from app.schemas.scoring import (
+    MAX_NORMALIZED_SCORE,
+    MIN_NORMALIZED_SCORE,
+    ScoreComponentRead,
+    ScoreRead,
+    ScoreRuleSchema,
+    ScoreVerdict,
+    ScoringRulesUpdate,
 )
 
 # -- run sessions --------------------------------------------------------------------------------
@@ -149,23 +148,24 @@ from app.schemas.session import (
     SessionStartRequest,
 )
 
-# -- dashboard and analytics -----------------------------------------------------------------------
-from app.schemas.dashboard import (
-    MIN_INSIGHT_SAMPLE_SIZE,
-    AnalyticsOverview,
-    DashboardStats,
-    FunnelStage,
-    InsightItem,
-    InsightSentiment,
-    TimeseriesPoint,
-)
-
 # -- settings and plugins ----------------------------------------------------------------------------
 from app.schemas.settings import (
     DatabaseBackend,
     PluginInfo,
     SettingsRead,
     SettingsUpdate,
+)
+
+# -- identity and policy ---------------------------------------------------------------
+from app.schemas.user import (
+    CoverLetterPolicy,
+    PreferencesRead,
+    PreferencesUpdate,
+    ProfileRead,
+    ProfileUpdate,
+    UserCreate,
+    UserRead,
+    UserUpdate,
 )
 
 __all__ = [

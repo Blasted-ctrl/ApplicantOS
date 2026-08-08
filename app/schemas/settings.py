@@ -251,9 +251,7 @@ class SettingsRead(Schema):
             storage_backend=settings.storage_backend,
             s3_bucket=settings.s3_bucket,
             s3_region=settings.s3_region,
-            aws_configured=bool(
-                settings.aws_access_key_id and settings.aws_secret_access_key
-            ),
+            aws_configured=bool(settings.aws_access_key_id and settings.aws_secret_access_key),
             playwright_headless=settings.playwright_headless,
             playwright_slow_mo_ms=settings.playwright_slow_mo_ms,
             playwright_timeout_ms=settings.playwright_timeout_ms,

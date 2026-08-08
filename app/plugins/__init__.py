@@ -54,8 +54,8 @@ from app.plugins.registry import PluginRegistry, plugin, registry
 
 __all__ = [
     "BUILTIN_PLUGIN_MODULES",
-    "BasePlugin",
     "ENTRY_POINT_GROUPS",
+    "BasePlugin",
     "Plugin",
     "PluginDisabled",
     "PluginError",

@@ -596,9 +596,7 @@ EEO_FIELDS: Final[dict[str, str]] = {
 #: Aliases sorted longest-first, computed once. Substring containment means a shorter alias
 #: can shadow a longer one ("name" inside "first name"), and the only robust fix is to try the
 #: most specific alias first.
-_KNOWN_ALIASES: Final[tuple[str, ...]] = tuple(
-    sorted(KNOWN_FIELDS, key=len, reverse=True)
-)
+_KNOWN_ALIASES: Final[tuple[str, ...]] = tuple(sorted(KNOWN_FIELDS, key=len, reverse=True))
 _EEO_ALIASES: Final[tuple[str, ...]] = tuple(sorted(EEO_FIELDS, key=len, reverse=True))
 
 #: Decline markers sorted longest-first, for the same reason ("decline" inside "decline to
@@ -1020,7 +1018,7 @@ class FieldAnswerer:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a model failure means "ask a human"
+        except Exception as exc:
             logger.warning(
                 "field_answer.llm_failed",
                 label=field.label,
@@ -1100,7 +1098,7 @@ class FieldAnswerer:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - grounding is a bonus, not a requirement
+        except Exception as exc:
             logger.warning("field_answer.retrieval_failed", label=field.label, error=str(exc))
             return []
         return [
@@ -1187,8 +1185,12 @@ class FieldAnswerer:
             ("Location", _text(user.location)),
             ("Target roles", ", ".join(user.desired_roles) or None),
             ("Target industries", ", ".join(user.desired_industries) or None),
-            ("Work authorisation", user.work_authorization.value
-             if user.work_authorization is not WorkAuthStatus.UNKNOWN else None),
+            (
+                "Work authorisation",
+                user.work_authorization.value
+                if user.work_authorization is not WorkAuthStatus.UNKNOWN
+                else None,
+            ),
             ("Availability", _text(user.start_date_availability)),
             ("Notice period", _notice_period(user)),
             ("Willing to relocate", _yes_no(user.willing_to_relocate)),

@@ -72,8 +72,6 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.jobs.base import UserProfileDTO
 
 __all__ = [
-    "AutoFillError",
-    "AutoFiller",
     "BLOCKER_CAPTCHA",
     "BLOCKER_CLOUDFLARE",
     "BLOCKER_LOGIN_WALL",
@@ -83,13 +81,15 @@ __all__ = [
     "DISCOVERY_MARKER",
     "DISCOVERY_SCRIPT",
     "ESSAY_MIN_MAX_LENGTH",
-    "FieldResolver",
     "ISO_DATE_FORMAT",
     "SCREENSHOT_AFTER_SUBMIT",
     "SCREENSHOT_BEFORE_SUBMIT",
     "SUBMIT_ACCESSIBLE_NAMES",
     "UPLOAD_MARKER",
     "UPLOAD_SCRIPT",
+    "AutoFillError",
+    "AutoFiller",
+    "FieldResolver",
     "UploadFailedError",
     "expected_date_format",
     "normalize_date",
@@ -605,12 +605,15 @@ async def page_html(session: Any) -> str:
         could produce one. An empty string is a safe answer here: it matches no success
         marker, so an unreadable page can never be mistaken for a confirmed submission.
     """
-    for source in (getattr(session, "html", None), getattr(getattr(session, "page", None), "content", None)):
+    for source in (
+        getattr(session, "html", None),
+        getattr(getattr(session, "page", None), "content", None),
+    ):
         if source is None:
             continue
         try:
             value = await _resolve(source)
-        except Exception as exc:  # noqa: BLE001 - reading the page must never end an attempt
+        except Exception as exc:
             logger.debug("autofill.html_unavailable", error=str(exc), error_type=type(exc).__name__)
             continue
         if isinstance(value, str) and value:
@@ -633,7 +636,7 @@ async def page_text(session: Any) -> str:
     if inner_text is not None:
         try:
             value = await _resolve(lambda: inner_text("body"))
-        except Exception as exc:  # noqa: BLE001 - fall back to the markup
+        except Exception as exc:
             logger.debug("autofill.text_unavailable", error=str(exc), error_type=type(exc).__name__)
         else:
             if isinstance(value, str) and value.strip():
@@ -651,7 +654,10 @@ def page_url(session: Any) -> str:
         The URL, or ``""`` when the session does not expose one. Synchronous because
         Playwright's ``Page.url`` is a plain property.
     """
-    for source in (getattr(getattr(session, "page", None), "url", None), getattr(session, "url", None)):
+    for source in (
+        getattr(getattr(session, "page", None), "url", None),
+        getattr(session, "url", None),
+    ):
         if isinstance(source, str) and source:
             return source
     return ""
@@ -739,7 +745,7 @@ def normalize_date(value: str, target_format: str, *, day_first: bool | None = N
             # A calendar date carries no timezone — "3 March" is the same answer in every
             # zone — so the naive parse is the correct one and is reduced to a `date`
             # immediately, before anything can mistake it for an instant.
-            parsed = datetime.strptime(cleaned, candidate_format).date()  # noqa: DTZ007
+            parsed = datetime.strptime(cleaned, candidate_format).date()
         except ValueError:
             continue
         return parsed.strftime(target_format)
@@ -816,7 +822,7 @@ class FieldResolver:
         Returns:
             The resolver.
         """
-        from app.ai.field_answer import FieldAnswerer  # noqa: PLC0415 - lazy by policy
+        from app.ai.field_answer import FieldAnswerer
 
         return cls(FieldAnswerer(user, dict(answers or {}), llm=llm, knowledge=knowledge))
 
@@ -834,7 +840,7 @@ class FieldResolver:
             return await self.answerer.answer(field)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - an answerer failure means "ask a human"
+        except Exception as exc:
             logger.warning(
                 "autofill.resolver_failed",
                 label=field.label,
@@ -842,7 +848,7 @@ class FieldResolver:
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
-            from app.ai.field_answer import (  # noqa: PLC0415 - lazy by policy
+            from app.ai.field_answer import (
                 NO_ANSWER,
                 SOURCE_NONE,
                 AnswerPlan,
@@ -915,10 +921,14 @@ class AutoFiller:
         self.resolver = resolver
         self.pack = pack or GENERIC
         self._min_confidence = (
-            float(settings.min_answer_confidence) if min_confidence is None else float(min_confidence)
+            float(settings.min_answer_confidence)
+            if min_confidence is None
+            else float(min_confidence)
         )
         self._max_essays = (
-            int(settings.max_essay_questions_before_review) if max_essays is None else int(max_essays)
+            int(settings.max_essay_questions_before_review)
+            if max_essays is None
+            else int(max_essays)
         )
         self.blockers: set[str] = set()
         self.screenshots: list[Path] = []
@@ -1077,9 +1087,7 @@ class AutoFiller:
     # Filling
     # ----------------------------------------------------------------------------------
 
-    async def fill(
-        self, fields: Sequence[FormField]
-    ) -> tuple[list[AnswerPlan], list[FormField]]:
+    async def fill(self, fields: Sequence[FormField]) -> tuple[list[AnswerPlan], list[FormField]]:
         """Fill everything that can be filled confidently, and report everything that cannot.
 
         The order of the checks is the order of their cost and their decisiveness:
@@ -1275,7 +1283,7 @@ class AutoFiller:
             await control.click()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a failed click is a reported outcome
+        except Exception as exc:
             logger.error(
                 "autofill.submit_click_failed",
                 pack=self.pack.name,
@@ -1408,7 +1416,7 @@ class AutoFiller:
             count = await _resolve(getattr(locator, "count", None))
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - an unusable selector is simply no match
+        except Exception as exc:
             logger.debug("autofill.locator_failed", error=str(exc), error_type=type(exc).__name__)
             return None
         if not isinstance(count, int) or count < 1:
@@ -1431,7 +1439,9 @@ class AutoFiller:
             review item.
         """
         settings = get_settings()
-        budget_ms = min(max(int(settings.playwright_timeout_ms), SUBMIT_MIN_WAIT_MS), SUBMIT_MAX_WAIT_MS)
+        budget_ms = min(
+            max(int(settings.playwright_timeout_ms), SUBMIT_MIN_WAIT_MS), SUBMIT_MAX_WAIT_MS
+        )
         deadline = time.monotonic() + budget_ms / 1000.0
 
         while True:
@@ -1516,7 +1526,7 @@ class AutoFiller:
                 return await self._write_choice(field, value, select=False)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a failed interaction is a review item
+        except Exception as exc:
             logger.warning(
                 "autofill.write_failed",
                 label=field.label,
@@ -1642,7 +1652,7 @@ class AutoFiller:
             return await page.evaluate(script, argument)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - an unreadable page is a review item
+        except Exception as exc:
             logger.warning(
                 "autofill.evaluate_failed", error=str(exc), error_type=type(exc).__name__
             )
@@ -1663,7 +1673,7 @@ class AutoFiller:
             found = await _resolve(detector)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - "we could not check" is not "all clear"
+        except Exception as exc:
             logger.warning(
                 "autofill.blocker_detection_failed",
                 error=str(exc),
@@ -1685,7 +1695,7 @@ class AutoFiller:
             path = await _resolve(lambda: capture(name))
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - evidence is best-effort, submission is not
+        except Exception as exc:
             logger.warning(
                 "autofill.screenshot_failed",
                 name=name,

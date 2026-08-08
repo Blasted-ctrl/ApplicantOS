@@ -160,9 +160,7 @@ class InMemoryVectorStore:
             bucket[entry.record.id] = entry
         self._dimensions[name] = dimension
 
-        logger.debug(
-            "vector.memory.upsert", collection=name, records=len(prepared), dim=dimension
-        )
+        logger.debug("vector.memory.upsert", collection=name, records=len(prepared), dim=dimension)
         return len(prepared)
 
     async def delete(self, collection: str, ids: Sequence[str]) -> int:
@@ -244,9 +242,7 @@ class InMemoryVectorStore:
         if not bucket:
             return []
 
-        check_dimension(
-            len(embedding), self._dimensions[name], context=f"collection {name!r}"
-        )
+        check_dimension(len(embedding), self._dimensions[name], context=f"collection {name!r}")
         query_unit = normalize(embedding)
 
         hits = [

@@ -216,7 +216,5 @@ class ScoringRulesUpdate(Schema):
                 duplicates.append(rule.key)
             seen.add(rule.key)
         if duplicates:
-            raise ValueError(
-                "duplicate scoring rule key(s): " + ", ".join(sorted(set(duplicates)))
-            )
+            raise ValueError("duplicate scoring rule key(s): " + ", ".join(sorted(set(duplicates))))
         return self

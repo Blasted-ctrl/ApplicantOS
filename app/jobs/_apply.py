@@ -124,7 +124,7 @@ def _guarded_context(ctx: ApplyContext) -> tuple[ApplyContext, bool]:
         context is a copy with ``dry_run=True``, so the browser layer's own guard is a second
         line of defence rather than the only one.
     """
-    from app.config.settings import get_settings  # noqa: PLC0415 - lazy by policy
+    from app.config.settings import get_settings
 
     settings = get_settings()
     allowed = bool(settings.is_submission_allowed) and not ctx.dry_run
@@ -272,7 +272,7 @@ async def run_browser_apply(ctx: ApplyContext, selector_pack_name: str) -> Apply
         # Typed provider failures carry their own review reason and retry posture; the
         # pipeline is the right place to interpret them.
         raise
-    except Exception as exc:  # noqa: BLE001 - any browser failure becomes a reported outcome
+    except Exception as exc:
         duration = time.monotonic() - started
         log.warning(
             "apply.browser_failed",

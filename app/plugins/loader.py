@@ -127,7 +127,7 @@ def _import_builtins() -> None:
                     missing=getattr(exc, "name", None),
                     error=str(exc),
                 )
-        except Exception as exc:  # noqa: BLE001 - one bad package must not stop startup
+        except Exception as exc:
             logger.warning("plugins.builtin_import_failed", module=module_name, error=str(exc))
         else:
             logger.debug("plugins.builtin_imported", module=module_name)
@@ -157,7 +157,7 @@ def _candidate_classes(loaded: Any) -> tuple[type, ...]:
     if callable(loaded):
         try:
             produced = loaded()
-        except Exception as exc:  # noqa: BLE001 - a third-party factory may do anything
+        except Exception as exc:
             logger.warning("plugins.entry_point_factory_failed", error=str(exc))
             return ()
         if isinstance(produced, type):
@@ -222,14 +222,14 @@ def _load_entry_points() -> int:
     for kind, group in ENTRY_POINT_GROUPS.items():
         try:
             discovered = importlib.metadata.entry_points(group=group)
-        except Exception as exc:  # noqa: BLE001 - a broken distribution must not stop us
+        except Exception as exc:
             logger.warning("plugins.entry_point_scan_failed", group=group, error=str(exc))
             continue
 
         for entry_point in discovered:
             try:
                 loaded = entry_point.load()
-            except Exception as exc:  # noqa: BLE001 - third-party import, anything goes
+            except Exception as exc:
                 logger.warning(
                     "plugins.entry_point_import_failed",
                     group=group,
@@ -312,8 +312,7 @@ def _reload_builtin_modules() -> None:
         name
         for name in list(sys.modules)
         if any(
-            name == package or name.startswith(f"{package}.")
-            for package in BUILTIN_PLUGIN_MODULES
+            name == package or name.startswith(f"{package}.") for package in BUILTIN_PLUGIN_MODULES
         )
     )
     for name in targets:
@@ -322,5 +321,5 @@ def _reload_builtin_modules() -> None:
             continue
         try:
             importlib.reload(module)
-        except Exception as exc:  # noqa: BLE001 - reload failures are reported, not fatal
+        except Exception as exc:
             logger.warning("plugins.builtin_reload_failed", module=name, error=str(exc))

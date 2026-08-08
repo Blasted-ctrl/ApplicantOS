@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import unescape
 from typing import Any, ClassVar, Final
 
@@ -73,7 +73,6 @@ __all__ = [
     "API_ROOT",
     "BOARD_FEED_TTL_SECONDS",
     "BOARD_META_TTL_SECONDS",
-    "GreenhouseProvider",
     "HEALTHCHECK_BOARD",
     "JOB_URL_TEMPLATE",
     "MAX_LOOKUP_BOARDS",
@@ -83,6 +82,7 @@ __all__ = [
     "SALARY_WINDOW_CHARS",
     "SALARY_WINDOW_OVERRUN_CHARS",
     "SELECTOR_PACK",
+    "GreenhouseProvider",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -296,7 +296,7 @@ _COMPENSATION_CONTEXT_RE: Final[re.Pattern[str]] = re.compile(
 #: Sort key for a posting whose ``updated_at`` could not be parsed. Sorting newest-first
 #: with ``reverse=True`` therefore puts undated postings last, which is right: an absent date
 #: is not a claim of freshness.
-_UNDATED: Final[datetime] = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_UNDATED: Final[datetime] = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def _company_from_token(token: str) -> str:
@@ -600,7 +600,11 @@ class GreenhouseProvider(ATSProvider):
             ProviderError: On any transport or status failure. Cache backends degrade
                 silently on their own errors, so a failure here is always the ATS.
         """
-        from app.cache import NAMESPACES, get_cache, make_key  # noqa: PLC0415 - lazy by policy
+        from app.cache import (
+            NAMESPACES,
+            get_cache,
+            make_key,
+        )
 
         cache = get_cache()
         key = make_key(NAMESPACES.POSTING, self.provider_name.value, *key_parts)
@@ -693,9 +697,7 @@ class GreenhouseProvider(ATSProvider):
             board: The board it was discovered on.
         """
         if len(self._board_by_job_id) >= MAX_MEMOIZED_IDS:
-            self.logger.debug(
-                "greenhouse.id_memo_reset", entries=len(self._board_by_job_id)
-            )
+            self.logger.debug("greenhouse.id_memo_reset", entries=len(self._board_by_job_id))
             self._board_by_job_id.clear()
         self._board_by_job_id[job_id] = board
 
@@ -800,9 +802,7 @@ class GreenhouseProvider(ATSProvider):
         return survivors
 
     @staticmethod
-    def _may_be_remote(
-        job: Mapping[str, Any], title: str, place_names: Sequence[str]
-    ) -> bool:
+    def _may_be_remote(job: Mapping[str, Any], title: str, place_names: Sequence[str]) -> bool:
         """Return whether a posting could plausibly be remote, without parsing it.
 
         A deliberate over-approximation used only to skip work: it says "yes" to anything
@@ -1005,16 +1005,12 @@ class GreenhouseProvider(ATSProvider):
             try:
                 jobs = await self._board_jobs(board)
             except ProviderError as exc:
-                self.logger.debug(
-                    "greenhouse.board_failed", board=board, error=str(exc)
-                )
+                self.logger.debug("greenhouse.board_failed", board=board, error=str(exc))
                 continue
             for job in jobs:
                 if str(job.get("id") or "").strip() == job_id:
                     self._remember(job_id, board)
-                    self.logger.info(
-                        "greenhouse.bare_id_scan_hit", job_id=job_id, board=board
-                    )
+                    self.logger.info("greenhouse.bare_id_scan_hit", job_id=job_id, board=board)
                     return self._to_raw(job, board, await self._company_for(job, board))
 
         self.logger.info("greenhouse.bare_id_scan_missed", job_id=job_id, boards=len(boards))

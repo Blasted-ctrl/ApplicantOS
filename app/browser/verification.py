@@ -53,7 +53,6 @@ from app.browser.autofill import page_text, page_url
 from app.browser.selectors import GENERIC, SelectorPack, pack_for
 
 __all__ = [
-    "ApplicationVerifier",
     "CONFIRMATION_ID_PATTERNS",
     "CONFIRMATION_URL_TOKENS",
     "DEFAULT_EVIDENCE_NAME",
@@ -64,6 +63,7 @@ __all__ = [
     "METHOD_SUCCESS_MARKER",
     "METHOD_SUCCESS_TEXT",
     "METHOD_URL_CHANGE",
+    "ApplicationVerifier",
     "VerificationResult",
     "find_confirmation_id",
     "is_confirmation_url",
@@ -356,7 +356,9 @@ class ApplicationVerifier:
             ``confirmed=False`` with :data:`METHOD_INCONCLUSIVE`, which the pipeline treats as
             needing a human rather than as a submission.
         """
-        selectors = pack if isinstance(pack, SelectorPack) else (pack_for(pack) if pack else GENERIC)
+        selectors = (
+            pack if isinstance(pack, SelectorPack) else (pack_for(pack) if pack else GENERIC)
+        )
         evidence = await self._capture(session)
         text = await page_text(session)
         url = page_url(session)
@@ -444,7 +446,7 @@ class ApplicationVerifier:
             path = capture(self.screenshot_name)
             if hasattr(path, "__await__"):
                 path = await path
-        except Exception as exc:  # noqa: BLE001 - evidence is best-effort
+        except Exception as exc:
             logger.warning(
                 "verification.screenshot_failed",
                 name=self.screenshot_name,
@@ -454,9 +456,7 @@ class ApplicationVerifier:
             return None
         return Path(path) if isinstance(path, (str, Path)) else None
 
-    async def _error_marker(
-        self, session: Any, pack: SelectorPack, text: str
-    ) -> str | None:
+    async def _error_marker(self, session: Any, pack: SelectorPack, text: str) -> str | None:
         """Return the evidence that the submission was rejected, if there is any."""
         css = await self._css_marker(session, pack.css_error_markers)
         if css is not None:
@@ -482,7 +482,7 @@ class ApplicationVerifier:
         for marker in markers:
             try:
                 count = await locate(marker).count()
-            except Exception as exc:  # noqa: BLE001 - an unusable selector is simply no match
+            except Exception as exc:
                 logger.debug(
                     "verification.locator_failed",
                     marker=marker,

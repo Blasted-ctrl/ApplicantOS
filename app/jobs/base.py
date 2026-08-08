@@ -51,7 +51,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar
@@ -77,22 +77,22 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.config.settings import Settings
 
 __all__ = [
-    "ATSProvider",
-    "ApplyContext",
-    "ApplyResult",
     "DEFAULT_MAX_ATTEMPTS",
     "DEFAULT_PAGE_SIZE",
     "DEFAULT_SEARCH_LIMIT",
+    "MAX_PAGES",
+    "USER_AGENT",
+    "ATSProvider",
+    "ApplyContext",
+    "ApplyResult",
     "FormField",
     "JobPostingDTO",
-    "MAX_PAGES",
     "PostingUnavailableError",
     "ProviderAuthError",
     "ProviderError",
     "ProviderRateLimitError",
     "RawPosting",
     "SearchQuery",
-    "USER_AGENT",
     "UnsupportedFlowError",
     "UserProfileDTO",
 ]
@@ -605,7 +605,7 @@ class SearchQuery:
         """
         if self.posted_within_days is None:
             return None
-        return datetime.now(timezone.utc) - timedelta(days=self.posted_within_days)
+        return datetime.now(UTC) - timedelta(days=self.posted_within_days)
 
     def matches_freshness(self, posted_at: datetime | None) -> bool:
         """Return whether a posting is recent enough for this query.
@@ -765,9 +765,7 @@ class JobPostingDTO:
             "employment_type",
             _as_enum(EmploymentType, self.employment_type, EmploymentType.UNKNOWN),
         )
-        setattr_(
-            self, "status", _as_enum(PostingStatus, self.status, PostingStatus.DISCOVERED)
-        )
+        setattr_(self, "status", _as_enum(PostingStatus, self.status, PostingStatus.DISCOVERED))
         if self.id is not None and not isinstance(self.id, uuid.UUID):
             try:
                 setattr_(self, "id", uuid.UUID(str(self.id)))
@@ -988,7 +986,7 @@ class UserProfileDTO:
         if callable(flattener):
             try:
                 flattened = flattener()
-            except Exception as exc:  # noqa: BLE001 - fall back to attribute reads
+            except Exception as exc:
                 logger.debug("jobs.profile_to_dto_failed", error=str(exc))
             else:
                 if isinstance(flattened, Mapping):
@@ -1296,8 +1294,8 @@ def parse_retry_after(value: Any) -> float | None:
     if deadline is None:
         return None
     if deadline.tzinfo is None:
-        deadline = deadline.replace(tzinfo=timezone.utc)
-    return max((deadline - datetime.now(timezone.utc)).total_seconds(), 0.0)
+        deadline = deadline.replace(tzinfo=UTC)
+    return max((deadline - datetime.now(UTC)).total_seconds(), 0.0)
 
 
 def _backoff_delay(attempt: int, retry_after: float | None) -> float:
@@ -1452,7 +1450,7 @@ class ATSProvider(BasePlugin, abc.ABC):
             return client
 
         try:
-            import httpx  # noqa: PLC0415 - lazy by policy
+            import httpx
         except ImportError as exc:  # pragma: no cover - httpx is a declared dependency
             raise ProviderError(
                 "httpx is required for network access but is not installed",
@@ -1599,7 +1597,7 @@ class ATSProvider(BasePlugin, abc.ABC):
             PostingUnavailableError: On 404 or 410.
             ProviderError: On any other failure, including transport errors and timeouts.
         """
-        import httpx  # noqa: PLC0415 - lazy by policy
+        import httpx
 
         attempts = max(1, int(max_attempts))
         last_error: ProviderError | None = None
@@ -1638,9 +1636,7 @@ class ATSProvider(BasePlugin, abc.ABC):
                 excerpt = response.text[:200].replace("\n", " ").strip()
                 error = self._classify_status(response.status_code, url, excerpt)
                 if isinstance(error, ProviderRateLimitError):
-                    error.retry_after = parse_retry_after(
-                        response.headers.get(RETRY_AFTER_HEADER)
-                    )
+                    error.retry_after = parse_retry_after(response.headers.get(RETRY_AFTER_HEADER))
                 if not error.transient:
                     raise error
                 last_error = error

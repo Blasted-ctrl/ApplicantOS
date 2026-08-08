@@ -22,12 +22,6 @@ pipeline is configured *from* settings and must never be a dependency of it.
 
 from __future__ import annotations
 
-from app.config.settings import (
-    DEFAULT_SCORING_RULES_PATH,
-    Settings,
-    get_settings,
-    settings,
-)
 from app.config.logging import (
     REDACTED,
     SENSITIVE_KEY_PATTERNS,
@@ -35,6 +29,12 @@ from app.config.logging import (
     clear_context,
     configure_logging,
     get_logger,
+)
+from app.config.settings import (
+    DEFAULT_SCORING_RULES_PATH,
+    Settings,
+    get_settings,
+    settings,
 )
 
 __all__ = [

@@ -23,9 +23,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 __all__ = [
+    "REQUEST_ID_HEADER",
     "CorrelationIdMiddleware",
     "ObservabilityMiddleware",
-    "REQUEST_ID_HEADER",
     "observe_apply",
     "record_application",
     "record_llm_usage",

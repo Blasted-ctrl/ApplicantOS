@@ -103,22 +103,22 @@ __all__ = [
     "EMBEDDING_BATCH_SIZE",
     "FINGERPRINT_PROBE_TTL_SECONDS",
     "INDEX_STAGES",
-    "IndexReport",
-    "IndexerError",
-    "KnowledgeIndexer",
     "PROBE_CACHE_NAMESPACE",
     "SQLITE_INDEX_CONCURRENCY",
     "STAGE_ANALYZE",
     "STAGE_CHUNKS",
     "STAGE_DOCUMENTS",
+    "STAGE_FACTS",
     "STAGE_FAILED",
     "STAGE_FINALIZE",
     "STAGE_FINGERPRINT",
     "STAGE_GRAPH",
-    "STAGE_FACTS",
     "STAGE_RESOLVE",
     "STAGE_SKIPPED",
     "STAGE_START",
+    "IndexReport",
+    "IndexerError",
+    "KnowledgeIndexer",
     "SourceNotFoundError",
     "UnsupportedSourceError",
     "supported_source_kinds",
@@ -265,8 +265,7 @@ class UnsupportedSourceError(IndexerError, ValueError):
         """
         names = ", ".join(sorted(item.value for item in supported)) or "none registered"
         super().__init__(
-            f"no registered analyzer supports source kind {kind.value!r}; "
-            f"supported kinds: {names}"
+            f"no registered analyzer supports source kind {kind.value!r}; supported kinds: {names}"
         )
         self.kind = kind
         self.supported = tuple(supported)
@@ -500,7 +499,7 @@ class KnowledgeIndexer:
             await self._progress(stage, dict(payload))
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - telemetry never fails an index
+        except Exception as exc:
             logger.warning("knowledge.progress_callback_failed", stage=stage, error=str(exc))
 
     # ----------------------------------------------------------------------------------
@@ -588,9 +587,7 @@ class KnowledgeIndexer:
         except PluginNotFound as exc:
             raise UnsupportedSourceError(ref.kind, supported_source_kinds()) from exc
 
-    async def _update_source(
-        self, source: KnowledgeSource, ref: SourceRef
-    ) -> KnowledgeSource:
+    async def _update_source(self, source: KnowledgeSource, ref: SourceRef) -> KnowledgeSource:
         """Fold a re-registration into an existing source row.
 
         Args:
@@ -666,9 +663,7 @@ class KnowledgeIndexer:
         document_ids = list(
             (
                 await self.session.execute(
-                    select(KnowledgeDocument.id).where(
-                        KnowledgeDocument.source_id == source_id
-                    )
+                    select(KnowledgeDocument.id).where(KnowledgeDocument.source_id == source_id)
                 )
             )
             .scalars()
@@ -720,15 +715,11 @@ class KnowledgeIndexer:
         """
         collected: list[uuid.UUID] = []
         for chunk in chunked(list(document_ids)):
-            statement = select(KnowledgeChunk.id).where(
-                KnowledgeChunk.document_id.in_(chunk)
-            )
+            statement = select(KnowledgeChunk.id).where(KnowledgeChunk.document_id.in_(chunk))
             collected.extend((await self.session.execute(statement)).scalars().all())
         return collected
 
-    async def _fact_ids_for_documents(
-        self, document_ids: Sequence[uuid.UUID]
-    ) -> list[uuid.UUID]:
+    async def _fact_ids_for_documents(self, document_ids: Sequence[uuid.UUID]) -> list[uuid.UUID]:
         """Return the ids of active facts whose provenance is one of *document_ids*.
 
         Collected **before** the documents are deleted: ``source_document_id`` is
@@ -753,9 +744,7 @@ class KnowledgeIndexer:
     # The pipeline
     # ----------------------------------------------------------------------------------
 
-    async def index_source(
-        self, source_id: uuid.UUID, *, force: bool = False
-    ) -> IndexReport:
+    async def index_source(self, source_id: uuid.UUID, *, force: bool = False) -> IndexReport:
         """Run one source through the whole pipeline.
 
         See the module docstring for the eight steps and why step 3 is the one that makes
@@ -845,9 +834,7 @@ class KnowledgeIndexer:
             )
 
             # 5 -- documents -------------------------------------------------------------
-            documents, pending = await self._upsert_documents(
-                source, result.documents, force=force
-            )
+            documents, pending = await self._upsert_documents(source, result.documents, force=force)
             report.documents = len(documents)
             await self._emit(
                 STAGE_DOCUMENTS,
@@ -908,7 +895,7 @@ class KnowledgeIndexer:
             await self._emit(STAGE_FAILED, source_id=str(source_id), error="cancelled")
             log.warning("knowledge.index_cancelled")
             return report
-        except Exception as exc:  # noqa: BLE001 - one bad source never aborts a batch
+        except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
             await self._fail(source_id, message)
             report.failed = True
@@ -975,7 +962,7 @@ class KnowledgeIndexer:
                 memoized = await self.cache.get(key)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 - a cache miss is always survivable
+            except Exception as exc:
                 logger.debug("knowledge.probe_cache_unavailable", error=str(exc))
                 memoized = None
             if isinstance(memoized, str) and memoized:
@@ -988,7 +975,7 @@ class KnowledgeIndexer:
                 await self.cache.set(key, probe, ttl=FINGERPRINT_PROBE_TTL_SECONDS)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 - memoisation is best effort
+            except Exception as exc:
                 logger.debug("knowledge.probe_cache_write_failed", error=str(exc))
         return probe
 
@@ -1037,9 +1024,7 @@ class KnowledgeIndexer:
             row = existing.get(uri)
             changed = force or row is None or row.content_hash != document.content_hash
             if row is None:
-                row = KnowledgeDocument(
-                    user_id=source.user_id, source_id=source.id, uri=uri
-                )
+                row = KnowledgeDocument(user_id=source.user_id, source_id=source.id, uri=uri)
                 self.session.add(row)
             self._apply_document(row, document)
             by_uri[uri] = row
@@ -1082,9 +1067,7 @@ class KnowledgeIndexer:
         row.metadata_json = dict(document.metadata or {})
         row.token_count = estimate_tokens(row.raw_text)
 
-    async def _existing_documents(
-        self, source_id: uuid.UUID
-    ) -> list[KnowledgeDocument]:
+    async def _existing_documents(self, source_id: uuid.UUID) -> list[KnowledgeDocument]:
         """Return every document currently stored for *source_id*.
 
         Args:
@@ -1093,14 +1076,10 @@ class KnowledgeIndexer:
         Returns:
             The document rows.
         """
-        statement = select(KnowledgeDocument).where(
-            KnowledgeDocument.source_id == source_id
-        )
+        statement = select(KnowledgeDocument).where(KnowledgeDocument.source_id == source_id)
         return list((await self.session.execute(statement)).scalars().all())
 
-    async def _chunk_counts(
-        self, document_ids: Sequence[uuid.UUID]
-    ) -> dict[uuid.UUID, int]:
+    async def _chunk_counts(self, document_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, int]:
         """Count the chunk rows each of *document_ids* currently has.
 
         Args:
@@ -1131,9 +1110,7 @@ class KnowledgeIndexer:
         for row in rows:
             await self.session.delete(row)
         await self.session.flush()
-        await self._store.vector_delete(
-            CHUNK_COLLECTION, [str(value) for value in chunk_ids]
-        )
+        await self._store.vector_delete(CHUNK_COLLECTION, [str(value) for value in chunk_ids])
         logger.info(
             "knowledge.documents_removed",
             documents=len(rows),
@@ -1207,9 +1184,7 @@ class KnowledgeIndexer:
                         ordinal=ordinal,
                         text=text,
                         token_count=estimate_tokens(text),
-                        embedding=(
-                            list(vectors[position]) if position < len(vectors) else None
-                        ),
+                        embedding=(list(vectors[position]) if position < len(vectors) else None),
                         metadata_json={
                             "document_uri": document.uri,
                             "kind": SourceKind(document.kind).value,
@@ -1245,9 +1220,7 @@ class KnowledgeIndexer:
         ]
 
         if stale_ids:
-            await self._store.vector_delete(
-                CHUNK_COLLECTION, [str(value) for value in stale_ids]
-            )
+            await self._store.vector_delete(CHUNK_COLLECTION, [str(value) for value in stale_ids])
         if records:
             await self._store.vector_upsert(CHUNK_COLLECTION, records)
 
@@ -1322,9 +1295,7 @@ class KnowledgeIndexer:
         total = 0
         for uri, group in groups.items():
             document_id = documents[uri].id if uri is not None else None
-            total += await self._facts.upsert_many(
-                user_id, group, source_document_id=document_id
-            )
+            total += await self._facts.upsert_many(user_id, group, source_document_id=document_id)
         return total
 
     async def _merge_graph(
@@ -1419,7 +1390,7 @@ class KnowledgeIndexer:
                 source_id=str(source_id),
                 detail="cancelled while marking the source failed",
             )
-        except Exception as exc:  # noqa: BLE001 - nothing above this can recover
+        except Exception as exc:
             logger.error(
                 "knowledge.index_status_not_recorded",
                 source_id=str(source_id),
@@ -1430,9 +1401,7 @@ class KnowledgeIndexer:
     # Batches
     # ----------------------------------------------------------------------------------
 
-    async def index_all(
-        self, user_id: uuid.UUID, *, force: bool = False
-    ) -> list[IndexReport]:
+    async def index_all(self, user_id: uuid.UUID, *, force: bool = False) -> list[IndexReport]:
         """Index every enabled source the user has, a bounded number at a time.
 
         Args:
@@ -1484,9 +1453,7 @@ class KnowledgeIndexer:
             return []
 
         now = utcnow()
-        interval = timedelta(
-            minutes=max(1, int(self.settings.knowledge_reindex_interval_minutes))
-        )
+        interval = timedelta(minutes=max(1, int(self.settings.knowledge_reindex_interval_minutes)))
         due_before = now - interval
         abandoned_before = now - interval * STALE_INDEXING_GRACE_MULTIPLIER
 
@@ -1543,12 +1510,10 @@ class KnowledgeIndexer:
             async with semaphore:
                 try:
                     async with session_scope() as session:
-                        return await self._clone_for(session).index_source(
-                            source_id, force=force
-                        )
+                        return await self._clone_for(session).index_source(source_id, force=force)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:  # noqa: BLE001 - the batch must still complete
+                except Exception as exc:
                     logger.warning(
                         "knowledge.index_source_unhandled",
                         source_id=str(source_id),
@@ -1580,11 +1545,7 @@ class KnowledgeIndexer:
         """
         try:
             dialect = self.session.get_bind().dialect.name
-        except Exception as exc:  # noqa: BLE001 - an unbound session is a test artefact
+        except Exception as exc:
             logger.debug("knowledge.dialect_unknown", error=str(exc))
             return SQLITE_INDEX_CONCURRENCY
-        return (
-            SQLITE_INDEX_CONCURRENCY
-            if dialect == "sqlite"
-            else DEFAULT_INDEX_CONCURRENCY
-        )
+        return SQLITE_INDEX_CONCURRENCY if dialect == "sqlite" else DEFAULT_INDEX_CONCURRENCY

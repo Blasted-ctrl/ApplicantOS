@@ -83,14 +83,14 @@ __all__ = [
     "SPONSORSHIP_REQUIRED_NEGATIONS",
     "SPONSORSHIP_REQUIRED_TERMS",
     "SPONSORSHIP_UNAVAILABLE_TERMS",
+    "VERDICT_APPLY",
+    "VERDICT_REVIEW",
+    "VERDICT_SKIP",
     "ScoreComponent",
     "ScoreResult",
     "ScoreRule",
     "Scorer",
     "ScoringConfigError",
-    "VERDICT_APPLY",
-    "VERDICT_REVIEW",
-    "VERDICT_SKIP",
     "Verdict",
     "default_rules",
     "explain",
@@ -916,9 +916,7 @@ class ScoreResult:
     @property
     def has_hard_negative(self) -> bool:
         """Whether any policy veto fired."""
-        return any(
-            component.matched and component.hard_negative for component in self.components
-        )
+        return any(component.matched and component.hard_negative for component in self.components)
 
     def component(self, key: str) -> ScoreComponent | None:
         """Return the component produced by rule *key*.
@@ -1193,7 +1191,7 @@ def _read_attribute(obj: Any, name: str, default: Any = None) -> Any:
         return default if value is None else value
     try:
         value = getattr(obj, name, default)
-    except Exception as exc:  # noqa: BLE001 - a hostile property must not break scoring
+    except Exception as exc:
         logger.debug("scoring.attribute_unreadable", attribute=name, error=str(exc))
         return default
     return default if value is None else value
@@ -1547,9 +1545,7 @@ class Scorer:
         if rule.none_of:
             blocker = _first_matching_term(haystack, rule.none_of)
             if blocker is not None:
-                return self._component(
-                    rule, matched=False, evidence=f'excluded by "{blocker}"'
-                )
+                return self._component(rule, matched=False, evidence=f'excluded by "{blocker}"')
 
         if rule.regex is not None:
             match = _rule_regex(rule.regex).search(haystack)
@@ -1731,9 +1727,7 @@ class Scorer:
             return self._gate(
                 GATE_SPONSORSHIP_CONFLICT,
                 matched=True,
-                evidence=(
-                    f'posting states "{refused}" but the candidate needs visa sponsorship'
-                ),
+                evidence=(f'posting states "{refused}" but the candidate needs visa sponsorship'),
             )
         return self._gate(GATE_SPONSORSHIP_CONFLICT, matched=False, evidence="")
 
@@ -1853,7 +1847,7 @@ class Scorer:
 
         try:
             payload = await self._llm_adjustment(view, base)
-        except Exception as exc:  # noqa: BLE001 - the model is advisory; it may never break scoring
+        except Exception as exc:
             logger.warning(
                 "scoring.llm_unavailable",
                 error=str(exc),
@@ -1909,9 +1903,7 @@ class Scorer:
             model_used=model_used,
         )
 
-    async def _llm_adjustment(
-        self, view: _PostingView, base: ScoreResult
-    ) -> dict[str, Any] | None:
+    async def _llm_adjustment(self, view: _PostingView, base: ScoreResult) -> dict[str, Any] | None:
         """Ask the model for an adjustment and a rationale, through the cache.
 
         The cache key is the content hash of the posting, the preference hash and the rule
@@ -1932,7 +1924,9 @@ class Scorer:
         """
         llm = self._llm
         if llm is None:
-            from app.ai.llm import get_llm  # Lazy: avoids an import cycle through app.ai.
+            from app.ai.llm import (
+                get_llm,  # Lazy: avoids an import cycle through app.ai.
+            )
 
             llm = get_llm(LLM_TIER)
             self._llm = llm

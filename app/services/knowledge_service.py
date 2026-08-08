@@ -99,9 +99,7 @@ MAX_SEARCH_LIMIT: Final[int] = 100
 #: The four stores a search hit can come from. Mirrors
 #: :data:`app.schemas.knowledge.KnowledgeSearchKind`, whose ``Literal`` cannot be iterated
 #: at runtime without ``typing.get_args``.
-SEARCH_KINDS: Final[frozenset[str]] = frozenset(
-    {ITEM_FACT, ITEM_CHUNK, ITEM_ENTITY, ITEM_MEMORY}
-)
+SEARCH_KINDS: Final[frozenset[str]] = frozenset({ITEM_FACT, ITEM_CHUNK, ITEM_ENTITY, ITEM_MEMORY})
 
 #: Every key :meth:`KnowledgeService.facts` understands. An unrecognised key raises rather
 #: than being ignored: a typo in a query string that silently returns unfiltered rows is
@@ -345,9 +343,7 @@ class KnowledgeService:
         report = await self.indexer.index_source(source_id, force=force)
         return _report_to_schema(report)
 
-    async def reindex_all(
-        self, user_id: uuid.UUID, force: bool = False
-    ) -> list[IndexReportRead]:
+    async def reindex_all(self, user_id: uuid.UUID, force: bool = False) -> list[IndexReportRead]:
         """Index every enabled source the user has, one report per source.
 
         The indexer gives each source its own session and commits independently, so a
@@ -471,9 +467,7 @@ class KnowledgeService:
                 :class:`~app.models.enums.EntityKind`.
         """
         resolved = _coerce_enums(kinds, EntityKind, "entity kind")
-        return await self.graph_store.subgraph(
-            user_id, kinds=resolved or None, limit=int(limit)
-        )
+        return await self.graph_store.subgraph(user_id, kinds=resolved or None, limit=int(limit))
 
     async def entities(
         self,
@@ -581,9 +575,7 @@ class KnowledgeService:
 
         total = int(
             (
-                await self.session.execute(
-                    select(func.count(KnowledgeFact.id)).where(*conditions)
-                )
+                await self.session.execute(select(func.count(KnowledgeFact.id)).where(*conditions))
             ).scalar_one()
             or 0
         )
@@ -625,9 +617,7 @@ class KnowledgeService:
         """
         conditions: list[ColumnElement[bool]] = [KnowledgeFact.user_id == user_id]
 
-        kinds = _coerce_enums(
-            _first(supplied, "kinds", "kind"), FactKind, "fact kind"
-        )
+        kinds = _coerce_enums(_first(supplied, "kinds", "kind"), FactKind, "fact kind")
         if kinds:
             conditions.append(KnowledgeFact.kind.in_(kinds))
 
@@ -637,9 +627,7 @@ class KnowledgeService:
 
         verified = _first(supplied, "verified", "user_verified")
         if verified is not None:
-            conditions.append(
-                KnowledgeFact.user_verified.is_(_coerce_bool(verified, "verified"))
-            )
+            conditions.append(KnowledgeFact.user_verified.is_(_coerce_bool(verified, "verified")))
 
         text = _clean_str(_first(supplied, "q", "query"))
         if text:
@@ -656,9 +644,7 @@ class KnowledgeService:
 
         organization = _clean_str(supplied.get("organization"))
         if organization:
-            conditions.append(
-                func.lower(KnowledgeFact.organization) == organization.lower()
-            )
+            conditions.append(func.lower(KnowledgeFact.organization) == organization.lower())
 
         role = _clean_str(supplied.get("role"))
         if role:
@@ -672,9 +658,7 @@ class KnowledgeService:
             # anchor both ends of the element.
             needle = f'%"{_escape_like(skill.lower())}"%'
             conditions.append(
-                func.lower(cast(KnowledgeFact.skills, String)).like(
-                    needle, escape=_LIKE_ESCAPE
-                )
+                func.lower(cast(KnowledgeFact.skills, String)).like(needle, escape=_LIKE_ESCAPE)
                 | func.lower(cast(KnowledgeFact.technologies, String)).like(
                     needle, escape=_LIKE_ESCAPE
                 )
@@ -682,9 +666,7 @@ class KnowledgeService:
 
         min_impact = supplied.get("min_impact")
         if min_impact is not None:
-            conditions.append(
-                KnowledgeFact.impact_score >= _coerce_int(min_impact, "min_impact")
-            )
+            conditions.append(KnowledgeFact.impact_score >= _coerce_int(min_impact, "min_impact"))
 
         min_confidence = supplied.get("min_confidence")
         if min_confidence is not None:
@@ -695,15 +677,12 @@ class KnowledgeService:
         document_id = supplied.get("source_document_id")
         if document_id is not None:
             conditions.append(
-                KnowledgeFact.source_document_id
-                == _coerce_uuid(document_id, "source_document_id")
+                KnowledgeFact.source_document_id == _coerce_uuid(document_id, "source_document_id")
             )
 
         entity_id = supplied.get("entity_id")
         if entity_id is not None:
-            conditions.append(
-                KnowledgeFact.entity_id == _coerce_uuid(entity_id, "entity_id")
-            )
+            conditions.append(KnowledgeFact.entity_id == _coerce_uuid(entity_id, "entity_id"))
 
         return conditions
 

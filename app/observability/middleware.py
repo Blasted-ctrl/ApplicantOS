@@ -103,8 +103,7 @@ def normalize_path(path: str) -> str:
     if not path or path == _ROOT_ROUTE_LABEL:
         return _ROOT_ROUTE_LABEL
     segments = [
-        "{id}" if _IDENTIFIER_PATTERN.match(segment) else segment
-        for segment in path.split("/")
+        "{id}" if _IDENTIFIER_PATTERN.match(segment) else segment for segment in path.split("/")
     ]
     return "/".join(segments) or _ROOT_ROUTE_LABEL
 

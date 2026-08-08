@@ -190,9 +190,7 @@ _LIKE_SPECIALS: Final[tuple[str, ...]] = (_LIKE_ESCAPE, "%", "_")
 # ======================================================================================
 
 
-def reciprocal_rank_fusion(
-    rankings: Sequence[Sequence[_Key]], k: int = RRF_K
-) -> dict[_Key, float]:
+def reciprocal_rank_fusion(rankings: Sequence[Sequence[_Key]], k: int = RRF_K) -> dict[_Key, float]:
     """Fuse several ranked lists into one score per identifier.
 
     Each list contributes ``1 / (k + rank)`` to every id it contains, where ``rank`` is
@@ -504,9 +502,7 @@ class KnowledgeRetriever:
                 result.note(ITEM_FACT, identifier, REASON_GRAPH)
             for entity in entities:
                 result.note(ITEM_ENTITY, entity.id, REASON_GRAPH)
-                result.scores[_item_key(ITEM_ENTITY, entity.id)] = float(
-                    entity.confidence or 0.0
-                )
+                result.scores[_item_key(ITEM_ENTITY, entity.id)] = float(entity.confidence or 0.0)
 
         rows.sort(
             key=lambda row: (
@@ -575,9 +571,9 @@ class KnowledgeRetriever:
         if not text:
             return RetrievalResult(query="")
 
-        title = next(
-            (line.strip() for line in text.splitlines() if line.strip()), ""
-        )[:_MAX_TITLE_CHARS]
+        title = next((line.strip() for line in text.splitlines() if line.strip()), "")[
+            :_MAX_TITLE_CHARS
+        ]
         skills = extract_skills(text)
         body = " ".join(text.split())[:POSTING_BODY_CHARS]
 
@@ -591,9 +587,7 @@ class KnowledgeRetriever:
             skills=len(skills),
             characters=len(query),
         )
-        return await self.retrieve(
-            user_id, query, k_facts=k_facts, k_chunks=POSTING_CHUNK_K
-        )
+        return await self.retrieve(user_id, query, k_facts=k_facts, k_chunks=POSTING_CHUNK_K)
 
     # ----------------------------------------------------------------------------------
     # Arms
@@ -692,15 +686,11 @@ class KnowledgeRetriever:
         conditions = []
         for keyword in keywords:
             pattern = _like_pattern(keyword)
-            conditions.append(
-                KnowledgeFact.normalized_text.like(pattern, escape=_LIKE_ESCAPE)
-            )
+            conditions.append(KnowledgeFact.normalized_text.like(pattern, escape=_LIKE_ESCAPE))
             conditions.append(
                 func.lower(KnowledgeFact.organization).like(pattern, escape=_LIKE_ESCAPE)
             )
-            conditions.append(
-                func.lower(KnowledgeFact.role).like(pattern, escape=_LIKE_ESCAPE)
-            )
+            conditions.append(func.lower(KnowledgeFact.role).like(pattern, escape=_LIKE_ESCAPE))
 
         statement = select(
             KnowledgeFact.id,
@@ -717,9 +707,7 @@ class KnowledgeRetriever:
             or_(*conditions),
         )
         if kinds:
-            statement = statement.where(
-                KnowledgeFact.kind.in_([FactKind(kind) for kind in kinds])
-            )
+            statement = statement.where(KnowledgeFact.kind.in_([FactKind(kind) for kind in kinds]))
         statement = statement.order_by(
             KnowledgeFact.impact_score.desc(),
             KnowledgeFact.confidence.desc(),
@@ -759,9 +747,7 @@ class KnowledgeRetriever:
         """
         if not scores:
             return []
-        ordered = sorted(scores, key=lambda item: (-scores[item], str(item)))[
-            : max(1, limit)
-        ]
+        ordered = sorted(scores, key=lambda item: (-scores[item], str(item)))[: max(1, limit)]
         rows = await self._facts.by_ids(ordered)
         resolved = set(kinds or ())
         return [
@@ -800,9 +786,7 @@ class KnowledgeRetriever:
         if not seeds:
             return []
 
-        collected: dict[uuid.UUID, KnowledgeEntity] = {
-            entity.id: entity for entity in seeds
-        }
+        collected: dict[uuid.UUID, KnowledgeEntity] = {entity.id: entity for entity in seeds}
         for seed in seeds:
             if len(collected) >= MAX_EXPANDED_ENTITIES:
                 break
@@ -839,9 +823,7 @@ class KnowledgeRetriever:
 
         if keywords:
             conditions = [
-                KnowledgeEntity.normalized_name.like(
-                    _like_pattern(keyword), escape=_LIKE_ESCAPE
-                )
+                KnowledgeEntity.normalized_name.like(_like_pattern(keyword), escape=_LIKE_ESCAPE)
                 for keyword in keywords
             ]
             statement = (
@@ -935,8 +917,9 @@ class KnowledgeRetriever:
         lines = [f'Retrieval for: "{_one_line(result.query)}"']
         counts = result.counts()
         lines.append(
-            "  facts={facts} chunks={chunks} entities={entities} "
-            "memories={memories}".format(**counts)
+            "  facts={facts} chunks={chunks} entities={entities} memories={memories}".format(
+                **counts
+            )
         )
         if result.is_empty():
             lines.append("  (nothing matched)")
@@ -945,8 +928,7 @@ class KnowledgeRetriever:
         if result.facts:
             lines.append("  Facts:")
             lines.extend(
-                f"    {index:>2}. [{score:.4f}] {_one_line(fact.text)}"
-                f"  <- {reasons}"
+                f"    {index:>2}. [{score:.4f}] {_one_line(fact.text)}  <- {reasons}"
                 for index, fact, score, reasons in _rendered(
                     result, ITEM_FACT, result.facts, lambda item: item.text
                 )

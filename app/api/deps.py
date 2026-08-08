@@ -59,6 +59,8 @@ from app.services.review_service import ReviewService
 from app.services.session_service import SessionService
 
 __all__ = [
+    "NO_USER_DETAIL",
+    "USER_ID_HEADER",
     "AnalyticsServiceDep",
     "ApplicationServiceDep",
     "CheckpointServiceDep",
@@ -67,14 +69,12 @@ __all__ = [
     "DedupeServiceDep",
     "DiscoveryServiceDep",
     "KnowledgeServiceDep",
-    "NO_USER_DETAIL",
     "OnboardingServiceDep",
     "PaginationDep",
     "PipelineDep",
     "ReviewServiceDep",
     "SessionServiceDep",
     "SettingsDep",
-    "USER_ID_HEADER",
     "get_current_user",
     "pagination_params",
 ]

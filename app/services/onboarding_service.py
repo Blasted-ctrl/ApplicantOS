@@ -435,8 +435,7 @@ STEPS: Final[tuple[OnboardingStep, ...]] = (
         key="links",
         title="Where can we find your work?",
         description=(
-            "These go on your resume, and — except LinkedIn — become knowledge sources we "
-            "index."
+            "These go on your resume, and — except LinkedIn — become knowledge sources we index."
         ),
         fields=[
             _field("github", "GitHub", FieldKind.URL),
@@ -520,9 +519,7 @@ def _nullable_preference_fields() -> frozenset[str]:
     for name, info in UserPreferences.model_fields.items():
         annotation = info.annotation
         origin = typing.get_origin(annotation)
-        if origin in (typing.Union, types.UnionType) and type(None) in typing.get_args(
-            annotation
-        ):
+        if origin in (typing.Union, types.UnionType) and type(None) in typing.get_args(annotation):
             nullable.add(name)
     return frozenset(nullable)
 
@@ -582,8 +579,7 @@ class OnboardingService:
         user = await self._user(user_id)
         completion = await self._completion(user)
         return [
-            step.model_copy(update={"complete": completion.get(step.key, False)})
-            for step in STEPS
+            step.model_copy(update={"complete": completion.get(step.key, False)}) for step in STEPS
         ]
 
     async def status(self, user_id: uuid.UUID | str) -> OnboardingStatus:
@@ -602,8 +598,7 @@ class OnboardingService:
         user = await self._user(user_id)
         completion = await self._completion(user)
         steps = [
-            step.model_copy(update={"complete": completion.get(step.key, False)})
-            for step in STEPS
+            step.model_copy(update={"complete": completion.get(step.key, False)}) for step in STEPS
         ]
         done = sum(1 for step in steps if step.complete)
         total = len(steps) or 1
@@ -698,9 +693,7 @@ class OnboardingService:
         """
         user = await self._user(user_id)
         completion = await self._completion(user)
-        missing = sorted(
-            key for key in REQUIRED_STEP_KEYS if not completion.get(key, False)
-        )
+        missing = sorted(key for key in REQUIRED_STEP_KEYS if not completion.get(key, False))
         if missing:
             raise ValueError(
                 "onboarding cannot be completed while these steps are unanswered: "
@@ -887,11 +880,7 @@ class OnboardingService:
         if payload.address:
             stored = dict(profile.address or {})
             stored.update(
-                {
-                    key: value
-                    for key, value in payload.address.items()
-                    if value not in (None, "")
-                }
+                {key: value for key, value in payload.address.items() if value not in (None, "")}
             )
             profile.address = stored
 
@@ -1057,9 +1046,7 @@ class OnboardingService:
             LookupError: If the identifier is malformed or names no user.
         """
         identifier = _as_uuid(user_id, "user id")
-        user = await self._session.scalar(
-            select(User).where(User.id == identifier).limit(1)
-        )
+        user = await self._session.scalar(select(User).where(User.id == identifier).limit(1))
         if user is None:
             raise LookupError(f"user {identifier} not found")
         return user
@@ -1114,8 +1101,7 @@ class OnboardingService:
         return {
             "identity": bool(_clean(user.full_name)),
             "contact": bool(
-                profile is not None
-                and (_clean(profile.phone) or (profile.address or {}))
+                profile is not None and (_clean(profile.phone) or (profile.address or {}))
             ),
             "work_authorization": bool(
                 profile is not None
@@ -1126,9 +1112,7 @@ class OnboardingService:
                 and all(getattr(profile, name) is not None for name in EEO_FIELD_NAMES)
             ),
             "preferences": bool(isinstance(user.preferences, dict) and user.preferences),
-            "links": any(
-                _clean(links.get(slot)) for slot in PROFILE_LINK_KEYS if slot != "other"
-            ),
+            "links": any(_clean(links.get(slot)) for slot in PROFILE_LINK_KEYS if slot != "other"),
             "sources": sum(kinds.values()) > 0,
             "master_resume": kinds.get(SourceKind.RESUME, 0) > 0,
         }
@@ -1209,9 +1193,7 @@ class OnboardingService:
             )
             if raced is None:
                 raise
-            logger.info(
-                "onboarding.source_raced", user_id=str(user_id), kind=kind.value
-            )
+            logger.info("onboarding.source_raced", user_id=str(user_id), kind=kind.value)
             return raced
 
         logger.info(

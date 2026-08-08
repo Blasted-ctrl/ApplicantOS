@@ -57,14 +57,14 @@ from collections.abc import Sequence
 from typing import Final
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.database.types import (
-    POSTGRES_DIALECT_NAMES,
     GUID,
+    POSTGRES_DIALECT_NAMES,
+    EmbeddingType,
     JSONType,
     UTCDateTime,
-    EmbeddingType,
 )
 
 #: Identifier of this revision.

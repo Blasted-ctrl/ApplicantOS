@@ -276,8 +276,7 @@ class PluginRegistry:
             detail = f"available {kind} plugins: {', '.join(available)}"
         else:
             detail = (
-                f"no {kind} plugins are registered "
-                "(has app.plugins.loader.load_all() been called?)"
+                f"no {kind} plugins are registered (has app.plugins.loader.load_all() been called?)"
             )
         raise PluginNotFound(f"unknown {kind} plugin {name!r}; {detail}", kind=kind, name=name)
 
@@ -330,7 +329,7 @@ class PluginRegistry:
         meta = registration.meta
         try:
             instance = registration.cls(self._settings())
-        except Exception as exc:  # noqa: BLE001 - normalised into the plugin hierarchy
+        except Exception as exc:
             logger.warning(
                 "plugin.instantiation_failed",
                 plugin_kind=str(meta.kind),
@@ -470,7 +469,9 @@ class PluginRegistry:
             registration = self._registration(resolved_kind, key)
             registration.disabled = True
             self._instances.pop((resolved_kind, key), None)
-        logger.info("plugin.disabled", plugin_kind=str(resolved_kind), plugin=registration.meta.name)
+        logger.info(
+            "plugin.disabled", plugin_kind=str(resolved_kind), plugin=registration.meta.name
+        )
 
     def enable(self, kind: PluginKind, name: str) -> None:
         """Switch a plugin back on.
@@ -512,7 +513,7 @@ class PluginRegistry:
                     results[label] = bool(await instance.healthcheck())
                 except PluginDisabled:
                     continue
-                except Exception as exc:  # noqa: BLE001 - a probe must always answer
+                except Exception as exc:
                     logger.warning("plugin.healthcheck_failed", plugin=label, error=str(exc))
                     results[label] = False
         return results

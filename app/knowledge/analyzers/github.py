@@ -85,10 +85,10 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 
 __all__ = [
     "API_ROOT",
-    "GitHubAnalyzer",
     "MANIFEST_FILES",
     "STAR_IMPACT_MAX_BONUS",
     "STAR_IMPACT_SCALE",
+    "GitHubAnalyzer",
     "star_impact_bonus",
 ]
 
@@ -212,8 +212,24 @@ GITHUB_HOSTS: Final[frozenset[str]] = frozenset(
 #: URL path segments that introduce a sub-resource of a repository rather than another
 #: repository, so ``/owner/repo/tree/main/src`` still resolves to ``owner/repo``.
 REPO_SUBPATHS: Final[frozenset[str]] = frozenset(
-    {"tree", "blob", "commits", "commit", "releases", "issues", "pull", "pulls",
-     "actions", "wiki", "settings", "branches", "tags", "graphs", "network", "pkgs"}
+    {
+        "tree",
+        "blob",
+        "commits",
+        "commit",
+        "releases",
+        "issues",
+        "pull",
+        "pulls",
+        "actions",
+        "wiki",
+        "settings",
+        "branches",
+        "tags",
+        "graphs",
+        "network",
+        "pkgs",
+    }
 )
 
 #: Path prefixes used by the API form of a profile or repository URL.
@@ -283,8 +299,7 @@ def _clean_repo_name(value: str) -> str | None:
         The bare name, or ``None`` when it is not a legal repository name.
     """
     name = value.strip()
-    if name.endswith(".git"):
-        name = name[: -len(".git")]
+    name = name.removesuffix(".git")
     return name if REPO_PATTERN.match(name) else None
 
 
@@ -334,8 +349,7 @@ def parse_target(uri: str) -> _Target | None:
     candidate = (uri or "").strip().strip("<>").rstrip("/")
     if not candidate:
         return None
-    if candidate.startswith("@"):
-        candidate = candidate[1:]
+    candidate = candidate.removeprefix("@")
     if candidate.lower().startswith("git@github.com:"):
         candidate = candidate.split(":", 1)[1]
 
@@ -617,7 +631,7 @@ def parse_manifest(filename: str, text: str) -> list[str]:
         return []
     try:
         raw = parser(text)
-    except Exception as exc:  # noqa: BLE001 - any malformed manifest degrades to "none"
+    except Exception as exc:
         logger.debug("github.manifest_unparsed", manifest=filename, error=str(exc))
         return []
 
@@ -811,7 +825,7 @@ def _reset_time(headers: Any) -> str:
     """
     raw = headers.get(RATE_LIMIT_RESET_HEADER)
     try:
-        moment = dt.datetime.fromtimestamp(int(raw), tz=dt.timezone.utc)
+        moment = dt.datetime.fromtimestamp(int(raw), tz=dt.UTC)
     except (TypeError, ValueError, OSError, OverflowError):
         return "an unknown time"
     return moment.isoformat(timespec="seconds")
@@ -891,7 +905,7 @@ class GitHubAnalyzer(Analyzer):
             from app.cache import get_cache
 
             self._cache = get_cache()
-        except Exception as exc:  # noqa: BLE001 - an absent cache is a slowdown, not a fault
+        except Exception as exc:
             logger.info("github.cache_unavailable", error=str(exc))
             self._cache = None
         return self._cache
@@ -938,7 +952,7 @@ class GitHubAnalyzer(Analyzer):
             response = await client.get(
                 f"{API_ROOT}/rate_limit", headers=self._headers(JSON_ACCEPT)
             )
-        except Exception as exc:  # noqa: BLE001 - a healthcheck reports, it does not fail
+        except Exception as exc:
             logger.info("github.healthcheck_failed", error=str(exc))
             return False
         return response.status_code < 400
@@ -1003,7 +1017,7 @@ class GitHubAnalyzer(Analyzer):
             return None
         try:
             entry = await cache.get(key)
-        except Exception as exc:  # noqa: BLE001 - a failing cache degrades to a miss
+        except Exception as exc:
             logger.debug("github.cache_read_failed", error=str(exc))
             return None
         return entry if isinstance(entry, dict) and "text" in entry else None
@@ -1022,14 +1036,12 @@ class GitHubAnalyzer(Analyzer):
             "etag": response.headers.get(ETAG_HEADER, ""),
             "text": response.text,
             "headers": {
-                name: response.headers[name]
-                for name in CACHED_HEADERS
-                if name in response.headers
+                name: response.headers[name] for name in CACHED_HEADERS if name in response.headers
             },
         }
         try:
             await cache.set(key, envelope, ttl=CACHE_TTL_SECONDS)
-        except Exception as exc:  # noqa: BLE001 - failing to cache is never fatal
+        except Exception as exc:
             logger.debug("github.cache_write_failed", error=str(exc))
 
     def _raise_for_status(self, response: httpx.Response, url: str) -> None:
@@ -1140,7 +1152,9 @@ class GitHubAnalyzer(Analyzer):
                 last_error = AnalyzerError(f"GitHub returned {response.status_code} for {url}")
 
             if attempt < MAX_ATTEMPTS - 1:
-                await asyncio.sleep(RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)])
+                await asyncio.sleep(
+                    RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
+                )
 
         if isinstance(last_error, AnalyzerError):
             raise last_error
@@ -1453,7 +1467,7 @@ class GitHubAnalyzer(Analyzer):
             except AnalyzerError as exc:
                 logger.warning("github.repo_failed", repo=full_name, error=str(exc))
                 result.record_error(f"{full_name}: {exc}")
-            except Exception as exc:  # noqa: BLE001 - one repo must never end the run
+            except Exception as exc:
                 logger.warning(
                     "github.repo_unexpected_error",
                     repo=full_name,
@@ -1560,9 +1574,7 @@ class GitHubAnalyzer(Analyzer):
 
         primary = str(repo.get("language") or "")
         for language, _count, _share in shares:
-            weight = (
-                EDGE_WEIGHT_PRIMARY_LANGUAGE if language == primary else EDGE_WEIGHT_LANGUAGE
-            )
+            weight = EDGE_WEIGHT_PRIMARY_LANGUAGE if language == primary else EDGE_WEIGHT_LANGUAGE
             self._link_technology(
                 result, project, language, weight=weight, origin="languages", repo=full_name
             )

@@ -263,13 +263,9 @@ SEED_URL_TEMPLATES: Final[dict[str, str]] = {
 #: Public JSON feed per provider, as a ``str.format`` template taking ``token``. Workday has
 #: no shard-independent feed URL, so it is absent rather than approximated.
 SEED_API_TEMPLATES: Final[dict[str, str]] = {
-    ATSProviderName.GREENHOUSE.value: (
-        "https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
-    ),
+    ATSProviderName.GREENHOUSE.value: ("https://boards-api.greenhouse.io/v1/boards/{token}/jobs"),
     ATSProviderName.LEVER.value: "https://api.lever.co/v0/postings/{token}",
-    ATSProviderName.ASHBY.value: (
-        "https://api.ashbyhq.com/posting-api/job-board/{token}"
-    ),
+    ATSProviderName.ASHBY.value: ("https://api.ashbyhq.com/posting-api/job-board/{token}"),
 }
 
 
@@ -402,7 +398,5 @@ def boards_from_query(
         return supplied
 
     defaults = default_boards(key)
-    logger.debug(
-        "seeds.boards_from_query", provider=key, count=len(defaults), source="defaults"
-    )
+    logger.debug("seeds.boards_from_query", provider=key, count=len(defaults), source="defaults")
     return defaults

@@ -65,16 +65,16 @@ __all__ = [
     "BLOCKER_CLOUDFLARE",
     "BLOCKER_LOGIN_WALL",
     "BLOCKER_MFA",
-    "BrowserArtifacts",
-    "BrowserAutomationUnavailable",
-    "BrowserSession",
-    "BrowserSessionError",
     "DESKTOP_USER_AGENT",
     "HAR_FILENAME",
     "PLAYWRIGHT_INSTALL_HINT",
     "TRACE_FILENAME",
     "VIEWPORT_HEIGHT",
     "VIEWPORT_WIDTH",
+    "BrowserArtifacts",
+    "BrowserAutomationUnavailable",
+    "BrowserSession",
+    "BrowserSessionError",
     "WaitState",
     "slugify_artifact_name",
 ]
@@ -470,8 +470,7 @@ class BrowserSession:
         """
         if self._context is None:
             raise BrowserSessionError(
-                "BrowserSession.context is only available inside "
-                "'async with BrowserSession(...)'"
+                "BrowserSession.context is only available inside 'async with BrowserSession(...)'"
             )
         return self._context
 
@@ -562,7 +561,7 @@ class BrowserSession:
                 out of the middle of an apply attempt explains nothing about what to do.
         """
         try:
-            import playwright.async_api as playwright_api  # noqa: PLC0415 - lazy by policy
+            import playwright.async_api as playwright_api
         except ImportError as exc:
             raise BrowserAutomationUnavailable(
                 f"Playwright is not installed, so no application can be submitted; "
@@ -690,7 +689,7 @@ class BrowserSession:
             return
         try:
             await context.tracing.start(screenshots=True, snapshots=True, sources=False)
-        except Exception as exc:  # noqa: BLE001 - tracing is diagnostics, never load-bearing
+        except Exception as exc:
             logger.warning("browser.tracing_start_failed", error=str(exc))
             return
         self._tracing_started = True
@@ -760,7 +759,7 @@ class BrowserSession:
             return True
         except TimeoutError:
             logger.warning("browser.cleanup_timeout", step=step, seconds=CLEANUP_TIMEOUT_SECONDS)
-        except Exception as exc:  # noqa: BLE001 - one failed close must not skip the others
+        except Exception as exc:
             logger.warning(
                 "browser.cleanup_failed", step=step, error=str(exc), error_type=type(exc).__name__
             )
@@ -903,7 +902,7 @@ class BrowserSession:
         """
         try:
             return await self.page.content()
-        except Exception as exc:  # noqa: BLE001 - an unreadable page is an empty page here
+        except Exception as exc:
             logger.debug("browser.html_unavailable", error=str(exc))
             return ""
 
@@ -918,7 +917,7 @@ class BrowserSession:
         """
         try:
             return await self.page.inner_text("body", timeout=PROBE_TIMEOUT_MS)
-        except Exception as exc:  # noqa: BLE001 - probes never raise
+        except Exception as exc:
             logger.debug("browser.visible_text_unavailable", error=str(exc))
             return ""
 
@@ -929,7 +928,7 @@ class BrowserSession:
             return ""
         try:
             return self._page.url
-        except Exception as exc:  # noqa: BLE001 - a closed page has no URL
+        except Exception as exc:
             logger.debug("browser.url_unavailable", error=str(exc))
             return ""
 
@@ -963,7 +962,7 @@ class BrowserSession:
             if not await control.is_visible():
                 return False
             await control.click(timeout=BANNER_CLICK_TIMEOUT_MS)
-        except Exception as exc:  # noqa: BLE001 - a stuck banner is not a failed application
+        except Exception as exc:
             logger.debug("browser.cookie_banner_not_dismissed", pack=pack.name, error=str(exc))
             return False
 
@@ -1086,7 +1085,7 @@ class BrowserSession:
                 if await self.page.locator(selector).count() > 0:
                     logger.debug("browser.probe_matched", selector=selector)
                     return True
-            except Exception as exc:  # noqa: BLE001 - one bad selector must not end detection
+            except Exception as exc:
                 logger.debug("browser.probe_failed", selector=selector, error=str(exc))
         return False
 
@@ -1105,7 +1104,7 @@ class BrowserSession:
             for index in range(total):
                 if await locator.nth(index).is_visible():
                     return True
-        except Exception as exc:  # noqa: BLE001 - probes never raise
+        except Exception as exc:
             logger.debug("browser.visibility_probe_failed", selector=selector, error=str(exc))
         return False
 

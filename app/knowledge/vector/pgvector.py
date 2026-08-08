@@ -306,9 +306,7 @@ def _compile_filters(filters: Filter) -> tuple[list[str], dict[str, Any]]:
     return clauses, parameters
 
 
-def _compile_reserved(
-    key: str, expected: Any, index: int, parameters: dict[str, Any]
-) -> str:
+def _compile_reserved(key: str, expected: Any, index: int, parameters: dict[str, Any]) -> str:
     """Compile one filter entry against a promoted (indexed) column.
 
     Args:
@@ -338,9 +336,7 @@ def _compile_reserved(
     return f"{column} = :{name}"
 
 
-def _compile_metadata(
-    key: str, expected: Any, index: int, parameters: dict[str, Any]
-) -> str:
+def _compile_metadata(key: str, expected: Any, index: int, parameters: dict[str, Any]) -> str:
     """Compile one filter entry against the metadata jsonb column.
 
     Args:
@@ -418,7 +414,9 @@ class PgVectorStore:
 
     backend_name: ClassVar[str] = "pgvector"
 
-    def __init__(self, settings: Settings | None = None, *, engine: AsyncEngine | None = None) -> None:
+    def __init__(
+        self, settings: Settings | None = None, *, engine: AsyncEngine | None = None
+    ) -> None:
         """Record configuration without connecting."""
         self._settings = settings if settings is not None else get_settings()
         self._engine = engine
@@ -501,9 +499,7 @@ class PgVectorStore:
             f"DELETE FROM {VECTOR_TABLE} WHERE collection = :collection AND id IN :ids"
         ).bindparams(bindparam("ids", expanding=True))
         async with self._begin() as connection:
-            result = await connection.execute(
-                statement, {"collection": name, "ids": identifiers}
-            )
+            result = await connection.execute(statement, {"collection": name, "ids": identifiers})
         removed = max(result.rowcount, 0)
         logger.debug("vector.pgvector.delete", collection=name, removed=removed)
         return removed
@@ -530,9 +526,7 @@ class PgVectorStore:
     async def count(self, collection: str) -> int:
         """Return how many records *collection* holds (``0`` when unknown)."""
         name = validate_collection(collection)
-        statement = text(
-            f"SELECT count(*) FROM {VECTOR_TABLE} WHERE collection = :collection"
-        )
+        statement = text(f"SELECT count(*) FROM {VECTOR_TABLE} WHERE collection = :collection")
         async with self._connect() as connection:
             result = await connection.execute(statement, {"collection": name})
             row = result.first()
@@ -540,9 +534,7 @@ class PgVectorStore:
 
     async def list_collections(self) -> list[str]:
         """Return the names of all non-empty collections, sorted ascending."""
-        statement = text(
-            f"SELECT DISTINCT collection FROM {VECTOR_TABLE} ORDER BY collection"
-        )
+        statement = text(f"SELECT DISTINCT collection FROM {VECTOR_TABLE} ORDER BY collection")
         async with self._connect() as connection:
             result = await connection.execute(statement)
             rows = result.fetchall()
@@ -713,9 +705,7 @@ class PgVectorStore:
         """
         dimension = self.dimension
         if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension <= 0:
-            raise VectorStoreError(
-                f"embedding_dim must be a positive int, got {dimension!r}"
-            )
+            raise VectorStoreError(f"embedding_dim must be a positive int, got {dimension!r}")
         return dimension
 
     @staticmethod
@@ -768,7 +758,7 @@ class _ConnectionContext:
             VectorStoreError: If the schema cannot be ensured or the connection refused.
         """
         await self._store.ensure_schema()
-        engine = self._store._resolve_engine()  # noqa: SLF001 - same-module collaborator
+        engine = self._store._resolve_engine()
         self._context = engine.begin() if self._transactional else engine.connect()
         try:
             return await self._context.__aenter__()

@@ -73,3 +73,68 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 app = ["config/*.yaml"]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Lint / type / test configuration
+# ──────────────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["alembic/versions", ".venv", "desktop"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+ignore = [
+    # FastAPI's entire dependency system is function calls in argument defaults.
+    # Rewriting Depends()/Body()/Query() into module singletons would obscure every
+    # route signature to satisfy a rule written for a different framework.
+    "B008",
+    # Typeshed-oriented stub conventions. They fire on real runtime classes whose
+    # __aenter__/__eq__ are correct and deliberately annotated more precisely than
+    # `self`, and following them would weaken the annotations.
+    "PYI034",
+    "PYI036",
+    # SQLAlchemy declarative classes legitimately carry mutable class attributes
+    # (`metadata`, `type_annotation_map`, `__table_args__`); ClassVar-ing them breaks
+    # the declarative API.
+    "RUF012",
+    # PEP 695 type-parameter syntax. Deferred deliberately: the project targets 3.12+
+    # but several tools in the chain still parse the pre-695 form more reliably.
+    "UP046",
+    "UP047",
+    "UP040",
+    # Exception names are frozen by docs/CONTRACTS.md §10 (`TokenBudgetExceeded`,
+    # `LLMTimeout`, `LLMRateLimited`, `PromptNotFound`, …). They read better without the
+    # suffix and renaming them would be a breaking contract change to satisfy a style rule.
+    "N818",
+    # Prose in docstrings and user-facing strings uses real typography — en dashes, curly
+    # quotes, arrows. These rules exist to catch homoglyph attacks in *identifiers*, not to
+    # force ASCII on English prose, and they fire ~50 times on deliberate punctuation.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__ files exist to re-export; unsorted __all__ blocks there are grouped
+# by subsystem on purpose, which reads better than alphabetical.
+"app/**/__init__.py" = ["RUF022"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+exclude = ["alembic/versions", "desktop"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--strict-markers -q"
+markers = [
+    "integration: requires a real database, broker, or browser",
+    "slow: takes more than a second",
+]

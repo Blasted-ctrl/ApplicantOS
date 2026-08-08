@@ -452,14 +452,14 @@ class EventBus:
                 try:
                     if subscription.offer(frame):
                         delivered += 1
-                except Exception as exc:  # noqa: BLE001 - one bad consumer, not all of them
+                except Exception as exc:
                     logger.debug(
                         "events.offer_failed",
                         subscription=subscription.id,
                         error=str(exc),
                     )
             return delivered
-        except Exception as exc:  # noqa: BLE001 - publishing is never load-bearing
+        except Exception as exc:
             logger.warning("events.publish_failed", requested=event, error=str(exc))
             return 0
 
@@ -483,7 +483,7 @@ class EventBus:
             return 0
         try:
             payload = model.model_dump(mode="json")
-        except Exception as exc:  # noqa: BLE001 - serialisation is never load-bearing
+        except Exception as exc:
             logger.warning(
                 "events.serialize_failed",
                 requested=event,

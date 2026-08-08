@@ -50,11 +50,11 @@ __all__ = [
     "ARTIFACT_KIND_HTML",
     "ARTIFACT_KIND_JSON",
     "ARTIFACT_KIND_SCREENSHOT",
-    "ArtifactRecord",
-    "ArtifactRecorder",
     "EVENTS_FILENAME",
     "MANIFEST_FILENAME",
     "MANIFEST_VERSION",
+    "ArtifactRecord",
+    "ArtifactRecorder",
     "RecordedEvent",
 ]
 
@@ -610,9 +610,7 @@ class ArtifactRecorder:
             return
         target = self._directory / EVENTS_FILENAME
         try:
-            lines = [
-                json.dumps(event.as_dict(), default=_json_default) for event in self._events
-            ]
+            lines = [json.dumps(event.as_dict(), default=_json_default) for event in self._events]
             target.write_text("\n".join(lines) + "\n", encoding=_TEXT_ENCODING)
         except (OSError, TypeError, ValueError) as exc:
             logger.warning("recorder.events_write_failed", path=str(target), error=str(exc))

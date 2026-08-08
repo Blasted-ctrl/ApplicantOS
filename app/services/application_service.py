@@ -342,9 +342,7 @@ class ApplicationService:
         )
         return application, True
 
-    async def _find(
-        self, user_id: uuid.UUID, posting_id: uuid.UUID
-    ) -> Application | None:
+    async def _find(self, user_id: uuid.UUID, posting_id: uuid.UUID) -> Application | None:
         """Select the one application a ``(user, posting)`` pair may have.
 
         Args:
@@ -647,9 +645,7 @@ class ApplicationService:
             "interviews": interviews,
             "offers": offers,
             "rejected": rejected,
-            "active": sum(
-                count for status, count in counts.items() if status.is_active()
-            ),
+            "active": sum(count for status, count in counts.items() if status.is_active()),
             "today": await self.daily_count(identifier),
             "response_rate": _ratio(responded, submitted),
             "interview_rate": _ratio(interviews + offers, submitted),
@@ -792,9 +788,7 @@ def _start_of_utc_day(now: datetime | None = None) -> datetime:
     moment = now if now is not None else utcnow()
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
-    return moment.astimezone(UTC).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    return moment.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def _day_key(value: datetime | None) -> str | None:

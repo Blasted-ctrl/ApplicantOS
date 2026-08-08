@@ -89,7 +89,7 @@ then assert on the recording. The single most important test in this subsystem:
 # submit() must click NOTHING when the kill switch is closed
 filler = AutoFiller(fake_session, resolver)
 assert await filler.submit(dry_run=True) is False
-assert fake_page.clicks == []          # <- the assertion that matters
+assert fake_page.clicks == []  # <- the assertion that matters
 ```
 
 Also test: a low-confidence answer lands in `needs_review` rather than being filled; four essay

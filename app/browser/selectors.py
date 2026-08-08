@@ -52,8 +52,8 @@ __all__ = [
     "GREENHOUSE",
     "LEVER",
     "PACKS",
-    "SelectorPack",
     "WORKDAY",
+    "SelectorPack",
     "is_css_selector",
     "pack_for",
     "pack_names",
@@ -74,9 +74,7 @@ _CSS_LEADING_CHARS: Final[tuple[str, ...]] = (".", "#", "[", ":", ">", "*")
 #: example ``form#application-form``, ``input[type=file]`` or ``div.confirmation``. Matched
 #: against the whole marker so that ordinary prose ("This field is required") cannot be
 #: mistaken for markup.
-_CSS_ELEMENT_RE: Final[re.Pattern[str]] = re.compile(
-    r"^[a-zA-Z][a-zA-Z0-9-]*\s*[.#\[:]"
-)
+_CSS_ELEMENT_RE: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*\s*[.#\[:]")
 
 #: A comma-separated selector list where at least one alternative is itself selector-shaped.
 _CSS_LIST_SEPARATOR: Final[str] = ","
@@ -417,8 +415,7 @@ WORKDAY: Final[SelectorPack] = SelectorPack(
     field_container="[data-automation-id='formField'], [data-automation-id*='formField-']",
     label="[data-automation-id='formLabel'], label",
     input=_FILLABLE_CONTROLS + ", [data-automation-id='dropdown'] button",
-    file_input="input[type='file'][data-automation-id='file-upload-input-ref']"
-    ", input[type='file']",
+    file_input="input[type='file'][data-automation-id='file-upload-input-ref'], input[type='file']",
     submit="[data-automation-id='submitButton'], [data-automation-id='wd-CommandButton']",
     success_markers=(
         "Your application has been submitted",

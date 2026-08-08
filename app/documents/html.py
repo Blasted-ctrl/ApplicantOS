@@ -180,8 +180,7 @@ def html_environment() -> Environment:
         from jinja2 import Environment, FileSystemLoader, StrictUndefined
     except ImportError as exc:  # pragma: no cover - exercised only without jinja2
         raise DocumentRenderError(
-            "Jinja2 is required to render HTML templates. Install it with "
-            "`pip install jinja2`."
+            "Jinja2 is required to render HTML templates. Install it with `pip install jinja2`."
         ) from exc
 
     return Environment(
@@ -570,9 +569,7 @@ def _split_line_class() -> type:
             """
             return stringWidth(text, FONT_BOLD if bold else FONT_REGULAR, self.font_size)
 
-        def _wrap_runs(
-            self, first_width: float, full_width: float
-        ) -> list[list[tuple[str, bool]]]:
+        def _wrap_runs(self, first_width: float, full_width: float) -> list[list[tuple[str, bool]]]:
             """Greedily wrap the left-hand runs into lines.
 
             Args:
@@ -821,9 +818,7 @@ def _reportlab_story(doc: ResumeDocument, styles: dict[str, Any]) -> list[Any]:
                 )
             for bullet in entry.bullets:
                 if bullet.strip():
-                    block.append(
-                        Paragraph(_para_text(bullet), styles["bullet"], bulletText="•")
-                    )
+                    block.append(Paragraph(_para_text(bullet), styles["bullet"], bulletText="•"))
             if block:
                 # An entry split across a page break reads as two different jobs.
                 story.append(KeepTogether(block))
@@ -1088,9 +1083,7 @@ class WebTemplate(TemplatePlugin):
 
         if fmt == HTML_FORMAT:
             write_text(out, html)
-            return RenderResult.from_path(
-                out, engine=HTML_ENGINE, template=self.name, page_count=1
-            )
+            return RenderResult.from_path(out, engine=HTML_ENGINE, template=self.name, page_count=1)
 
         engine = await self._write_pdf(
             html,

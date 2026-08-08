@@ -39,7 +39,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, InvalidRequestError
 
-from app.ai.scoring import VERDICT_SKIP, ScoreResult, Scorer, load_rules
+from app.ai.scoring import VERDICT_SKIP, Scorer, ScoreResult, load_rules
 from app.jobs.base import (
     DEFAULT_SEARCH_LIMIT,
     ProviderError,
@@ -62,12 +62,12 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 __all__ = [
     "DEFAULT_KEYWORDS",
     "DEFAULT_POSTED_WITHIN_DAYS",
-    "DiscoveryReport",
-    "DiscoveryService",
     "EVENT_PROVIDER_FAILED",
     "EVENT_PROVIDER_FINISHED",
     "EVENT_PROVIDER_STARTED",
     "RESCORABLE_STATUSES",
+    "DiscoveryReport",
+    "DiscoveryService",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -438,7 +438,7 @@ class DiscoveryService:
                 EVENT_PROVIDER_FAILED, {"provider": name, "reason": type(exc).__name__}
             )
             return
-        except Exception as exc:  # noqa: BLE001 - one broken board never aborts the others
+        except Exception as exc:
             logger.exception(
                 "discovery.provider_crashed",
                 provider=name,
@@ -473,7 +473,7 @@ class DiscoveryService:
         """
         try:
             posting, created = await self._dedupe.upsert(raw)
-        except Exception as exc:  # noqa: BLE001 - one bad advert costs one advert
+        except Exception as exc:
             logger.warning(
                 "discovery.ingest_failed",
                 provider=raw.provider.value,
@@ -780,7 +780,7 @@ class DiscoveryService:
             return
         try:
             await self._progress(event, payload)
-        except Exception as exc:  # noqa: BLE001 - telemetry never aborts a run
+        except Exception as exc:
             logger.warning(
                 "discovery.progress_callback_failed",
                 event=event,

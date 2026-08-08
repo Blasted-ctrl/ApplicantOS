@@ -34,6 +34,9 @@ __all__ = [
     "APPLICATION_POST_SUBMIT_STATES",
     "APPLICATION_PRE_SUBMIT_STATES",
     "APPLICATION_TERMINAL_STATES",
+    "INDEX_TERMINAL_STATES",
+    "POSTING_TERMINAL_STATES",
+    "SESSION_FINISHED_STATES",
     "ATSProviderName",
     "ApplicationStatus",
     "CheckpointStatus",
@@ -42,15 +45,12 @@ __all__ = [
     "EntityKind",
     "FactKind",
     "FieldKind",
-    "INDEX_TERMINAL_STATES",
     "IndexStatus",
     "MemoryKind",
-    "POSTING_TERMINAL_STATES",
     "PluginKind",
     "PostingStatus",
     "RelationKind",
     "ReviewReason",
-    "SESSION_FINISHED_STATES",
     "SessionStatus",
     "SourceKind",
     "StrEnum",
@@ -359,6 +359,15 @@ class ReviewReason(StrEnum):
     UNSUPPORTED_FLOW = "unsupported_flow"
     VERIFICATION_FAILED = "verification_failed"
     RATE_LIMITED = "rate_limited"
+    INSUFFICIENT_KNOWLEDGE = "insufficient_knowledge"
+    """The knowledge graph held nothing relevant, so the resume would have been empty.
+
+    Raised by ``Pipeline.prepare`` when tailoring produces zero facts or zero bullets — most
+    often a user who has finished onboarding but whose sources have not finished indexing.
+    Sending a resume containing only a contact header is worse than not applying, and golden
+    rule #7 means the gap cannot be filled with invented content, so this asks the human to
+    add a source instead.
+    """
 
 
 # ======================================================================================

@@ -659,9 +659,7 @@ class ResumeEngine:
             return []
 
         limit = max(1, int(top_k))
-        retrieved = await self.retriever.retrieve_for_posting(
-            user_id, posting_text, k_facts=limit
-        )
+        retrieved = await self.retriever.retrieve_for_posting(user_id, posting_text, k_facts=limit)
         facts = list(retrieved.facts)
         if not facts:
             logger.info("resume_engine.no_facts_retrieved", user_id=str(user_id))
@@ -670,9 +668,7 @@ class ResumeEngine:
         query_vector = await self._posting_vector(posting_text)
         keywords = set(content_tokens(posting_text))
 
-        scored = [
-            (self._prefilter_score(fact, query_vector, keywords), fact) for fact in facts
-        ]
+        scored = [(self._prefilter_score(fact, query_vector, keywords), fact) for fact in facts]
         scored.sort(key=lambda item: (-item[0], -int(item[1].impact_score or 0), str(item[1].id)))
         ranked = [fact for _score, fact in scored[:limit]]
 
@@ -700,7 +696,7 @@ class ResumeEngine:
             vectors = await embed_texts([posting_text])
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - ranking must survive an embedder outage
+        except Exception as exc:
             logger.warning("resume_engine.embedding_unavailable", error=str(exc))
             return None
         if not vectors or not vectors[0] or not any(vectors[0]):
@@ -748,11 +744,7 @@ class ResumeEngine:
                 overlap = len(fact_tokens & keywords) / len(keywords)
 
         impact = min(1.0, max(0, int(fact.impact_score or 0)) / MAX_IMPACT_SCORE)
-        return (
-            SIMILARITY_WEIGHT * similarity
-            + KEYWORD_WEIGHT * overlap
-            + IMPACT_WEIGHT * impact
-        )
+        return SIMILARITY_WEIGHT * similarity + KEYWORD_WEIGHT * overlap + IMPACT_WEIGHT * impact
 
     # ----------------------------------------------------------------------------------
     # Tailoring
@@ -794,7 +786,7 @@ class ResumeEngine:
             result = self._assemble(req, facts, payload, usage)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - any model failure degrades, never raises
+        except Exception as exc:
             logger.warning(
                 "resume_engine.llm_failed",
                 posting=str(req.posting.id or ""),
@@ -899,7 +891,7 @@ class ResumeEngine:
 
         try:
             skills = extract_skills(req.posting_text())
-        except Exception as exc:  # noqa: BLE001 - a hint is not worth failing a generation
+        except Exception as exc:
             logger.debug("resume_engine.skill_extraction_failed", error=str(exc))
             return ABSENT_FIELD
         return SKILLS_SEPARATOR.join(skills[:MAX_SKILLS_ON_LINE]) or ABSENT_FIELD
@@ -936,9 +928,20 @@ class ResumeEngine:
                 _one_line(fact.role, MAX_TITLE_CHARS) or ABSENT_FIELD,
                 _format_date_range(fact) or ABSENT_FIELD,
                 _one_line(fact.text, MAX_FACT_TEXT_CHARS),
-                "skills: " + (SKILLS_SEPARATOR.join(list(fact.skills or ())[:MAX_FACT_SKILLS]) or ABSENT_FIELD),
-                "tech: " + (SKILLS_SEPARATOR.join(list(fact.technologies or ())[:MAX_FACT_SKILLS]) or ABSENT_FIELD),
-                "metrics: " + (SKILLS_SEPARATOR.join(list(fact.metrics or ())[:MAX_FACT_SKILLS]) or ABSENT_FIELD),
+                "skills: "
+                + (
+                    SKILLS_SEPARATOR.join(list(fact.skills or ())[:MAX_FACT_SKILLS]) or ABSENT_FIELD
+                ),
+                "tech: "
+                + (
+                    SKILLS_SEPARATOR.join(list(fact.technologies or ())[:MAX_FACT_SKILLS])
+                    or ABSENT_FIELD
+                ),
+                "metrics: "
+                + (
+                    SKILLS_SEPARATOR.join(list(fact.metrics or ())[:MAX_FACT_SKILLS])
+                    or ABSENT_FIELD
+                ),
             )
             lines.append(FACT_FIELD_SEPARATOR.join(parts))
         return "\n".join(lines)
@@ -947,9 +950,7 @@ class ResumeEngine:
     # Validation — golden rule #7
     # ----------------------------------------------------------------------------------
 
-    def validate(
-        self, payload: Mapping[str, Any], facts: Sequence[KnowledgeFact]
-    ) -> list[_Group]:
+    def validate(self, payload: Mapping[str, Any], facts: Sequence[KnowledgeFact]) -> list[_Group]:
         """Turn a model reply into groups of bullets that are all provably sourced.
 
         This is the whole trustworthiness story of the product, and it assumes the model is
@@ -1161,9 +1162,7 @@ class ResumeEngine:
 
         ordered = sorted(sections.values(), key=lambda item: _heading_rank(item.heading))
         priorities = {
-            bullet.fact_id: float(bullet.impact)
-            for group in groups
-            for bullet in group.bullets
+            bullet.fact_id: float(bullet.impact) for group in groups for bullet in group.bullets
         }
 
         return ResumeDocument(
@@ -1391,9 +1390,7 @@ class ResumeEngine:
     # Deterministic fallback
     # ----------------------------------------------------------------------------------
 
-    def fallback_tailor(
-        self, req: TailorRequest, facts: Sequence[KnowledgeFact]
-    ) -> TailorResult:
+    def fallback_tailor(self, req: TailorRequest, facts: Sequence[KnowledgeFact]) -> TailorResult:
         """Build a résumé from *facts* with no language model at all.
 
         Called whenever the LLM path fails, and callable directly by anything that wants a
@@ -1518,19 +1515,21 @@ class ResumeEngine:
             payload = await self.cache.get(key)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a cache outage must not fail a generation
+        except Exception as exc:
             logger.warning("resume_engine.cache_unavailable", error=str(exc))
             return None
         if not isinstance(payload, Mapping):
             return None
         try:
             document = ResumeDocument.model_validate(payload.get("document"))
-        except Exception as exc:  # noqa: BLE001 - stale shape, regenerate instead
+        except Exception as exc:
             logger.info("resume_engine.cache_stale", error=str(exc))
             return None
         return TailorResult(
             document=document,
-            selected_fact_ids=[str(item) for item in _as_sequence(payload.get("selected_fact_ids"))],
+            selected_fact_ids=[
+                str(item) for item in _as_sequence(payload.get("selected_fact_ids"))
+            ],
             reasoning=_as_text(payload.get("reasoning")),
             token_usage={
                 str(name): int(value)
@@ -1559,7 +1558,7 @@ class ResumeEngine:
             await self.cache.set(key, payload, ttl=TAILOR_CACHE_TTL_SECONDS)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a write failure costs a cache hit, nothing more
+        except Exception as exc:
             logger.warning("resume_engine.cache_write_failed", error=str(exc))
 
 

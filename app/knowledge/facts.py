@@ -429,9 +429,7 @@ class _Draft:
         self.technologies = _union(self.technologies, other.technologies)
         self.metrics = _union(self.metrics, other.metrics)
         self.impact_score = max(self.impact_score, other.impact_score)
-        self.confidence = KnowledgeStore.reinforce_confidence(
-            self.confidence, other.confidence
-        )
+        self.confidence = KnowledgeStore.reinforce_confidence(self.confidence, other.confidence)
         self.source_uri = self.source_uri or other.source_uri
         return self
 
@@ -653,9 +651,7 @@ class FactStore(KnowledgeStore):
         if vectors:
             merged += await self._merge_near_duplicates(user_id, survivors)
 
-        inserted = await self._insert(
-            user_id, survivors, source_document_id=source_document_id
-        )
+        inserted = await self._insert(user_id, survivors, source_document_id=source_document_id)
         await self.session.flush()
         await self._store_vectors(user_id, inserted)
 
@@ -735,9 +731,7 @@ class FactStore(KnowledgeStore):
             row: The incumbent row, which owns identity.
             draft: The incoming claim.
         """
-        _Draft.from_row(row).merge(draft).apply_to(
-            row, freeze_identity=bool(row.user_verified)
-        )
+        _Draft.from_row(row).merge(draft).apply_to(row, freeze_identity=bool(row.user_verified))
 
     @staticmethod
     def _collapse_near_duplicates(
@@ -802,9 +796,7 @@ class FactStore(KnowledgeStore):
         if not survivors:
             return 0
 
-        fallback = (
-            await self._embedded_facts(user_id) if self.vector_store is None else None
-        )
+        fallback = await self._embedded_facts(user_id) if self.vector_store is None else None
         merged = 0
         remaining: list[tuple[_Draft, list[float]]] = []
 
@@ -888,9 +880,7 @@ class FactStore(KnowledgeStore):
                 best_row = row
         return (best_row, best_score) if best_row is not None else (None, 0.0)
 
-    async def _embedded_facts(
-        self, user_id: uuid.UUID
-    ) -> list[tuple[KnowledgeFact, list[float]]]:
+    async def _embedded_facts(self, user_id: uuid.UUID) -> list[tuple[KnowledgeFact, list[float]]]:
         """Load the user's most recent embedded active facts for the Python sweep.
 
         Args:
@@ -944,9 +934,7 @@ class FactStore(KnowledgeStore):
         await self.session.flush()
         return rows
 
-    async def _store_vectors(
-        self, user_id: uuid.UUID, rows: Sequence[KnowledgeFact]
-    ) -> int:
+    async def _store_vectors(self, user_id: uuid.UUID, rows: Sequence[KnowledgeFact]) -> int:
         """Write the vector records for *rows*, skipping those without an embedding.
 
         Args:
@@ -956,9 +944,7 @@ class FactStore(KnowledgeStore):
         Returns:
             The number of vector records written.
         """
-        records = [
-            _vector_record(row, user_id) for row in rows if row.embedding is not None
-        ]
+        records = [_vector_record(row, user_id) for row in rows if row.embedding is not None]
         return await self.vector_upsert(FACT_COLLECTION, records) if records else 0
 
     # ----------------------------------------------------------------------------------
@@ -1077,15 +1063,11 @@ class FactStore(KnowledgeStore):
         conditions = []
         for keyword in keywords:
             pattern = _like_pattern(keyword)
-            conditions.append(
-                KnowledgeFact.normalized_text.like(pattern, escape=_LIKE_ESCAPE)
-            )
+            conditions.append(KnowledgeFact.normalized_text.like(pattern, escape=_LIKE_ESCAPE))
             conditions.append(
                 func.lower(KnowledgeFact.organization).like(pattern, escape=_LIKE_ESCAPE)
             )
-            conditions.append(
-                func.lower(KnowledgeFact.role).like(pattern, escape=_LIKE_ESCAPE)
-            )
+            conditions.append(func.lower(KnowledgeFact.role).like(pattern, escape=_LIKE_ESCAPE))
 
         statement = select(KnowledgeFact).where(
             KnowledgeFact.user_id == user_id,
@@ -1158,9 +1140,7 @@ class FactStore(KnowledgeStore):
         found: dict[uuid.UUID, KnowledgeFact] = {}
         for chunk in chunked(unique):
             statement = (
-                select(KnowledgeFact)
-                .where(KnowledgeFact.id.in_(chunk))
-                .options(*_LOAD_OPTIONS)
+                select(KnowledgeFact).where(KnowledgeFact.id.in_(chunk)).options(*_LOAD_OPTIONS)
             )
             for row in (await self.session.execute(statement)).scalars().all():
                 found[row.id] = row
@@ -1249,9 +1229,7 @@ class FactStore(KnowledgeStore):
         await self.session.flush()
 
         if row.embedding is not None and row.is_active:
-            await self.vector_upsert(
-                FACT_COLLECTION, [_vector_record(row, row.user_id)]
-            )
+            await self.vector_upsert(FACT_COLLECTION, [_vector_record(row, row.user_id)])
         logger.info("facts.text_updated", fact_id=str(fact_id))
         return row
 
@@ -1276,9 +1254,7 @@ class FactStore(KnowledgeStore):
         counts: dict[str, int] = {
             STATS_TOTAL: await self._count(user_id),
             STATS_ACTIVE: await self._count(user_id, KnowledgeFact.is_active.is_(True)),
-            STATS_VERIFIED: await self._count(
-                user_id, KnowledgeFact.user_verified.is_(True)
-            ),
+            STATS_VERIFIED: await self._count(user_id, KnowledgeFact.user_verified.is_(True)),
             STATS_EMBEDDED: await self._count(user_id, self._embedding_present()),
         }
 

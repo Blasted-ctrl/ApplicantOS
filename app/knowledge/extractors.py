@@ -59,13 +59,13 @@ __all__ = [
     "ACTION_VERBS",
     "CONCEPT_SKILLS",
     "FILLER_PHRASES",
-    "KnowledgeExtractor",
     "LEADERSHIP_TERMS",
     "MAX_IMPACT",
     "MIN_IMPACT",
     "MIN_SOURCE_OVERLAP",
     "SCALE_TERMS",
     "SKILL_VOCABULARY",
+    "KnowledgeExtractor",
     "canonical_skill",
     "classify_skills",
     "detect_project_name",
@@ -322,27 +322,136 @@ CONCEPT_SKILLS: Final[frozenset[str]] = frozenset(
 #: "designed" into "design" in "design document", which is not a claim at all.
 ACTION_VERBS: Final[frozenset[str]] = frozenset(
     {
-        "accelerated", "accelerate", "achieved", "achieve", "architected", "architect",
-        "authored", "author", "automated", "automate", "benchmarked", "benchmark",
-        "boosted", "boost", "built", "build", "calibrated", "calibrate", "characterized",
-        "collaborated", "containerized", "converted", "coordinated", "coordinate",
-        "created", "create", "cut", "debugged", "debug", "delivered", "deliver",
-        "deployed", "deploy", "designed", "design", "developed", "develop", "diagnosed",
-        "doubled", "drove", "drive", "eliminated", "eliminate", "engineered", "engineer",
-        "enhanced", "established", "expanded", "extended", "fabricated", "fixed",
-        "founded", "generated", "halved", "hardened", "implemented", "implement",
-        "improved", "improve", "increased", "increase", "instrumented", "integrated",
-        "integrate", "introduced", "launched", "launch", "led", "lead", "mentored",
-        "mentor", "migrated", "migrate", "minimized", "modeled", "modernized",
-        "monitored", "negotiated", "optimized", "optimize", "orchestrated", "organized",
-        "overhauled", "parallelized", "pioneered", "ported", "port", "prototyped",
-        "prototype", "presented", "profiled", "published", "quantized", "ranked",
-        "rearchitected", "rebuilt", "redesigned", "reduced", "reduce", "refactored",
-        "refactor", "rewrote", "resolved", "restructured", "saved", "scaled", "scale",
-        "secured", "shipped", "ship", "simulated", "simplified", "solved",
-        "spearheaded", "standardized", "streamlined", "strengthened", "supervised",
-        "taught", "tested", "trained", "tripled", "tuned", "tune", "validated",
-        "vectorized", "verified", "won", "wrote", "write",
+        "accelerated",
+        "accelerate",
+        "achieved",
+        "achieve",
+        "architected",
+        "architect",
+        "authored",
+        "author",
+        "automated",
+        "automate",
+        "benchmarked",
+        "benchmark",
+        "boosted",
+        "boost",
+        "built",
+        "build",
+        "calibrated",
+        "calibrate",
+        "characterized",
+        "collaborated",
+        "containerized",
+        "converted",
+        "coordinated",
+        "coordinate",
+        "created",
+        "create",
+        "cut",
+        "debugged",
+        "debug",
+        "delivered",
+        "deliver",
+        "deployed",
+        "deploy",
+        "designed",
+        "design",
+        "developed",
+        "develop",
+        "diagnosed",
+        "doubled",
+        "drove",
+        "drive",
+        "eliminated",
+        "eliminate",
+        "engineered",
+        "engineer",
+        "enhanced",
+        "established",
+        "expanded",
+        "extended",
+        "fabricated",
+        "fixed",
+        "founded",
+        "generated",
+        "halved",
+        "hardened",
+        "implemented",
+        "implement",
+        "improved",
+        "improve",
+        "increased",
+        "increase",
+        "instrumented",
+        "integrated",
+        "integrate",
+        "introduced",
+        "launched",
+        "launch",
+        "led",
+        "lead",
+        "mentored",
+        "mentor",
+        "migrated",
+        "migrate",
+        "minimized",
+        "modeled",
+        "modernized",
+        "monitored",
+        "negotiated",
+        "optimized",
+        "optimize",
+        "orchestrated",
+        "organized",
+        "overhauled",
+        "parallelized",
+        "pioneered",
+        "ported",
+        "port",
+        "prototyped",
+        "prototype",
+        "presented",
+        "profiled",
+        "published",
+        "quantized",
+        "ranked",
+        "rearchitected",
+        "rebuilt",
+        "redesigned",
+        "reduced",
+        "reduce",
+        "refactored",
+        "refactor",
+        "rewrote",
+        "resolved",
+        "restructured",
+        "saved",
+        "scaled",
+        "scale",
+        "secured",
+        "shipped",
+        "ship",
+        "simulated",
+        "simplified",
+        "solved",
+        "spearheaded",
+        "standardized",
+        "streamlined",
+        "strengthened",
+        "supervised",
+        "taught",
+        "tested",
+        "trained",
+        "tripled",
+        "tuned",
+        "tune",
+        "validated",
+        "vectorized",
+        "verified",
+        "won",
+        "wrote",
+        "write",
     }
 )
 
@@ -372,18 +481,54 @@ FILLER_PHRASES: Final[tuple[str, ...]] = (
 
 #: Words that signal ownership or direction of other people's work.
 LEADERSHIP_TERMS: Final[tuple[str, ...]] = (
-    "led", "lead", "leading", "owned", "ownership", "founded", "co-founded",
-    "mentored", "mentoring", "managed", "managing", "directed", "spearheaded",
-    "captain", "president", "chair", "head of", "principal", "supervised",
-    "coordinated", "taught", "trained", "organized", "team lead", "tech lead",
+    "led",
+    "lead",
+    "leading",
+    "owned",
+    "ownership",
+    "founded",
+    "co-founded",
+    "mentored",
+    "mentoring",
+    "managed",
+    "managing",
+    "directed",
+    "spearheaded",
+    "captain",
+    "president",
+    "chair",
+    "head of",
+    "principal",
+    "supervised",
+    "coordinated",
+    "taught",
+    "trained",
+    "organized",
+    "team lead",
+    "tech lead",
 )
 
 #: Words that signal the work happened at real scale rather than in a sandbox.
 SCALE_TERMS: Final[tuple[str, ...]] = (
-    "production", "enterprise", "nationwide", "company-wide", "org-wide",
-    "large-scale", "high-throughput", "high-availability", "real-time", "24/7",
-    "fleet", "cross-functional", "team of", "customers", "end users", "deployed to",
-    "flight", "safety-critical", "mission-critical",
+    "production",
+    "enterprise",
+    "nationwide",
+    "company-wide",
+    "org-wide",
+    "large-scale",
+    "high-throughput",
+    "high-availability",
+    "real-time",
+    "24/7",
+    "fleet",
+    "cross-functional",
+    "team of",
+    "customers",
+    "end users",
+    "deployed to",
+    "flight",
+    "safety-critical",
+    "mission-critical",
 )
 
 
@@ -707,15 +852,29 @@ def extract_metrics(text: str) -> list[str]:
 
 #: Month name (or three-letter abbreviation) → month number.
 _MONTH_NUMBERS: Final[dict[str, int]] = {
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
 }
 
 #: Season → the month a resume reader would understand it as. Northern-hemisphere academic
 #: convention, which is what "Summer 2025 internship" means on every resume this product
 #: will ever see.
 _SEASON_MONTHS: Final[dict[str, int]] = {
-    "spring": 3, "summer": 6, "fall": 9, "autumn": 9, "winter": 12,
+    "spring": 3,
+    "summer": 6,
+    "fall": 9,
+    "autumn": 9,
+    "winter": 12,
 }
 
 #: Sentinel returned by the atom parser for "Present"/"Current"/"Ongoing". A distinct
@@ -857,10 +1016,39 @@ _WHITESPACE_RUN: Final[re.Pattern[str]] = re.compile(r"\s+")
 
 #: Leading tokens that mark a line as a shell command or code rather than a claim.
 _CODE_LINE_PREFIXES: Final[tuple[str, ...]] = (
-    "pip ", "npm ", "yarn ", "pnpm ", "sudo ", "apt ", "brew ", "git clone", "cd ",
-    "make ", "cmake ", "docker ", "curl ", "wget ", "export ", "source ", "./",
-    "$ ", "> ", "python -m", "cargo ", "go run", "go build", "#include", "import ",
-    "from ", "def ", "class ", "function ", "const ", "let ", "var ", "return ",
+    "pip ",
+    "npm ",
+    "yarn ",
+    "pnpm ",
+    "sudo ",
+    "apt ",
+    "brew ",
+    "git clone",
+    "cd ",
+    "make ",
+    "cmake ",
+    "docker ",
+    "curl ",
+    "wget ",
+    "export ",
+    "source ",
+    "./",
+    "$ ",
+    "> ",
+    "python -m",
+    "cargo ",
+    "go run",
+    "go build",
+    "#include",
+    "import ",
+    "from ",
+    "def ",
+    "class ",
+    "function ",
+    "const ",
+    "let ",
+    "var ",
+    "return ",
 )
 
 
@@ -950,14 +1138,14 @@ def split_bullets(text: str) -> list[str]:
         heading = _MARKDOWN_HEADING.match(line)
         if heading:
             flush()
-            current.append(line[heading.end():])
+            current.append(line[heading.end() :])
             flush()
             continue
 
         marker = _BULLET_MARKER.match(line)
         if marker:
             flush()
-            current.append(line[marker.end():])
+            current.append(line[marker.end() :])
         else:
             current.append(line.strip())
 
@@ -1143,11 +1331,38 @@ _RULE_PROJECT_CONFIDENCE: Final[float] = 0.60
 #: Titles that are document structure, not project names.
 _GENERIC_TITLES: Final[frozenset[str]] = frozenset(
     {
-        "readme", "read me", "documentation", "docs", "introduction", "intro", "about",
-        "overview", "getting started", "quick start", "quickstart", "installation",
-        "install", "usage", "table of contents", "contents", "contributing", "license",
-        "changelog", "features", "requirements", "setup", "build", "roadmap", "faq",
-        "index", "home", "projects", "portfolio", "resume", "cv", "experience",
+        "readme",
+        "read me",
+        "documentation",
+        "docs",
+        "introduction",
+        "intro",
+        "about",
+        "overview",
+        "getting started",
+        "quick start",
+        "quickstart",
+        "installation",
+        "install",
+        "usage",
+        "table of contents",
+        "contents",
+        "contributing",
+        "license",
+        "changelog",
+        "features",
+        "requirements",
+        "setup",
+        "build",
+        "roadmap",
+        "faq",
+        "index",
+        "home",
+        "projects",
+        "portfolio",
+        "resume",
+        "cv",
+        "experience",
     }
 )
 
@@ -1386,10 +1601,50 @@ MIN_SOURCE_OVERLAP: Final[float] = 0.5
 #: hallucination pass on grammar alone.
 _OVERLAP_STOPWORDS: Final[frozenset[str]] = frozenset(
     {
-        "a", "an", "and", "as", "at", "be", "by", "for", "from", "in", "into", "is",
-        "it", "its", "of", "on", "or", "that", "the", "their", "this", "to", "was",
-        "were", "with", "which", "while", "using", "used", "use", "we", "i", "my",
-        "our", "also", "over", "than", "then", "so", "but", "not", "no", "all", "any",
+        "a",
+        "an",
+        "and",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "their",
+        "this",
+        "to",
+        "was",
+        "were",
+        "with",
+        "which",
+        "while",
+        "using",
+        "used",
+        "use",
+        "we",
+        "i",
+        "my",
+        "our",
+        "also",
+        "over",
+        "than",
+        "then",
+        "so",
+        "but",
+        "not",
+        "no",
+        "all",
+        "any",
     }
 )
 
@@ -1587,7 +1842,7 @@ def _load_prompt(name: str, default: str) -> str:
         from app.ai import prompts
     except ImportError:
         return default
-    except Exception as exc:  # noqa: BLE001 - a broken prompt package must not stop us
+    except Exception as exc:
         logger.warning("extractor.prompt_package_failed", prompt=name, error=str(exc))
         return default
 
@@ -1595,7 +1850,7 @@ def _load_prompt(name: str, default: str) -> str:
     if callable(getter):
         try:
             rendered = getter(name)
-        except Exception as exc:  # noqa: BLE001 - fall through to the constant lookup
+        except Exception as exc:
             logger.debug("extractor.prompt_lookup_failed", prompt=name, error=str(exc))
         else:
             if isinstance(rendered, str) and rendered.strip():
@@ -1618,9 +1873,7 @@ def _content_tokens(text: str) -> set[str]:
         Lowercased word tokens with stopwords removed.
     """
     return {
-        token
-        for token in _WORD_TOKEN.findall(text.casefold())
-        if token not in _OVERLAP_STOPWORDS
+        token for token in _WORD_TOKEN.findall(text.casefold()) if token not in _OVERLAP_STOPWORDS
     }
 
 
@@ -1767,7 +2020,7 @@ class KnowledgeExtractor:
             from app.ai.llm import get_llm
 
             self._llm = get_llm("fast")
-        except Exception as exc:  # noqa: BLE001 - any failure means "no model available"
+        except Exception as exc:
             logger.info("extractor.llm_unavailable", error=str(exc))
             return None
         return self._llm
@@ -1899,7 +2152,9 @@ class KnowledgeExtractor:
             ] or extract_metrics(text)
 
             fact_kind = FactKind.coerce(item.get("kind"), kind) or kind
-            fact_organization = _grounded(item.get("organization"), source_normalized) or organization
+            fact_organization = (
+                _grounded(item.get("organization"), source_normalized) or organization
+            )
             fact_role = _grounded(item.get("role"), source_normalized) or role
             date_start, date_end = self._validated_dates(item, source, document_start, document_end)
 
@@ -1946,7 +2201,9 @@ class KnowledgeExtractor:
         start = item.get("date_start")
         end = item.get("date_end")
         if isinstance(start, str) and start[:4].isdigit() and start[:4] in source:
-            resolved_end = end if isinstance(end, str) and end[:4].isdigit() and end[:4] in source else None
+            resolved_end = (
+                end if isinstance(end, str) and end[:4].isdigit() and end[:4] in source else None
+            )
             return (start.strip(), resolved_end.strip() if resolved_end else None)
         return (document_start, document_end)
 
@@ -2136,7 +2393,7 @@ class KnowledgeExtractor:
                 ),
                 schema=FACTS_JSON_SCHEMA,
             )
-        except Exception as exc:  # noqa: BLE001 - every model failure degrades gracefully
+        except Exception as exc:
             return fallback(f"{type(exc).__name__}: {exc}"[:200])
 
         facts = self._validate_facts(
@@ -2165,7 +2422,7 @@ class KnowledgeExtractor:
                 ),
                 schema=ENTITIES_JSON_SCHEMA,
             )
-        except Exception as exc:  # noqa: BLE001 - facts survive an entity-call failure
+        except Exception as exc:
             logger.info(
                 "extractor.fallback_rule_based",
                 reason=f"entities:{type(exc).__name__}",

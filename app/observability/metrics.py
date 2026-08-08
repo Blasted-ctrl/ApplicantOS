@@ -116,26 +116,66 @@ _UNKNOWN_LABEL: Final[str] = "unknown"
 #: page load, field discovery, uploads, verification. Buckets below one second exist only
 #: to make a *dry run* (which never opens a browser) distinguishable from a real attempt.
 APPLY_DURATION_BUCKETS: Final[tuple[float, ...]] = (
-    0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0, 300.0,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    45.0,
+    60.0,
+    90.0,
+    120.0,
+    180.0,
+    300.0,
 )
 
 #: Bucket ladder for one analyzer pass over one knowledge source. A fingerprint-skip is
 #: milliseconds; a cold GitHub crawl of 200 repositories is minutes.
 INDEX_DURATION_BUCKETS: Final[tuple[float, ...]] = (
-    0.01, 0.05, 0.25, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+    0.01,
+    0.05,
+    0.25,
+    1.0,
+    5.0,
+    15.0,
+    30.0,
+    60.0,
+    120.0,
+    300.0,
+    600.0,
 )
 
 #: Bucket ladder for a Celery task. Spans the same range as an apply flow because
 #: ``apply.run_one`` *is* one.
 TASK_DURATION_BUCKETS: Final[tuple[float, ...]] = (
-    0.01, 0.05, 0.25, 1.0, 5.0, 15.0, 60.0, 180.0, 600.0,
+    0.01,
+    0.05,
+    0.25,
+    1.0,
+    5.0,
+    15.0,
+    60.0,
+    180.0,
+    600.0,
 )
 
 #: Bucket ladder for an HTTP request. The desktop app's interaction budget is 50ms and its
 #: route-change budget is 100ms (``docs/CONTRACTS.md`` §18), so the ladder is dense there
 #: and coarse afterwards — a request over a second has already missed every budget.
 HTTP_DURATION_BUCKETS: Final[tuple[float, ...]] = (
-    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
 )
 
 
@@ -539,7 +579,9 @@ def _format_labels(names: Sequence[str], values: Sequence[str], extra: str = "")
     Returns:
         The bracketed label block, or an empty string when there are no labels.
     """
-    pairs = [f'{name}="{_escape_label_value(value)}"' for name, value in zip(names, values, strict=True)]
+    pairs = [
+        f'{name}="{_escape_label_value(value)}"' for name, value in zip(names, values, strict=True)
+    ]
     if extra:
         pairs.append(extra)
     return "{" + ",".join(pairs) + "}" if pairs else ""
@@ -673,15 +715,18 @@ def _counter(name: str, documentation: str, labelnames: Sequence[str] = ()) -> A
         The counter collector.
     """
     if _prometheus is None:
+
         def build() -> Any:
             metric = _FallbackCounter(name, documentation, labelnames)
             registry.register(metric)
             return metric
     else:
+
         def build() -> Any:
             return _prometheus.Counter(
                 name, documentation, labelnames=list(labelnames), registry=registry
             )
+
     return _register(name, build)
 
 
@@ -697,15 +742,18 @@ def _gauge(name: str, documentation: str, labelnames: Sequence[str] = ()) -> Any
         The gauge collector.
     """
     if _prometheus is None:
+
         def build() -> Any:
             metric = _FallbackGauge(name, documentation, labelnames)
             registry.register(metric)
             return metric
     else:
+
         def build() -> Any:
             return _prometheus.Gauge(
                 name, documentation, labelnames=list(labelnames), registry=registry
             )
+
     return _register(name, build)
 
 
@@ -728,11 +776,13 @@ def _histogram(
         The histogram collector.
     """
     if _prometheus is None:
+
         def build() -> Any:
             metric = _FallbackHistogram(name, documentation, labelnames, buckets=buckets)
             registry.register(metric)
             return metric
     else:
+
         def build() -> Any:
             return _prometheus.Histogram(
                 name,
@@ -741,6 +791,7 @@ def _histogram(
                 buckets=list(buckets),
                 registry=registry,
             )
+
     return _register(name, build)
 
 
@@ -889,7 +940,7 @@ def _safe(action: str, operation: Any) -> None:
     """
     try:
         operation()
-    except Exception as exc:  # noqa: BLE001 - a metric must never break the caller
+    except Exception as exc:
         logger.debug("metrics.record_failed", metric=action, error=str(exc))
 
 
@@ -942,9 +993,7 @@ def record_application(status: Any, provider: Any = None) -> None:
     """
     _safe(
         "applications",
-        lambda: APPLICATIONS.labels(
-            status=_label(status), provider=_label(provider)
-        ).inc(),
+        lambda: APPLICATIONS.labels(status=_label(status), provider=_label(provider)).inc(),
     )
 
 
@@ -1052,9 +1101,7 @@ def record_document_rendered(engine: str, outcome: str) -> None:
     """
     _safe(
         "documents_rendered",
-        lambda: DOCUMENTS_RENDERED.labels(
-            engine=_label(engine), outcome=_label(outcome)
-        ).inc(),
+        lambda: DOCUMENTS_RENDERED.labels(engine=_label(engine), outcome=_label(outcome)).inc(),
     )
 
 
@@ -1082,9 +1129,7 @@ def observe_knowledge_index(analyzer: str, seconds: float) -> None:
         return
     _safe(
         "knowledge_index_duration",
-        lambda: KNOWLEDGE_INDEX_DURATION.labels(analyzer=_label(analyzer)).observe(
-            float(seconds)
-        ),
+        lambda: KNOWLEDGE_INDEX_DURATION.labels(analyzer=_label(analyzer)).observe(float(seconds)),
     )
 
 
@@ -1181,6 +1226,6 @@ def render_metrics() -> tuple[bytes, str]:
         payload: bytes = _prometheus.generate_latest(registry)
         content_type: str = getattr(_prometheus, "CONTENT_TYPE_LATEST", CONTENT_TYPE)
         return payload, content_type
-    except Exception as exc:  # noqa: BLE001 - a scrape must always answer
+    except Exception as exc:
         logger.warning("metrics.render_failed", error=str(exc))
         return b"", CONTENT_TYPE

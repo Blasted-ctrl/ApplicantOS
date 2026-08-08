@@ -40,9 +40,16 @@ raw fragments, before any posting is reassembled into text or converted into a
 from __future__ import annotations
 
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from contextlib import aclosing
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, ClassVar, Final
 
 import structlog
@@ -67,7 +74,12 @@ from app.jobs.base import (
     SearchQuery,
 )
 from app.jobs.seeds import boards_from_query
-from app.models.enums import ATSProviderName, EmploymentType, PluginKind, WorkArrangement
+from app.models.enums import (
+    ATSProviderName,
+    EmploymentType,
+    PluginKind,
+    WorkArrangement,
+)
 from app.plugins.base import PluginMeta
 from app.plugins.registry import plugin
 
@@ -77,12 +89,12 @@ __all__ = [
     "BOARD_PAGE_TTL_SECONDS",
     "HEALTHCHECK_COMPANY",
     "JOB_URL_TEMPLATE",
-    "LeverProvider",
     "MAX_LOOKUP_COMPANIES",
     "MAX_PAGES_PER_COMPANY",
     "PAGE_SIZE",
     "POSTING_TTL_SECONDS",
     "SELECTOR_PACK",
+    "LeverProvider",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -208,7 +220,7 @@ _NON_LETTER_RE: Final[re.Pattern[str]] = re.compile(r"[^a-z]")
 
 #: Sort key for a posting whose ``createdAt`` could not be parsed, so that undated postings
 #: sort last under ``reverse=True``. An absent date is not a claim of freshness.
-_UNDATED: Final[datetime] = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_UNDATED: Final[datetime] = datetime(1970, 1, 1, tzinfo=UTC)
 
 #: Markers looked for inside a ``categories.commitment`` value, in decreasing order of
 #: specificity; the first that appears wins.
@@ -572,9 +584,7 @@ def _ordered(jobs: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     Returns:
         The same postings, newest first, with undated ones last.
     """
-    return sorted(
-        jobs, key=lambda job: parse_date(job.get("createdAt")) or _UNDATED, reverse=True
-    )
+    return sorted(jobs, key=lambda job: parse_date(job.get("createdAt")) or _UNDATED, reverse=True)
 
 
 def _keyword_haystacks(job: Mapping[str, Any], title: str) -> list[str]:
@@ -740,7 +750,11 @@ class LeverProvider(ATSProvider):
             ProviderError: On any transport or status failure. Cache backends degrade
                 silently on their own errors, so a failure here is always the ATS.
         """
-        from app.cache import NAMESPACES, get_cache, make_key  # noqa: PLC0415 - lazy by policy
+        from app.cache import (
+            NAMESPACES,
+            get_cache,
+            make_key,
+        )
 
         cache = get_cache()
         key = make_key(NAMESPACES.POSTING, self.provider_name.value, *key_parts)

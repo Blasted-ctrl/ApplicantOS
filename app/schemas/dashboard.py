@@ -31,12 +31,12 @@ from pydantic import Field, computed_field
 from app.schemas.common import Schema
 
 __all__ = [
+    "MIN_INSIGHT_SAMPLE_SIZE",
     "AnalyticsOverview",
     "DashboardStats",
     "FunnelStage",
     "InsightItem",
     "InsightSentiment",
-    "MIN_INSIGHT_SAMPLE_SIZE",
     "TimeseriesPoint",
 ]
 

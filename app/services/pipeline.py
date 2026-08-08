@@ -491,6 +491,34 @@ class Pipeline:
                 payload={"created": created},
             )
             summary = await self._generate_documents(application, user, posting)
+
+            # Golden rule #7 has a corollary nobody wrote down: if the knowledge graph holds
+            # nothing relevant, the honest output is an *empty* resume — and we may not fill
+            # the gap with invented content. Without this check `prepare` cheerfully marks
+            # that ready to send. The usual cause is a user who finished onboarding before
+            # their sources finished indexing, and the result is a PDF containing only a
+            # contact header. Not applying is strictly better than applying with that.
+            if summary.get("bullets", 0) <= 0 or summary.get("facts", 0) <= 0:
+                self._log.warning(
+                    "pipeline.prepare_empty_resume",
+                    application_id=str(application.id),
+                    bullets=summary.get("bullets", 0),
+                    facts=summary.get("facts", 0),
+                )
+                await self._applications.mark_needs_review(
+                    application,
+                    ReviewReason.INSUFFICIENT_KNOWLEDGE,
+                    payload={
+                        **summary,
+                        "hint": (
+                            "No relevant experience was found for this role, so the resume "
+                            "would have been empty. Add a knowledge source (GitHub, a project "
+                            "folder, or an existing resume) and index it, then retry."
+                        ),
+                    },
+                )
+                return application
+
             await self._applications.transition(
                 application,
                 ApplicationStatus.READY,
@@ -499,7 +527,7 @@ class Pipeline:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a broken stage becomes a failed row
+        except Exception as exc:
             await self._fail(application, exc, stage=_STAGE_PREPARE)
             log.warning(
                 "pipeline.prepare_failed",
@@ -727,17 +755,13 @@ class Pipeline:
 
         # -- 1. never apply twice (golden rule #1) --------------------------------------
         if application.status.is_post_submit():
-            log.warning(
-                "pipeline.submit_refused_already_applied", status=application.status.value
-            )
+            log.warning("pipeline.submit_refused_already_applied", status=application.status.value)
             return self._result(
                 VERDICT_ALREADY_APPLIED,
                 _STAGE_GUARD,
                 application,
                 started,
-                message=(
-                    f"Already applied — this application is {application.status.value}."
-                ),
+                message=(f"Already applied — this application is {application.status.value}."),
             )
         if not application.can_submit:
             log.info("pipeline.submit_refused_terminal", status=application.status.value)
@@ -756,8 +780,7 @@ class Pipeline:
                 application,
                 started,
                 message=(
-                    f"Application is {application.status.value}, not ready; "
-                    "prepare it first."
+                    f"Application is {application.status.value}, not ready; prepare it first."
                 ),
             )
 
@@ -894,8 +917,9 @@ class Pipeline:
             # know whether it was sent, and a human checking their inbox settles it in
             # seconds. Shielded so the cleanup is not itself cancelled mid-write.
             if submitting_committed:
-                await self._abandon_in_flight(application, started, score=value,
-                                              provider=provider_name)
+                await self._abandon_in_flight(
+                    application, started, score=value, provider=provider_name
+                )
             raise
         except UnsupportedFlowError as exc:
             return await self._escalate(
@@ -910,11 +934,15 @@ class Pipeline:
             reason = exc.review_reason
             if reason is not None:
                 return await self._escalate(
-                    application, reason, exc, started, score=value,
+                    application,
+                    reason,
+                    exc,
+                    started,
+                    score=value,
                     payload={"provider": provider_name},
                 )
             return await self._failed_result(application, exc, started, score=value)
-        except Exception as exc:  # noqa: BLE001 - a broken stage becomes a failed row
+        except Exception as exc:
             return await self._failed_result(application, exc, started, score=value)
 
         return await self._finalize(
@@ -1139,9 +1167,7 @@ class Pipeline:
         versions = (
             (
                 await self._session.execute(
-                    select(ResumeVersion).where(
-                        ResumeVersion.application_id == application.id
-                    )
+                    select(ResumeVersion).where(ResumeVersion.application_id == application.id)
                 )
             )
             .scalars()
@@ -1304,7 +1330,7 @@ class Pipeline:
                 status=application.status.value,
                 stage=stage,
             )
-        except Exception as inner:  # noqa: BLE001 - the handler must not raise
+        except Exception as inner:
             logger.error(
                 "pipeline.failure_handler_failed",
                 application_id=str(application.id),
@@ -1407,7 +1433,7 @@ class Pipeline:
                 )
             )
             log.warning("pipeline.submit_cancelled_parked_for_review")
-        except Exception:  # noqa: BLE001 - cleanup must never mask the cancellation
+        except Exception:
             log.exception("pipeline.submit_cancelled_cleanup_failed")
 
     async def _escalate(
@@ -1535,9 +1561,7 @@ class Pipeline:
         for candidate, fmt in self._render_ladder(template):
             out = directory / f"cover-letter.{fmt}"
             try:
-                return await render_cover_letter(
-                    document, None, out, template=candidate, fmt=fmt
-                )
+                return await render_cover_letter(document, None, out, template=candidate, fmt=fmt)
             except DocumentRenderError as exc:
                 last = exc
                 logger.warning(
@@ -1623,9 +1647,7 @@ class Pipeline:
         letter: CoverLetter | None = None
         if application.cover_letter_id is not None:
             letter = await self._session.scalar(
-                select(CoverLetter)
-                .where(CoverLetter.id == application.cover_letter_id)
-                .limit(1)
+                select(CoverLetter).where(CoverLetter.id == application.cover_letter_id).limit(1)
             )
 
         if letter is not None:
@@ -1902,9 +1924,7 @@ class Pipeline:
             LookupError: If the identifier is malformed or names no user.
         """
         identifier = _as_uuid(user_id, "user id")
-        user = await self._session.scalar(
-            select(User).where(User.id == identifier).limit(1)
-        )
+        user = await self._session.scalar(select(User).where(User.id == identifier).limit(1))
         if user is None:
             raise LookupError(f"user {identifier} not found")
         return user

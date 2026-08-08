@@ -170,7 +170,9 @@ _DEFAULT_PORTS: Final[dict[str, str]] = {"http": "80", "https": "443"}
 _DEFAULT_SCHEME: Final[str] = "https"
 
 #: Matches a leading ``host.tld`` with no scheme and no leading slash.
-_SCHEMELESS_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?::\d+)?(?:[/?#]|$)", re.IGNORECASE)
+_SCHEMELESS_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?::\d+)?(?:[/?#]|$)", re.IGNORECASE
+)
 
 
 def _is_tracking_param(name: str) -> bool:

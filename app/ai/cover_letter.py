@@ -510,9 +510,7 @@ class CoverLetterWriter:
             decision = requirement == "required"
         else:  # when_high_score
             threshold = max(HIGH_SCORE_THRESHOLD, int(prefs.min_score))
-            decision = requirement == "required" or (
-                score is not None and int(score) >= threshold
-            )
+            decision = requirement == "required" or (score is not None and int(score) >= threshold)
 
         logger.debug(
             "cover_letter.policy",
@@ -555,7 +553,7 @@ class CoverLetterWriter:
             result = self._assemble(req, payload, usage)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - any model failure degrades, never raises
+        except Exception as exc:
             logger.warning(
                 "cover_letter.llm_failed",
                 posting=str(req.posting.id or ""),
@@ -692,9 +690,7 @@ class CoverLetterWriter:
 
         paragraphs = _paragraphs(body)
         if len(paragraphs) < MIN_PARAGRAPHS:
-            raise ValueError(
-                f"letter collapsed to {len(paragraphs)} paragraph(s) after validation"
-            )
+            raise ValueError(f"letter collapsed to {len(paragraphs)} paragraph(s) after validation")
 
         document = self._document(req, recipient, body)
         raw_reasoning = payload.get("reasoning")
@@ -846,7 +842,9 @@ class CoverLetterWriter:
 
         if paragraphs and _word_count(paragraphs) > budget:
             sentences = _SENTENCE_SPLIT.split(paragraphs[-1])
-            while len(sentences) > 1 and _word_count(paragraphs[:-1] + [" ".join(sentences)]) > budget:
+            while (
+                len(sentences) > 1 and _word_count(paragraphs[:-1] + [" ".join(sentences)]) > budget
+            ):
                 sentences.pop()
             paragraphs[-1] = " ".join(sentences).strip()
 
@@ -886,9 +884,7 @@ class CoverLetterWriter:
         role = req.role() or "the advertised role"
         company = req.company()
         opening = (
-            f"I am applying for {role} at {company}."
-            if company
-            else f"I am applying for {role}."
+            f"I am applying for {role} at {company}." if company else f"I am applying for {role}."
         )
 
         highlights = _resume_highlights(req.resume, MAX_PARAGRAPHS - 1)
@@ -900,9 +896,7 @@ class CoverLetterWriter:
                 "The most relevant work on the attached résumé: " + " ".join(highlights)
             )
         if req.resume.skills_line:
-            paragraphs.append(
-                f"The tools and areas this draws on: {req.resume.skills_line}."
-            )
+            paragraphs.append(f"The tools and areas this draws on: {req.resume.skills_line}.")
         paragraphs.append(
             "The attached résumé has the full detail, and I would be glad to talk it through."
         )
@@ -931,9 +925,7 @@ class CoverLetterWriter:
     # ----------------------------------------------------------------------------------
 
     @staticmethod
-    def _document(
-        req: CoverLetterRequest, recipient: str, body: str
-    ) -> CoverLetterDocument:
+    def _document(req: CoverLetterRequest, recipient: str, body: str) -> CoverLetterDocument:
         """Wrap a validated body in the renderable document model.
 
         Args:
@@ -1012,7 +1004,7 @@ class CoverLetterWriter:
             payload = await self.cache.get(key)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a cache outage must not fail a generation
+        except Exception as exc:
             logger.warning("cover_letter.cache_unavailable", error=str(exc))
             return None
         if not isinstance(payload, Mapping):
@@ -1055,7 +1047,7 @@ class CoverLetterWriter:
             await self.cache.set(key, payload, ttl=LETTER_CACHE_TTL_SECONDS)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a write failure costs a cache hit, nothing more
+        except Exception as exc:
             logger.warning("cover_letter.cache_write_failed", error=str(exc))
 
 
@@ -1159,9 +1151,7 @@ def _tidy(body: str) -> str:
         stranded before a comma or full stop.
     """
     paragraphs = _paragraphs(body)
-    cleaned = [
-        re.sub(r"\s+([,.;:!?])", r"\1", paragraph).strip() for paragraph in paragraphs
-    ]
+    cleaned = [re.sub(r"\s+([,.;:!?])", r"\1", paragraph).strip() for paragraph in paragraphs]
     return "\n\n".join(paragraph for paragraph in cleaned if paragraph)
 
 

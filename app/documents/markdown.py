@@ -41,7 +41,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import structlog
 
-from app.documents.models import Contact, CoverLetterDocument, ResumeDocument, ResumeEntry
+from app.documents.models import (
+    Contact,
+    CoverLetterDocument,
+    ResumeDocument,
+    ResumeEntry,
+)
 from app.documents.renderer import DocumentRenderError, RenderResult, TemplatePlugin
 from app.models.enums import PluginKind
 from app.plugins import PluginMeta, plugin
@@ -770,9 +775,7 @@ class MarkdownTemplate(TemplatePlugin):
         written = write_text(out, cover_letter_markdown(letter, closing=closing))
 
         self.logger.info("markdown.cover_letter_rendered", path=str(out), bytes=written)
-        return RenderResult.from_path(
-            out, engine=MARKDOWN_ENGINE, template=self.name, page_count=1
-        )
+        return RenderResult.from_path(out, engine=MARKDOWN_ENGINE, template=self.name, page_count=1)
 
 
 def require_format(template: TemplatePlugin, fmt: str) -> None:

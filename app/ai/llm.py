@@ -65,8 +65,6 @@ from app.plugins import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
-    from collections.abc import Awaitable, Callable
-
     from app.config.settings import Settings
 
 __all__ = [
@@ -155,7 +153,9 @@ MAX_RETRY_AFTER_SECONDS: Final[float] = 60.0
 
 #: HTTP status codes worth retrying. 429 is handled separately as a rate limit; 529 is
 #: Anthropic's "overloaded".
-TRANSIENT_STATUS_CODES: Final[frozenset[int]] = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+TRANSIENT_STATUS_CODES: Final[frozenset[int]] = frozenset(
+    {408, 409, 425, 429, 500, 502, 503, 504, 529}
+)
 
 #: HTTP status code meaning "rate limited".
 RATE_LIMIT_STATUS_CODE: Final[int] = 429
@@ -414,7 +414,7 @@ def _emit(
             if counter is not None:
                 counter.labels(**labels).inc(amount)
                 return
-    except Exception as exc:  # noqa: BLE001 - telemetry must never break a completion
+    except Exception as exc:
         logger.debug("llm.metric_emit_failed", metric=recorder_name, error=str(exc))
 
 
@@ -437,7 +437,9 @@ def record_llm_request(model: str, outcome: str) -> None:
         model: The model identifier.
         outcome: One of the ``OUTCOME_*`` constants.
     """
-    _emit("record_llm_request", _REQUEST_COUNTER_ATTRIBUTES, {"model": model, "outcome": outcome}, 1)
+    _emit(
+        "record_llm_request", _REQUEST_COUNTER_ATTRIBUTES, {"model": model, "outcome": outcome}, 1
+    )
 
 
 # ======================================================================================
@@ -795,7 +797,7 @@ def _retry_after_of(exc: BaseException) -> float | None:
         return None
     try:
         raw = getter(RETRY_AFTER_HEADER) or getter(RETRY_AFTER_HEADER.title())
-    except Exception:  # noqa: BLE001 - a hostile header mapping must not break retries
+    except Exception:
         return None
     return _parse_retry_after(raw)
 
@@ -1053,9 +1055,7 @@ def _as_json_object(value: Any, schema: dict[str, Any] | None) -> dict[str, Any]
         return value
     if isinstance(value, list) and _schema_expects_array(schema):
         return {ARRAY_RESULT_KEY: list(value)}
-    raise ValueError(
-        f"expected a JSON object at the top level, got {type(value).__name__}"
-    )
+    raise ValueError(f"expected a JSON object at the top level, got {type(value).__name__}")
 
 
 # ======================================================================================
@@ -1441,7 +1441,7 @@ class GuardedModelPlugin(ModelPlugin, abc.ABC):
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 - normalised into the LLM hierarchy
+            except Exception as exc:
                 last = classify_error(exc, model=model)
 
             is_final = attempt == attempts - 1
@@ -1603,7 +1603,9 @@ def _resolve_class(name: str) -> type[Any]:
         load_all()
     try:
         if not registry.is_enabled(PluginKind.MODEL, name):
-            raise PluginDisabled(f"model plugin {name!r} is disabled", kind=PluginKind.MODEL, name=name)
+            raise PluginDisabled(
+                f"model plugin {name!r} is disabled", kind=PluginKind.MODEL, name=name
+            )
         return registry.get_class(PluginKind.MODEL, name)
     except (PluginNotFound, PluginDisabled):
         if name == NULL_MODEL_NAME:
@@ -1646,7 +1648,7 @@ def get_llm(tier: ModelTier = "reasoning") -> ModelPlugin:
     cls = _resolve_class(name)
     try:
         instance = cls(settings, tier=tier)
-    except Exception as exc:  # noqa: BLE001 - normalised into the plugin hierarchy
+    except Exception as exc:
         raise PluginLoadError(
             f"failed to construct model plugin {name!r}: {exc}",
             kind=PluginKind.MODEL,

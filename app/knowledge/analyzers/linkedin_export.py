@@ -71,8 +71,8 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 __all__ = [
     "EXPORT_FILES",
     "FIELD_ALIASES",
-    "LinkedInExportAnalyzer",
     "MAX_ROWS_PER_FILE",
+    "LinkedInExportAnalyzer",
     "normalize_export_date",
     "parse_export_csv",
 ]
@@ -727,9 +727,7 @@ class LinkedInExportAnalyzer(Analyzer):
             )
 
         blocks = [
-            part
-            for part in (person, headline, location, industry, summary, websites)
-            if part
+            part for part in (person, headline, location, industry, summary, websites) if part
         ]
         if summary:
             extracted = await self._knowledge().extract(
@@ -775,9 +773,7 @@ class LinkedInExportAnalyzer(Analyzer):
             header = " — ".join(part for part in (role, organization) if part)
             period = " – ".join(part for part in (start, end or "Present") if part)
             blocks.append(
-                "\n".join(
-                    part for part in (header, location, period, description) if part
-                )
+                "\n".join(part for part in (header, location, period, description) if part)
             )
 
             if organization:

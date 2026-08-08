@@ -254,8 +254,7 @@ class ReviewService:
 
         if application.status is not ApplicationStatus.NEEDS_REVIEW:
             raise ValueError(
-                f"application {application.id} is {application.status.value!r}, "
-                "not awaiting review"
+                f"application {application.id} is {application.status.value!r}, not awaiting review"
             )
 
         supplied = {str(key): value for key, value in dict(answers or {}).items()}
@@ -376,7 +375,7 @@ class ReviewService:
                         "source": "review_resolve",
                     },
                 )
-            except Exception as exc:  # noqa: BLE001 - the feedback loop never blocks a fix
+            except Exception as exc:
                 logger.warning(
                     "review.correction_failed",
                     application_id=str(application.id),
@@ -500,23 +499,18 @@ class _FilterSet:
             statement = statement.where(Application.created_at <= self.until)
 
         if self.provider is not None or self.search is not None:
-            statement = statement.join(
-                JobPosting, JobPosting.id == Application.posting_id
-            )
+            statement = statement.join(JobPosting, JobPosting.id == Application.posting_id)
         if self.provider is not None:
             statement = statement.where(JobPosting.provider == self.provider)
 
         if self.company is not None or self.search is not None:
             statement = statement.join(Company, Company.id == Application.company_id)
         if self.company is not None:
-            statement = statement.where(
-                Company.normalized_name == Company.normalize(self.company)
-            )
+            statement = statement.where(Company.normalized_name == Company.normalize(self.company))
         if self.search is not None:
             pattern = f"%{self.search.lower()}%"
             statement = statement.where(
-                func.lower(JobPosting.title).like(pattern)
-                | func.lower(Company.name).like(pattern)
+                func.lower(JobPosting.title).like(pattern) | func.lower(Company.name).like(pattern)
             )
         return statement
 
@@ -544,15 +538,9 @@ def _as_mapping(filters: Mapping[str, Any] | Any) -> dict[str, Any]:
             dumped = dumper()
             source = dict(dumped) if isinstance(dumped, Mapping) else {}
         else:
-            source = {
-                key: getattr(filters, key)
-                for key in _FILTER_KEYS
-                if hasattr(filters, key)
-            }
+            source = {key: getattr(filters, key) for key in _FILTER_KEYS if hasattr(filters, key)}
     return {
-        key: value
-        for key, value in source.items()
-        if key in _FILTER_KEYS and value is not None
+        key: value for key, value in source.items() if key in _FILTER_KEYS and value is not None
     }
 
 

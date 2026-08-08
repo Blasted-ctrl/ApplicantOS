@@ -46,7 +46,8 @@ from typing import Any, Final
 
 import structlog
 
-from app.config.settings import Settings, settings as _default_settings
+from app.config.settings import Settings
+from app.config.settings import settings as _default_settings
 
 __all__ = [
     "MAX_REDACTION_DEPTH",

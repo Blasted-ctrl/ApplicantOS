@@ -567,7 +567,7 @@ def parse_open_graph(html: str) -> dict[str, str]:
     try:
         collector.feed(html)
         collector.close()
-    except Exception as exc:  # noqa: BLE001 - malformed markup must not lose the metadata
+    except Exception as exc:
         logger.debug("linkedin.meta_parse_failed", error=str(exc))
 
     metadata = dict(collector.tags)
@@ -934,9 +934,7 @@ class LinkedInProvider(ATSProvider):
         """
         payload = path.read_bytes()
         if len(payload) > MAX_EXPORT_BYTES:
-            self.logger.warning(
-                "linkedin.export_truncated", path=str(path), bytes=len(payload)
-            )
+            self.logger.warning("linkedin.export_truncated", path=str(path), bytes=len(payload))
             payload = payload[:MAX_EXPORT_BYTES]
         return _decode(payload)
 
@@ -1003,7 +1001,8 @@ class LinkedInProvider(ATSProvider):
             " ".join(part for part in (_pick(row, "workplace_type"), location or "") if part)
         )
         employment_type = infer_employment_type(
-            title, " ".join(part for part in (_pick(row, "employment_type"), description or "") if part)
+            title,
+            " ".join(part for part in (_pick(row, "employment_type"), description or "") if part),
         )
         salary_min, salary_max, currency = parse_salary(description or "")
 
@@ -1090,14 +1089,14 @@ class LinkedInProvider(ATSProvider):
 
         if parsed.scheme.lower() not in _ALLOWED_FEED_SCHEMES:
             self.logger.warning(
-                "linkedin.feed_rejected", url=url, reason="scheme_not_allowed",
+                "linkedin.feed_rejected",
+                url=url,
+                reason="scheme_not_allowed",
                 scheme=parsed.scheme,
             )
             return False
         if "@" in parsed.netloc:
-            self.logger.warning(
-                "linkedin.feed_rejected", url=url, reason="credentials_in_url"
-            )
+            self.logger.warning("linkedin.feed_rejected", url=url, reason="credentials_in_url")
             return False
         return True
 
@@ -1125,9 +1124,7 @@ class LinkedInProvider(ATSProvider):
         company = _child_text(entry, _FEED_AUTHOR_TAGS) or company_from_title or ""
         body = _child_text(entry, _FEED_BODY_TAGS)
         description = html_to_text(body) or None
-        location = (
-            _child_text(entry, _FEED_LOCATION_TAGS) or _location_from_title(headline) or None
-        )
+        location = _child_text(entry, _FEED_LOCATION_TAGS) or _location_from_title(headline) or None
         posted_at = parse_date(_child_text(entry, _FEED_DATE_TAGS))
 
         arrangement = infer_arrangement(
@@ -1243,7 +1240,9 @@ class LinkedInProvider(ATSProvider):
 
         return RawPosting(
             provider=ATSProviderName.LINKEDIN,
-            external_id=job_id or extract_job_id(canonical) or _synthetic_id(company or "", title, canonical),
+            external_id=job_id
+            or extract_job_id(canonical)
+            or _synthetic_id(company or "", title, canonical),
             url=canonical,
             title=title,
             company_name=company or clean_text(metadata.get("og:site_name")) or "",

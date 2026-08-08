@@ -33,6 +33,13 @@ sentinel).
 from __future__ import annotations
 
 from app.database.base import Base
+from app.models.application import Application, ApplicationEvent
+from app.models.cache_entry import CacheEntry
+from app.models.checkpoint import Checkpoint
+
+# Reference data, then postings and their per-user scores.
+from app.models.company import COMPANY_LEGAL_SUFFIXES, Company
+from app.models.cover_letter import CoverLetter
 
 # Vocabulary first: every model below annotates columns with these.
 from app.models.enums import (
@@ -63,19 +70,7 @@ from app.models.enums import (
     WorkArrangement,
     WorkAuthStatus,
 )
-
-# Column building blocks next: every mapped class inherits from these.
-from app.models.mixins import (
-    USER_FOREIGN_KEY_TARGET,
-    SoftDeleteMixin,
-    TimestampMixin,
-    UserOwnedMixin,
-    UUIDPrimaryKeyMixin,
-)
-
-# Identity root — every user-owned table's foreign key points here.
-from app.models.user import User, UserPreferences
-from app.models.profile import DECLINE_TO_SELF_IDENTIFY, EEO_FIELD_NAMES, PROFILE_LINK_KEYS, UserProfile
+from app.models.file import UploadedFile
 
 # Knowledge engine: source -> document -> chunk, plus graph, facts and memory.
 from app.models.knowledge import (
@@ -88,23 +83,33 @@ from app.models.knowledge import (
     MemoryEntry,
     normalize_for_matching,
 )
+from app.models.log import LogEntry
 
-# Reference data, then postings and their per-user scores.
-from app.models.company import COMPANY_LEGAL_SUFFIXES, Company
+# Column building blocks next: every mapped class inherits from these.
+from app.models.mixins import (
+    USER_FOREIGN_KEY_TARGET,
+    SoftDeleteMixin,
+    TimestampMixin,
+    UserOwnedMixin,
+    UUIDPrimaryKeyMixin,
+)
 from app.models.posting import JobPosting
-from app.models.score import JobScore
+from app.models.profile import (
+    DECLINE_TO_SELF_IDENTIFY,
+    EEO_FIELD_NAMES,
+    PROFILE_LINK_KEYS,
+    UserProfile,
+)
 
 # Generated documents and the applications that carry them.
 from app.models.resume import Resume, ResumeVersion
-from app.models.application import Application, ApplicationEvent
-from app.models.cover_letter import CoverLetter
+from app.models.score import JobScore
 
 # Runtime bookkeeping.
 from app.models.session import RunSession
-from app.models.checkpoint import Checkpoint
-from app.models.file import UploadedFile
-from app.models.log import LogEntry
-from app.models.cache_entry import CacheEntry
+
+# Identity root — every user-owned table's foreign key points here.
+from app.models.user import User, UserPreferences
 
 __all__ = [
     # -- declarative base ------------------------------------------------------------

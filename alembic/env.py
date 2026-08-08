@@ -34,7 +34,6 @@ import asyncio
 from logging.config import fileConfig
 from typing import Any, Final
 
-from alembic import context
 from sqlalchemy import Connection, engine_from_config, pool
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -43,6 +42,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # every table: a model module that nothing imports is invisible to autogenerate, and the
 # resulting migration silently omits its table.
 import app.models  # noqa: F401  - imported for the side effect of registering every model
+from alembic import context
 from app.config.settings import settings
 from app.database.base import Base
 

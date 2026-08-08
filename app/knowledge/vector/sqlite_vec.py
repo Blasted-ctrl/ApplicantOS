@@ -175,9 +175,7 @@ ON CONFLICT (collection, record_id) DO UPDATE SET
     updated_at = excluded.updated_at
 """
 
-_COLLECTION_DIM_SQL: Final[str] = (
-    f"SELECT dim FROM {VECTOR_TABLE} WHERE collection = ? LIMIT 1"
-)
+_COLLECTION_DIM_SQL: Final[str] = f"SELECT dim FROM {VECTOR_TABLE} WHERE collection = ? LIMIT 1"
 
 #: Probe vector used to confirm the loaded extension really answers distance queries.
 _PROBE_VECTOR: Final[tuple[float, ...]] = (1.0, 0.0)
@@ -707,10 +705,7 @@ class SqliteVecStore:
         Returns:
             Up to *k* hits, best first — the same answer the extension path gives.
         """
-        sql = (
-            f'SELECT record_id, "text", metadata, embedding '
-            f"FROM {VECTOR_TABLE} WHERE {where}"
-        )
+        sql = f'SELECT record_id, "text", metadata, embedding FROM {VECTOR_TABLE} WHERE {where}'
         cursor = connection.execute(sql, [*base_parameters, *filter_parameters])
         hits = [
             VectorHit(

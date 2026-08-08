@@ -848,3 +848,443 @@ than aspirational: `MODEL_CLASSES` is every mapped class in dependency order, an
 of `0001_initial_schema.py`, and reversed, its drop order. A model added without being wired
 into this package fails a single obvious assertion instead of silently vanishing from the
 schema.
+
+---
+
+## Phase 2 — Web analyzers (`analyzers/github.py`, `analyzers/website.py`, `analyzers/_text.py`)
+
+### 1. `used_in` edge direction: technology → project, not project → technology
+
+The build brief for `GitHubAnalyzer` specified `(PROJECT) -[USED_IN]-> (TECHNOLOGY)` and asked
+for the direction choice to be justified. It was implemented the other way round —
+`(TECHNOLOGY) -[USED_IN]-> (PROJECT)` — in both `github.py` and `website.py`, for one reason
+that outweighs the intuitive reading:
+
+* §8.1 `ExtractedEdge` documents `relation` as "read subject-first" and gives *"PyTorch
+  used_in PoseNet"* as its own example — subject technology, object project.
+* `app/knowledge/extractors.py::extract_entities_rule_based` (already built and verified)
+  emits exactly that direction for the same relationship recovered from README/page text.
+* `KnowledgeEdge` is `UNIQUE(source_entity_id, target_entity_id, relation)`. Emitting the
+  reverse here would not overwrite the rule-based edge, it would create a **second, parallel**
+  edge for every project/technology pair — doubling the graph and breaking any
+  `KnowledgeGraph.neighbors()` traversal that assumes one direction.
+
+**Decision needed:** confirm the single direction for the whole engine, or introduce a second
+relation (`RelationKind.BUILT`?) for the project→technology reading and populate both
+deliberately. Until then all analyzers emit technology → `used_in` → project.
+
+### 2. `same_origin()` ignores a leading `www.`
+
+A browser treats `example.com` and `www.example.com` as different origins. `_text.py` treats
+them as the same site, because a crawler that did not would abandon most personal sites at
+the first internal link (canonical host and linked host routinely disagree on that one
+label). Scheme and port remain strict. The relaxation is confined to `same_origin()`;
+`normalize_url()` never rewrites a host.
+
+### 3. `normalize_url()` strips trailing slashes, which costs one redirect on directory URLs
+
+`/projects/` normalises to `/projects`, so the two spellings dedupe to one visited entry.
+Most servers then answer `/projects` with a 301 to `/projects/`, which the client follows —
+correct, but one extra round trip per directory URL. The alternative (preserving the slash)
+would let a site's own inconsistent linking fetch the same page twice, which is worse for a
+crawl that is rate-limited to ~1 req/s. Recorded in case the trade-off should flip.
+
+### 4. `WebsiteAnalyzer.fingerprint()` probes the root only, per the brief
+
+A new project page added without touching the root's bytes is not detected until the periodic
+full re-index (`knowledge_reindex_interval_minutes`). Detecting it properly would mean
+crawling the site to decide whether the site needs crawling. A cheap middle ground would be to
+also probe `sitemap.xml`'s `lastmod` when one exists; not implemented because §8.1 defines no
+such behaviour.
+
+### 5. `HEAD` and `GET` disagreeing on validators causes one wasted re-index
+
+`fingerprint()` composes its digest from the root's `ETag`/`Last-Modified` (`HEAD`), and
+`analyze()` from the same headers on its `GET`. A server that omits `ETag` from a `HEAD` but
+sends it on `GET` produces two different digests, so the source re-indexes once per run. That
+is the safe direction to fail in (wasted work, never a frozen knowledge base) and no
+additional request is spent to avoid it.
+
+### 6. `SourceKind.PORTFOLIO_PAGE` defaults to crawl depth 0
+
+`§1` defines one `website_crawl_max_depth` for both website source kinds. `PORTFOLIO_PAGE`
+defaults to depth 0 (index that page, discover nothing through it) while `PERSONAL_WEBSITE`
+uses the setting, on the reading that the two enum values exist precisely to distinguish "a
+site" from "a page". Both are overridable per source via `KnowledgeSource.config["max_depth"]`.
+
+### 7. Per-source analyzer options are not part of any contract
+
+Both analyzers read options off `KnowledgeSource.config` (§4 defines the column, not its
+contents): `max_repos`, `include_forks`, `include_archived`, `fetch_readme`, `fetch_manifest`
+for GitHub; `max_pages`, `max_depth`, `request_interval` for websites. They exist because at
+60 requests/hour unauthenticated the GitHub budget is the binding constraint on a large
+account. If the desktop app is to expose them, the key names need to be contract-defined.
+
+### 8. No HTTP timeout setting exists for the crawler
+
+Noted already by `analyzers/base.py` (`HTTP_TIMEOUT_SETTING_NAMES`): §1 defines no
+`http_timeout_seconds`, so the shared client falls back to 30s. Both analyzers inherit that.
+A slow-but-alive site and a hung one are currently indistinguishable at 30s.
+
+### 9. `selectolax` is an optional accelerator, not a dependency
+
+`_text.py` uses `selectolax` when importable and a complete `html.parser` implementation
+otherwise. Both back ends build the same tree and share one renderer, and both were verified
+to produce byte-identical text on malformed markup (unclosed `<li>`, `<td>`, `<p>`). If
+`selectolax` is added to the project's dependencies it should be an extra, never a hard
+requirement — the fallback is not a degraded mode.
+
+---
+
+## Phase 2 — AI layer (`app/ai/embeddings.py`, `app/ai/prompts/`, package exports)
+
+### 32. `app/ai/prompts/` has no contract API, and two callers want two substitution dialects
+
+§0 lists `app/ai/prompts/` in the layout; §10 defines no API for it. The loader implements
+`load_prompt(name, **vars)` over `<name>.md` with `string.Template.safe_substitute`, because
+prompts are mostly JSON — schemas, worked examples, expected replies — and `str.format` would
+require every one of those braces to be doubled by hand.
+
+`app/knowledge/extractors.py` was built against the same undefined API and chose differently:
+its `_load_prompt(name, default)` probes this package for a `get_prompt(name)` callable or a
+module constant, then renders the result with **`str.format`**. Handing it a `$`-placeholder
+file would leave `$text` unsubstituted; handing it a file full of literal JSON braces would
+raise inside its `try`, silently disabling LLM extraction in favour of the regex fallback.
+
+Resolved without changing either module's public behaviour: no `get_prompt` is defined (so
+the probe falls through to the constant lookup), and a module-level `__getattr__` answers the
+four names it looks for — `EXTRACT_FACTS_SYSTEM`, `EXTRACT_FACTS`, `EXTRACT_ENTITIES_SYSTEM`,
+`EXTRACT_ENTITIES` — from the `.md` files. System prompts are returned verbatim (their caller
+never formats them); the two user prompts go through `as_format_template`, which rewrites
+`$name` to `{name}` and doubles every literal brace. Verified end to end: both user prompts
+render through `.format(**keys)` with the exact keyword set `extractors.py` passes.
+
+**The decision to make:** one substitution dialect for the whole codebase. The bridge works
+and is tested, but a prompt file whose placeholder set drifts from the caller's keyword set
+degrades silently to the rule-based extractor rather than failing loudly.
+
+### 33. A purely lexical hashing embedder cannot satisfy its own acceptance test
+
+§10 requires `HashingEmbedder` as the offline fallback, and the product requires it to be
+genuinely useful — the whole knowledge engine retrieves through it when there is no API key.
+The three canonical examples ("embedded firmware in C++ on STM32", "RTOS driver development
+for ARM Cortex-M", "React dashboard with Tailwind") share **no token and no character n-gram**
+between any pair, so unigram/bigram/subword hashing alone scores all three pairs at ~0 and
+their relative order is collision noise.
+
+The implementation therefore adds a fourth hashed feature family: a curated
+`DOMAIN_LEXICON` (28 domains, ~700 terms) mapping technical vocabulary onto the semantic
+neighbourhood it belongs to. Measured cosines: 0.275 for the two embedded strings, −0.025 and
+0.005 against the frontend string.
+
+**The concern:** the lexicon is hand-maintained and overlaps in *coverage* (not in purpose)
+with `app.knowledge.extractors.SKILL_VOCABULARY`, which canonicalises skill names rather than
+grouping them. A term added to one will not appear in the other. If a domain taxonomy is ever
+added to `SKILL_VOCABULARY`, this lexicon should be derived from it instead.
+
+### 34. `HASHING_ALGORITHM_VERSION` is part of the embedder's model identity
+
+`HashingEmbedder.model` is `hashing-<version>-<dim>`, and that string is part of every cache
+key and of the vectors' meaning in the store. **Any change to the tokenizer, the family
+weights, the n-gram range or `DOMAIN_LEXICON` must bump `HASHING_ALGORITHM_VERSION`**, or
+vectors from two different geometries will be mixed in one collection and every similarity
+score computed against them becomes meaningless. This is a convention, not an enforced
+invariant — a checksum of the algorithm's inputs would make it one.
+
+### 35. `get_llm` degrades on a missing key; `get_embedder` also degrades on a missing SDK
+
+`app.ai.llm.resolve_provider_name` checks only `PROVIDER_API_KEY_FIELDS`, so a machine that
+has `ANTHROPIC_API_KEY` set but no `anthropic` package resolves to `AnthropicModel` and fails
+at the first `complete()` with an `LLMError` — observed while testing.
+`resolve_embedding_provider` additionally probes `importlib.util.find_spec`, so the same
+machine falls back to `HashingEmbedder` with one warning and keeps running.
+
+The asymmetry is deliberate here (`llm.py` is frozen and out of scope for this phase) but the
+embedding behaviour is the correct one: "must work offline with zero API keys" should read
+"and with none of the optional SDKs installed". Worth lifting the `find_spec` check into
+`resolve_provider_name`.
+
+### 36. `cosine` exists twice, in two layers
+
+§10 mandates `app.ai.embeddings.cosine`; §8.2's vector layer already ships
+`app.knowledge.vector.base.cosine_similarity` alongside `normalize` and `dot`. The two are
+independent implementations of the same eight lines. They are *not* shared because
+`app.knowledge` depends on `app.ai` (the indexer takes an embedder) and importing back the
+other way would invert the layering. A neutral `app/common/vectors.py` would own both, at the
+cost of a module the contract does not list.
+
+### 37. Retry/backoff policy is implemented twice for the same reason
+
+`app.ai.embeddings._backoff_delay` mirrors `GuardedModelPlugin._backoff_delay` and imports
+its four constants (`RETRY_BASE_DELAY_SECONDS`, `RETRY_MAX_DELAY_SECONDS`,
+`RETRY_JITTER_RATIO`, `MAX_RETRY_AFTER_SECONDS`) so the two cannot drift numerically. The
+loop that uses it is duplicated too, because `GuardedModelPlugin` is a `ModelPlugin` and an
+embedder is not a plugin at all. A free function `retry_async(fn, *, attempts, classify)` in
+`llm.py` would collapse both.
+
+### 38. `settings.embedding_dim` is one global width, but a local model's width is fixed
+
+`EMBEDDING_DIM` defaults to 1536, which is right for `text-embedding-3-small` and wrong for
+every model Ollama serves (`nomic-embed-text` is 768, `mxbai-embed-large` is 1024). Only the
+`text-embedding-3` family accepts a `dimensions` request parameter, so `OpenAIEmbedder` sends
+it and genuinely honours the setting, while `LocalEmbedder` cannot and a mismatch surfaces as
+`EmbeddingDimensionMismatch` on the first batch — with the correct value to set in the
+message. Switching providers is therefore a config change *plus* a re-index, and nothing in
+the settings layer currently says so. A per-provider default width, or validation that
+refuses a known-bad pair at startup, would catch it before the first index run.
+
+### 39. The `Embedder` protocol carries no identity, but the cache key needs one
+
+§10 defines `Embedder` as exactly one method. Cache keys must include the provider, the model
+and the width, or a vector embedded by one backend would be served to another.
+`embedder_identity()` reads `provider` / `model` / `dimension` as optional duck-typed
+attributes and falls back to the class name with width `0`; width `0` disables caching for
+that embedder rather than writing an unidentifiable key. Every built-in embedder supplies all
+three via `BaseEmbedder`. Adding the three as read-only properties on the protocol would make
+this checkable instead of best-effort.
+
+
+## Phase 2 — Local analyzers (`project_folder`, `resume_parser`, `linkedin_export`, `document`)
+
+### 40. `FactKind` has no `certification` member, so certifications become `AWARD` facts
+
+§3 defines `FactKind` as `accomplishment responsibility metric skill_usage award
+education_item leadership_item publication_item`, while `EntityKind` *does* carry
+`certification`. A resume's CERTIFICATIONS section and a LinkedIn `Certifications.csv` row
+therefore emit a first-class `certification` **entity** and an `award` **fact**.
+
+**The concern:** "IPC-A-610 Certified Specialist" and "Eagle Scout" are not the same kind of
+claim, and a resume template that wants a separate *Certifications* block cannot currently
+tell them apart from the fact alone — it has to join back to the entity. Either a
+`certification` `FactKind` or a documented convention (e.g. an `award` fact whose
+`organization` is the issuing authority, which is what is implemented) should be decided
+before the first template renders one.
+
+### 41. `DocumentAnalyzer` claims source kinds it does not declare, as a last resort
+
+§8.1 describes `DocumentAnalyzer` as handling "`readme` / `documentation` / `blog_post` /
+`interview_note` / generic". The first four are declared in `source_kinds`; "generic" is
+implemented by overriding `supports()` to additionally accept **any** source whose uri is an
+`http(s)` URL or a file with a readable suffix — so a `video` or `user_correction` source with
+a real file behind it is indexed rather than raising `PluginNotFound`.
+
+**The concern:** this is safe only because `analyzer_for` ranks candidates by
+`len(source_kinds)` ascending. `DocumentAnalyzer` declares five kinds — more than any other
+analyzer in the package — so it always loses to `ResumeParser` (2), `GitHubAnalyzer` (2),
+`WebsiteAnalyzer` (2), `ProjectFolderAnalyzer` (1) and `LinkedInExportAnalyzer` (1). **A future
+analyzer that declares six or more source kinds would silently outrank the fallback and
+change resolution for every kind they share.** The ordering rule is load-bearing and is not
+expressed anywhere as an invariant.
+
+### 42. The `.gitignore` subset stops where repository state begins
+
+`ProjectFolderAnalyzer` parses `.gitignore` itself rather than shelling out to git, so a
+folder scans identically on a machine with no git installed. Glob semantics, `!` negation,
+trailing-`/` directory-only rules, leading/middle-`/` anchoring, `**` in all three positions,
+character classes, backslash escapes and nested per-directory files are all implemented and
+unit-checked.
+
+**Not implemented, deliberately:** `.git/info/exclude`, the global `core.excludesFile`, and
+`.gitattributes`-driven exclusions. Each requires resolving configuration outside the folder
+the user pointed at — a global excludes file lives in `$XDG_CONFIG_HOME` and can name paths
+that have nothing to do with this project — and consulting them would make a scan's result
+depend on machine state the user cannot see from the ApplicantOS UI. The consequence is that
+a file ignored *only* by `.git/info/exclude` is indexed.
+
+### 43. `ExtractedDocument` has no `summary`, but `KnowledgeDocument` does
+
+§4 gives `knowledge_documents` a `summary` column and §8.1 gives `ExtractedDocument` the
+fields `uri / title / text / kind / metadata / content_hash` — with no summary. Analyzers that
+derive one (the project README's opening paragraph) therefore put it on the `PROJECT` entity's
+`summary` and in the document's `metadata`, and `KnowledgeDocument.summary` is left for the
+indexer to fill.
+
+**The concern:** the indexer will have to re-derive or re-generate a summary that the analyzer
+already computed, from text the analyzer already had in hand. Adding `summary: str | None` to
+`ExtractedDocument` would remove a duplicated LLM call per document.
+
+### 44. The shared file-to-text readers live in `analyzers/document.py`
+
+`ResumeParser`, `LinkedInExportAnalyzer` and `ProjectFolderAnalyzer` all need to turn bytes
+into text, and the brief requires the PDF/DOCX paths to be factored into shared helpers rather
+than duplicated. §0 lists no module for that, so `read_pdf_text`, `read_docx_text`,
+`read_html_text`, `decode_bytes`, `extract_text_from_path`, `extract_text_from_bytes`,
+`fetch_text_from_url`, `file_probe_fingerprint`, `local_path_for` and `knowledge_extractor`
+are public in `app/knowledge/analyzers/document.py`, and the sibling analyzers import them
+from there.
+
+**The concern:** this reads oddly — `project_folder` importing from `document` — and the two
+responsibilities (generic analyzer, shared reader) are only together because §0 defines no
+third file. An `analyzers/_files.py`, alongside the existing `analyzers/_text.py`, would be
+the natural home. Golden rule #5 is not violated: nothing *outside* `app/knowledge/analyzers/`
+imports either module.
+
+### 45. A manifest dependency can canonicalise to a surprising vocabulary name
+
+`ProjectFolderAnalyzer` runs every declared dependency through
+`extractors.canonical_skill`, so `torch` in a `requirements.txt` and `PyTorch` in a README
+merge into one graph node — which is the point. But `SKILL_VOCABULARY` lists `pgvector` as an
+alias of **PostgreSQL**, so scanning this repository emits a `PostgreSQL` technology entity
+whose `version` attribute is `>=0.2` — the pgvector package's version, attached to a node
+named after the database.
+
+**The concern:** aliasing is right for prose ("we used pgvector") and wrong for a manifest,
+where the string is a package identity rather than a mention. Either dependency names should
+skip canonicalisation, or the alias should carry the original name (it does, in `aliases`) and
+the `version` attribute should not be copied onto a canonicalised node. Implemented as
+written — the vocabulary is frozen substrate.
+
+### 46. Oversized files are fingerprinted and counted but never read
+
+`settings.project_scan_max_file_bytes` (256 KB) is described only as a cap. A file above it is
+still recorded in the scan — so it contributes its path, size and mtime to the folder
+fingerprint, and its extension to the language histogram's `files` count — but it is not
+opened, so it contributes no lines of code and no text, and the analysis result carries an
+error line naming how many were skipped.
+
+**The concern:** the alternative reading is that an oversized file should be excluded
+entirely. The implemented reading is the safer one for change detection (editing a 1 MB
+generated header still marks the project dirty), but it means `languages[lang]["files"]` and
+`languages[lang]["lines"]` are counted over different populations. Both numbers are reported;
+neither is wrong; the asymmetry is worth knowing about before a UI charts them together.
+
+### 47. `KnowledgeStore` lives in `graph.py` because §0 defines no shared module
+
+`KnowledgeGraph`, `FactStore` and `MemoryStore` all take `(session, *, embedder=None,
+vector_store=None)` and all need the same two things: lazy resolution of the embedder and the
+vector store, and a documented degradation to SQL-only behaviour when either is missing. That
+substrate is implemented once as `KnowledgeStore` in `app/knowledge/graph.py`, and `facts.py`
+and `memory.py` import it from there — along with `chunked`, the `IN (...)` batching helper
+that keeps every query in the package inside SQLite's bound-parameter limit.
+
+**The concern:** `memory.py` importing from `graph.py` reads oddly; the dependency is real
+only in the "shared base class" sense, not the "memories are part of the graph" sense. §0
+lists no module that would be the natural home (an `app/knowledge/_store.py`, alongside the
+existing `analyzers/_text.py`, would be). The alternative — duplicating the resolution and
+degradation logic three times — was worse, and creating `app/knowledge/__init__.py` was not an
+option, because that file is outside this agent's scope and `indexer.py` / `retrieval.py` are
+being built in parallel.
+
+### 48. `KnowledgeGraph` accepts an embedder and a vector store it never uses
+
+`KnowledgeEntity` has an `embedding` column, described in §4 as being for "similarity
+expansion", but §8.3's `KnowledgeGraph` API has no method that would produce one — and
+`upsert_entity` embedding each entity as it arrives would mean one embedding call per entity,
+precisely the per-item pattern the rest of the engine is built to avoid. Entities are
+therefore never embedded by this module; the column stays `NULL`.
+
+**The concern:** either something (most plausibly `KnowledgeIndexer`, which already batches)
+should embed entity names after an index pass, or `KnowledgeEntity.embedding` is dead weight
+and graph expansion in `retrieval.py` will have to work purely structurally. The constructor
+accepts the collaborators today so that adding a batched `embed_entities()` later needs no
+signature change.
+
+### 49. The 0.93 cosine threshold and the offline embedder disagree about "near duplicate"
+
+§8.3 fixes near-duplicate merging at cosine ≥ 0.93, and `FactStore` implements it. Measured
+against the offline `HashingEmbedder`, though, that threshold only catches near-*verbatim*
+variants. Real pairs, measured on this machine at `EMBEDDING_DIM=256`:
+
+| Pair | Cosine |
+|---|---|
+| "…quadruped controller, using FreeRTOS." / "…quadruped controller with FreeRTOS." | 0.951 |
+| "Reduced p95 API latency 38%…" / "Reduced the p95 API latency by 38%…" | 1.000 |
+| "Cut control-loop jitter by 43% … using FreeRTOS." / "Reduced control loop jitter 43% … with FreeRTOS." | 0.759 |
+
+The third pair is the same accomplishment as written in a README and in a resume, and it will
+produce two rows on a zero-API-key install. With `text-embedding-3-small` it would very likely
+clear 0.93.
+
+**The concern:** deduplication quality is therefore a function of which embedder is
+configured, and the offline install — the one the product promises works — is the weaker one.
+Either the threshold should be provider-dependent, or `HashingEmbedder` needs a synonym layer
+(its `DOMAIN_LEXICON` already does this for topics, not for verbs). Implemented as written;
+0.93 is a frozen contract value.
+
+### 50. Merging a fact rewrites its `content_hash`, so the next re-index misses the fast path
+
+A near-duplicate merge widens the date range (earliest start, latest end), and `date_start` /
+`date_end` are inputs to `KnowledgeFact.build_content_hash`. `FactStore` therefore calls
+`refresh_derived_fields()` after a merge, because a stale hash would silently stop
+deduplicating that claim. The consequence is that the *original* fact's hash no longer matches
+any row: re-indexing the same unchanged source falls through the exact-hash pass into the
+embedding-and-cosine pass, which then correctly merges it (verified — re-ingesting an
+identical batch creates zero rows). It costs one cached embedding and one vector probe per
+fact.
+
+**The concern:** the cheap path advertised by §8.3 — "dedupe by content_hash" — quietly stops
+being the path taken for any fact that has ever been merged. Recording the set of contributing
+hashes on the row would restore it, but §4 defines no column for that.
+
+### 51. `EmbeddingType` stores a missing embedding as JSON `null`, not as SQL `NULL`
+
+`EmbeddingType` resolves to pgvector's `vector` on PostgreSQL and to `JSON` everywhere else —
+including on PostgreSQL without the extension package. SQLAlchemy's `JSON` persists a Python
+`None` as the JSON literal `null` (the four-character string) unless the column is declared
+`none_as_null=True`, which `app/database/types.py` does not do. Verified on the SQLite
+install: an unembedded fact's column holds `'null'` with `typeof() = 'text'`, and
+`WHERE embedding IS NULL` matches **nothing**.
+
+Written the obvious way, `reembed_missing` would report "no backlog" forever while never
+embedding a row, and `stats()` would count every unembedded fact as embedded. `FactStore`
+therefore asks the bound dialect which implementation the column actually resolved to
+(`FactStore._embedding_is_json`) and builds the matching predicate.
+
+**The concern:** every other query in the codebase that asks "does this row have an
+embedding?" — `KnowledgeChunk` in the indexer, the `knowledge.embed_backlog` worker, the
+`KnowledgeStats.chunks_embedded` figure — has the same trap, and the natural spelling is the
+broken one. Adding `none_as_null=True` to `EmbeddingType` would fix it in one place for
+everybody, at the cost of being unable to store a literal JSON null, which nothing in this
+schema wants.
+
+### 52. `upsert_edge` deliberately does not count its endpoints as mentions
+
+`KnowledgeEntity.mention_count` is the prominence signal the resume engine ranks bullets by.
+The indexer upserts every `ExtractedEntity` and *then* every `ExtractedEdge`, and analyzers
+routinely emit both for the same technology, so counting an edge's reference as well would
+double every count. `KnowledgeGraph._resolve_endpoint` therefore find-or-creates without
+incrementing, and an entity that exists *only* because an edge named it is created at
+`EDGE_ENDPOINT_CONFIDENCE` (0.4) with `mention_count = 1`.
+
+**The concern:** this couples the graph's arithmetic to the indexer's call order. An analyzer
+that emits edges without the corresponding entities produces nodes that look weak, and one
+that emits an entity twice plus an edge produces a count of 2 rather than 3. §8.3 does not say
+what `mention_count` counts.
+
+### 53. Methods this build required that §8.3 does not list
+
+§8.3 defines `KnowledgeGraph` through `stats`, `FactStore` through `verify`, and `MemoryStore`
+through `prune_expired`. The build brief additionally required `KnowledgeGraph.prune`,
+`FactStore.by_ids` / `update_text` / `stats` / `reembed_missing`, and
+`MemoryStore.record_preference` / `reinforce` / `forget` / `as_prompt_context`. All are
+implemented as additions; nothing §8.3 states was changed, and every signature it does state
+stays call-compatible (the extra `*, embedder=None, vector_store=None` on
+`KnowledgeGraph.__init__` are keyword-only with defaults, so `KnowledgeGraph(session)` works
+exactly as written in the contract).
+
+**The concern:** §8.3 should list them, or a caller reading only CONTRACTS.md will not know
+they exist. Two return types were unspecified and had to be chosen. `FactStore.upsert_many ->
+int` returns the number of extracted facts that *reached* the store — inserted **plus** merged
+— rather than the number of new rows, because "rows created" is zero on every re-index of
+unchanged content and would make `IndexReport.facts` read as a failure. `deactivate` /
+`verify` / `update_text` return the updated row (or `None`) rather than a bool, since the
+caller almost always needs it.
+
+### 54. Memories deduplicate on exact text, and `record_outcome` reads three application tables
+
+`MemoryStore._record` treats `(user_id, kind, text)` equality as "the same lesson again" and
+reinforces the existing row by `REPEAT_REINFORCEMENT` instead of inserting. A user who makes
+the same edit three times gets one memory weighted 3.0 rather than three memories — emphasis
+rather than volume, which is what stops one repeated correction from dominating every
+retrieval.
+
+Separately, `record_outcome` resolves the company name and job title through
+`applications → companies / job_postings` at write time and writes them into the memory's
+text, so the lesson ("robotics firmware roles at hardware companies convert") outlives the
+posting being expired and deleted.
+
+**The concern:** the second makes `app/knowledge/memory.py` import from
+`app.models.application`, `app.models.company` and `app.models.posting` — the only place the
+knowledge engine reaches into the application-tracking half of the schema.
+`AnalyticsService.what_gets_interviews` will want exactly this data and may prefer to own the
+join, in which case `record_outcome` should take the description rather than derive it.

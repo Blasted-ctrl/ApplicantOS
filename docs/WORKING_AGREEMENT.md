@@ -30,6 +30,27 @@ only action.
 
 ---
 
+## 1b. One build workflow at a time
+
+Parallelism across *agents inside* a workflow is good. Parallelism across *workflows* is not.
+
+Three concurrent build workflows exhausted the session token budget twice in one day. When that
+happens every in-flight agent dies mid-task — including the verification and repair stages — so
+work lands half-finished and unverified. The concurrency bought nothing; the token limit simply
+replaced wall-clock as the bottleneck.
+
+- One workflow in flight. Wait for it before launching the next.
+- Prefer more *stages* inside one workflow over more concurrent workflows.
+- Keep agent prompts tight — prompt length multiplies across every agent.
+- Fill the wait with the driving agent's own work (docs, specs, planning the next phase), per §1.
+
+**After any interruption, inspect the filesystem before assuming work was lost.** Files written
+before the limit survive; failure reports consistently understate what actually landed. Diff the
+tree against the contract's file list and relaunch covering only the real gap. Commit surviving
+work immediately — an interrupted phase can leave tens of thousands of uncommitted lines at risk.
+
+---
+
 ## 2. Waterfall by phase, commit at each boundary
 
 The build proceeds in ordered phases. Each phase is:

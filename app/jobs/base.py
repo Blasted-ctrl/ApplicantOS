@@ -734,6 +734,46 @@ class JobPostingDTO:
     content_hash: str | None = None
     dedupe_key: str | None = None
 
+    def __post_init__(self) -> None:
+        """Coerce loosely-typed enum fields, mirroring :meth:`RawPosting.__post_init__`.
+
+        A DTO is not always built by :meth:`from_model` or :meth:`from_raw`. Because
+        :class:`~app.models.enums.ATSProviderName` and its siblings are string enums, a DTO
+        that has been round-tripped through JSON — a checkpoint written before a crash, a
+        Celery task argument, an API payload — comes back with plain ``str`` in these fields.
+        Without this, the first attribute access that expects an enum raises a bare
+        ``AttributeError`` on the *resume* path, and because it is not a
+        :class:`ProviderError` the pipeline cannot classify it as terminal, so the retry
+        loops instead of landing in the review queue (golden rule #8).
+
+        The class is frozen, so assignment goes through ``object.__setattr__``.
+
+        Raises:
+            ValueError: If :attr:`provider` is not a recognised ``ATSProviderName``. That one
+                is fatal because every downstream routing decision keys off it; the remaining
+                enums degrade to their documented defaults instead.
+        """
+        setattr_ = object.__setattr__
+        setattr_(self, "provider", ATSProviderName(self.provider))
+        setattr_(
+            self,
+            "work_arrangement",
+            _as_enum(WorkArrangement, self.work_arrangement, WorkArrangement.UNKNOWN),
+        )
+        setattr_(
+            self,
+            "employment_type",
+            _as_enum(EmploymentType, self.employment_type, EmploymentType.UNKNOWN),
+        )
+        setattr_(
+            self, "status", _as_enum(PostingStatus, self.status, PostingStatus.DISCOVERED)
+        )
+        if self.id is not None and not isinstance(self.id, uuid.UUID):
+            try:
+                setattr_(self, "id", uuid.UUID(str(self.id)))
+            except (ValueError, AttributeError, TypeError):
+                setattr_(self, "id", None)
+
     @property
     def target_url(self) -> str:
         """The URL to open in order to apply."""
@@ -1058,7 +1098,11 @@ class ApplyContext:
         return {
             "application_id": str(self.application_id),
             "posting_id": str(self.posting.id) if self.posting.id else None,
-            "provider": self.posting.provider.value,
+            # ``str()`` rather than ``.value``: ATSProviderName is a string enum, so this
+            # yields the same "greenhouse" for the enum and for a bare string. Defence in
+            # depth — a telemetry line must never be the thing that kills a submission
+            # attempt, and this one is on the kill-switch path.
+            "provider": str(self.posting.provider),
         }
 
 

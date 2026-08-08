@@ -68,6 +68,8 @@ from app.api.tasks import (
     TASK_KNOWLEDGE_REFRESH_STALE,
     TASK_QUEUES,
     TASK_SESSION_WATCHDOG,
+    TASK_SYNC_DETECT_GHOSTED,
+    TASK_SYNC_POLL_ALL,
 )
 from app.config.settings import get_settings
 from app.workers import shutdown_loop
@@ -79,7 +81,9 @@ __all__ = [
     "CELERY_APP_NAME",
     "DAILY_MAINTENANCE_HOUR_UTC",
     "HARD_TIME_LIMIT_SECONDS",
+    "MIN_SYNC_INTERVAL_MINUTES",
     "SOFT_TIME_LIMIT_SECONDS",
+    "SYNC_INTERVAL_MINUTES",
     "TASK_MODULES",
     "TASK_ROUTES",
     "celery_app",
@@ -103,6 +107,7 @@ TASK_MODULES: Final[tuple[str, ...]] = (
     "app.workers.apply_jobs",
     "app.workers.index_knowledge",
     "app.workers.cleanup",
+    "app.workers.sync_status",
 )
 
 #: Seconds a task may run before ``SoftTimeLimitExceeded`` is raised inside it, giving it a
@@ -127,6 +132,15 @@ DAILY_MAINTENANCE_HOUR_UTC: Final[int] = 3
 #: longer than its own interval is stale — the next tick supersedes it, and running both
 #: doubles the provider traffic for no new postings.
 POLL_EXPIRY_SECONDS: Final[int] = 25 * 60
+
+#: How often the mailbox sweep runs (``docs/CONTRACTS.md`` §17.7). Read from settings at
+#: import so an operator can slow it down without editing code; clamped to a sane floor
+#: because a one-minute schedule against a mail provider is how an account gets rate limited.
+MIN_SYNC_INTERVAL_MINUTES: Final[int] = 5
+SYNC_INTERVAL_MINUTES: Final[int] = max(
+    MIN_SYNC_INTERVAL_MINUTES,
+    int(get_settings().status_sync_interval_minutes),
+)
 
 #: Task name → routing options. Derived from the single frozen mapping in
 #: :data:`app.api.tasks.TASK_QUEUES`, so the API and the workers can never disagree about
@@ -165,6 +179,22 @@ BEAT_SCHEDULE: Final[dict[str, dict[str, Any]]] = {
     TASK_SESSION_WATCHDOG: {
         "task": TASK_SESSION_WATCHDOG,
         "schedule": timedelta(minutes=5),
+        "options": {"queue": QUEUE_MAINTENANCE},
+    },
+    # Status sync (§17.7). The mailbox sweep expires like the discovery poll: a run that has
+    # been queued longer than its own interval has been superseded by the next tick, and
+    # executing both would re-read the same window twice for nothing.
+    TASK_SYNC_POLL_ALL: {
+        "task": TASK_SYNC_POLL_ALL,
+        "schedule": timedelta(minutes=SYNC_INTERVAL_MINUTES),
+        "options": {
+            "queue": QUEUE_MAINTENANCE,
+            "expires": SYNC_INTERVAL_MINUTES * 60,
+        },
+    },
+    TASK_SYNC_DETECT_GHOSTED: {
+        "task": TASK_SYNC_DETECT_GHOSTED,
+        "schedule": crontab(hour=DAILY_MAINTENANCE_HOUR_UTC, minute=30),
         "options": {"queue": QUEUE_MAINTENANCE},
     },
 }

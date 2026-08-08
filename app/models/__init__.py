@@ -24,10 +24,10 @@ targets resolved lazily at mapper-configuration time), but keeping the order hon
 future direct import cannot silently introduce one.
 
 The re-exported surface is: the declarative :class:`~app.database.base.Base`, all four
-mixins, all nineteen enums plus their membership frozensets, the seventeen mapped classes,
-the :class:`~app.models.user.UserPreferences` pydantic document, and the handful of module
-constants other packages legitimately need (normalisation helpers, the EEO decline
-sentinel).
+mixins, every enum plus the membership frozensets and lookup mappings defined beside them,
+all twenty-four mapped classes, the :class:`~app.models.user.UserPreferences` pydantic
+document, and the handful of module constants other packages legitimately need
+(normalisation helpers, the EEO decline sentinel).
 """
 
 from __future__ import annotations
@@ -47,9 +47,12 @@ from app.models.enums import (
     APPLICATION_POST_SUBMIT_STATES,
     APPLICATION_PRE_SUBMIT_STATES,
     APPLICATION_TERMINAL_STATES,
+    EMAIL_SIGNAL_SOURCES,
     INDEX_TERMINAL_STATES,
+    MAIL_PROVIDER_TO_SIGNAL_SOURCE,
     POSTING_TERMINAL_STATES,
     SESSION_FINISHED_STATES,
+    SIGNAL_KIND_TO_STATUS,
     ApplicationStatus,
     ATSProviderName,
     CheckpointStatus,
@@ -59,13 +62,17 @@ from app.models.enums import (
     FactKind,
     FieldKind,
     IndexStatus,
+    MailProvider,
     MemoryKind,
     PluginKind,
     PostingStatus,
     RelationKind,
     ReviewReason,
     SessionStatus,
+    SignalKind,
+    SignalSource,
     SourceKind,
+    StatusSource,
     StrEnum,
     WorkArrangement,
     WorkAuthStatus,
@@ -108,6 +115,9 @@ from app.models.score import JobScore
 # Runtime bookkeeping.
 from app.models.session import RunSession
 
+# Status sync: the connected mailbox and the signals read out of it.
+from app.models.tracking import EmailAccount, StatusSignal
+
 # Identity root — every user-owned table's foreign key points here.
 from app.models.user import User, UserPreferences
 
@@ -124,24 +134,31 @@ __all__ = [
     "FactKind",
     "FieldKind",
     "IndexStatus",
+    "MailProvider",
     "MemoryKind",
     "PluginKind",
     "PostingStatus",
     "RelationKind",
     "ReviewReason",
     "SessionStatus",
+    "SignalKind",
+    "SignalSource",
     "SourceKind",
+    "StatusSource",
     "StrEnum",
     "WorkArrangement",
     "WorkAuthStatus",
-    # -- enum membership sets ---------------------------------------------------------
+    # -- enum membership sets and mappings -----------------------------------------------
     "APPLICATION_ACTIVE_STATES",
     "APPLICATION_POST_SUBMIT_STATES",
     "APPLICATION_PRE_SUBMIT_STATES",
     "APPLICATION_TERMINAL_STATES",
+    "EMAIL_SIGNAL_SOURCES",
     "INDEX_TERMINAL_STATES",
+    "MAIL_PROVIDER_TO_SIGNAL_SOURCE",
     "POSTING_TERMINAL_STATES",
     "SESSION_FINISHED_STATES",
+    "SIGNAL_KIND_TO_STATUS",
     # -- mixins ------------------------------------------------------------------------
     "SoftDeleteMixin",
     "TimestampMixin",
@@ -181,6 +198,9 @@ __all__ = [
     "LogEntry",
     "RunSession",
     "UploadedFile",
+    # -- status sync ----------------------------------------------------------------------------
+    "EmailAccount",
+    "StatusSignal",
 ]
 
 #: Every mapped class in the system, in dependency order. Exists so that tooling and tests
@@ -210,6 +230,8 @@ MODEL_CLASSES: tuple[type[Base], ...] = (
     ResumeVersion,
     CoverLetter,
     ApplicationEvent,
+    EmailAccount,
+    StatusSignal,
 )
 
 #: Table names of :data:`MODEL_CLASSES`, in the same dependency order. This is the exact

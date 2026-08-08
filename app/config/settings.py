@@ -267,6 +267,32 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
     sentry_dsn: str | None = None
 
+    # -- application status sync (docs/CONTRACTS.md §17.6) ---------------------------------
+    # Outcomes reach the database by reading the user's mailbox, never by scraping a job
+    # board. Nothing here takes effect until the user explicitly connects a mailbox
+    # (privacy invariant §17.8.6), so ``status_sync_enabled`` is the feature switch, not
+    # the consent: with no ``EmailAccount`` row, every one of these is inert.
+    status_sync_enabled: bool = True
+    status_sync_on_launch: bool = True
+    status_sync_interval_minutes: int = 30
+    status_sync_lookback_days: int = 120
+    status_sync_min_confidence: float = 0.80
+    status_sync_auto_apply: bool = True
+    status_sync_max_messages_per_run: int = 500
+    ghosted_after_days: int = 45
+
+    # -- mailbox providers -----------------------------------------------------------------
+    # OAuth *application* identity only. User tokens and IMAP passwords never appear here
+    # and never reach the database: they live in the OS keychain, addressed by
+    # ``EmailAccount.credential_ref`` (privacy invariant §17.8.4).
+    gmail_client_id: str | None = None
+    gmail_client_secret: str | None = None
+    outlook_client_id: str | None = None
+    outlook_client_secret: str | None = None
+    imap_host: str | None = None
+    imap_port: int = 993
+    imap_use_ssl: bool = True
+
     # ---------------------------------------------------------------------------------
     # Derived configuration
     # ---------------------------------------------------------------------------------

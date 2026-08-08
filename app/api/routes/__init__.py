@@ -173,6 +173,7 @@ TAG_DESCRIPTIONS: Final[dict[str, str]] = {
     "resumes": "Resume variants, immutable generated versions, and previews.",
     "sessions": "Automation runs and their rollup counters.",
     "analytics": "The funnel, the activity series and the insights panel.",
+    "tracking": "Connected mailboxes and the application outcomes read out of them.",
     "settings": "Runtime configuration, plugins, and the scoring rule pack.",
     "logs": "The product's own structured log viewer.",
     "events": "The live WebSocket event stream at /ws.",

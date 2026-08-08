@@ -156,6 +156,20 @@ from app.schemas.settings import (
     SettingsUpdate,
 )
 
+# -- status sync -----------------------------------------------------------------------------------
+from app.schemas.tracking import (
+    MAX_CONFIDENCE,
+    MIN_CONFIDENCE,
+    EmailAccountCreate,
+    EmailAccountRead,
+    SignalFilter,
+    SignalResolve,
+    StatusSignalRead,
+    SyncReportRead,
+    SyncRequest,
+    TrackingStats,
+)
+
 # -- identity and policy ---------------------------------------------------------------
 from app.schemas.user import (
     CoverLetterPolicy,
@@ -275,4 +289,15 @@ __all__ = [
     "PluginInfo",
     "SettingsRead",
     "SettingsUpdate",
+    # -- status sync ---------------------------------------------------------------------------
+    "EmailAccountCreate",
+    "EmailAccountRead",
+    "MAX_CONFIDENCE",
+    "MIN_CONFIDENCE",
+    "SignalFilter",
+    "SignalResolve",
+    "StatusSignalRead",
+    "SyncReportRead",
+    "SyncRequest",
+    "TrackingStats",
 ]

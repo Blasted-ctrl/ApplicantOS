@@ -66,6 +66,7 @@ from app.models.enums import (
     APPLICATION_TERMINAL_STATES,
     ApplicationStatus,
     ReviewReason,
+    StatusSource,
 )
 from app.models.mixins import TimestampMixin, UserOwnedMixin, UUIDPrimaryKeyMixin
 
@@ -82,6 +83,7 @@ __all__ = [
     "APPLICATION_STATUS_COLUMN",
     "NON_SUBMITTABLE_APPLICATION_STATES",
     "REVIEW_REASON_COLUMN",
+    "STATUS_SOURCE_COLUMN",
     "Application",
     "ApplicationEvent",
 ]
@@ -112,6 +114,14 @@ REVIEW_REASON_COLUMN: Final[SAEnum] = SAEnum(
     values_callable=_ENUM_VALUES,
 )
 
+#: Storage type for :class:`~app.models.enums.StatusSource`.
+STATUS_SOURCE_COLUMN: Final[SAEnum] = SAEnum(
+    StatusSource,
+    name="status_source",
+    native_enum=False,
+    values_callable=_ENUM_VALUES,
+)
+
 #: Statuses from which a submission must never be attempted: the employer already has the
 #: application, or the application is finished. This union is what :attr:`Application.
 #: can_submit` tests, and it is derived from the enum module so the two can never drift.
@@ -129,6 +139,11 @@ _NON_SUBMITTABLE_ORDERED: Final[tuple[ApplicationStatus, ...]] = tuple(
 #: Status assumed for an application that has not been flushed yet, where the column
 #: default has not been applied by the database.
 DEFAULT_APPLICATION_STATUS: Final[ApplicationStatus] = ApplicationStatus.DRAFT
+
+#: Provenance assumed for a status nobody has attributed. ``manual`` is both the safe and
+#: the honest default: it is the highest-authority source, so an unattributed status is
+#: never overwritten by a lower-confidence inference from status sync.
+DEFAULT_STATUS_SOURCE: Final[StatusSource] = StatusSource.MANUAL
 
 #: Width of an employer-side confirmation reference.
 CONFIRMATION_ID_MAX_LENGTH: Final[int] = 255
@@ -317,6 +332,33 @@ class Application(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         Text,
         nullable=True,
         doc="Free-text notes written by the user in the desktop app.",
+    )
+
+    # -- status provenance (status sync, docs/CONTRACTS.md §17) --------------------------
+    # These three answer "how do we know?" about :attr:`status`. Without them an automated
+    # outcome read out of a mailbox is indistinguishable from one the user typed in, and the
+    # sync service has no way to refuse to overwrite the latter with the former.
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        nullable=True,
+        doc="When status sync last examined this application. NULL means never.",
+    )
+    status_source: Mapped[StatusSource] = mapped_column(
+        STATUS_SOURCE_COLUMN,
+        default=DEFAULT_STATUS_SOURCE,
+        server_default=DEFAULT_STATUS_SOURCE.value,
+        nullable=False,
+        doc=(
+            "Where the current status came from: the user, the submission pipeline, a "
+            "classified email, a portal check, or an inference from silence."
+        ),
+    )
+    status_confidence: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        doc=(
+            "Confidence of the signal that produced the current status, in [0, 1]. NULL "
+            "when the status was not inferred — a human's answer has no confidence score."
+        ),
     )
 
     # -- relationships -----------------------------------------------------------------

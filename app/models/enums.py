@@ -34,9 +34,12 @@ __all__ = [
     "APPLICATION_POST_SUBMIT_STATES",
     "APPLICATION_PRE_SUBMIT_STATES",
     "APPLICATION_TERMINAL_STATES",
+    "EMAIL_SIGNAL_SOURCES",
     "INDEX_TERMINAL_STATES",
+    "MAIL_PROVIDER_TO_SIGNAL_SOURCE",
     "POSTING_TERMINAL_STATES",
     "SESSION_FINISHED_STATES",
+    "SIGNAL_KIND_TO_STATUS",
     "ATSProviderName",
     "ApplicationStatus",
     "CheckpointStatus",
@@ -46,13 +49,17 @@ __all__ = [
     "FactKind",
     "FieldKind",
     "IndexStatus",
+    "MailProvider",
     "MemoryKind",
     "PluginKind",
     "PostingStatus",
     "RelationKind",
     "ReviewReason",
     "SessionStatus",
+    "SignalKind",
+    "SignalSource",
     "SourceKind",
+    "StatusSource",
     "StrEnum",
     "WorkArrangement",
     "WorkAuthStatus",
@@ -441,11 +448,15 @@ class FieldKind(StrEnum):
 
 
 class PluginKind(StrEnum):
-    """The five extension points of ApplicantOS.
+    """The extension points of ApplicantOS.
 
     Everything pluggable is registered under one of these kinds and resolved through
     :mod:`app.plugins.registry`; concrete implementations are never imported directly from
     outside their own package (golden rule #5).
+
+    ``tracker`` is the status-sync extension point (``docs/CONTRACTS.md`` §17): a
+    :class:`~app.tracking.base.StatusTracker` polls one outcome channel — a mailbox, an ATS
+    portal — and yields the signals that close the application loop.
     """
 
     PROVIDER = "provider"
@@ -453,6 +464,7 @@ class PluginKind(StrEnum):
     TEMPLATE = "template"
     PARSER = "parser"
     ANALYZER = "analyzer"
+    TRACKER = "tracker"
 
 
 # ======================================================================================
@@ -661,3 +673,153 @@ class WorkAuthStatus(StrEnum):
     def requires_sponsorship(self) -> bool:
         """Return whether the user needs employer visa sponsorship to take a role."""
         return self is WorkAuthStatus.NEEDS_SPONSORSHIP
+
+
+# ======================================================================================
+# Application status sync (docs/CONTRACTS.md §17)
+# ======================================================================================
+
+
+class SignalSource(StrEnum):
+    """The channel a status signal was observed on.
+
+    Email is the primary channel by design: every ATS — and LinkedIn itself — notifies by
+    email, so one mailbox pipeline covers every provider at once, including ones ApplicantOS
+    never integrated. ``ats_portal`` covers the optional direct checks made only where a
+    browser session already exists, ``manual`` covers an outcome the user typed in, and
+    ``webhook`` is reserved for providers that push.
+
+    The three ``email_*`` members name the *mailbox implementation* that read the message,
+    not the employer: :data:`EMAIL_SIGNAL_SOURCES` is the set of them, so no caller has to
+    test ``value.startswith("email_")``.
+    """
+
+    EMAIL_GMAIL = "email_gmail"
+    EMAIL_IMAP = "email_imap"
+    EMAIL_OUTLOOK = "email_outlook"
+    ATS_PORTAL = "ats_portal"
+    MANUAL = "manual"
+    WEBHOOK = "webhook"
+
+    def is_email(self) -> bool:
+        """Return whether this signal was read out of a mailbox."""
+        return self in EMAIL_SIGNAL_SOURCES
+
+
+#: Signal sources backed by a mailbox, and therefore governed by the read-only,
+#: narrow-query, minimal-retention privacy invariants of ``docs/CONTRACTS.md`` §17.8.
+EMAIL_SIGNAL_SOURCES: Final[frozenset[SignalSource]] = frozenset(
+    {
+        SignalSource.EMAIL_GMAIL,
+        SignalSource.EMAIL_IMAP,
+        SignalSource.EMAIL_OUTLOOK,
+    }
+)
+
+
+class SignalKind(StrEnum):
+    """What a status signal actually says about an application.
+
+    Produced by ``StatusClassifier``: deterministic phrase rules first, an LLM only when
+    those return :attr:`UNKNOWN` or land below the confidence floor. ``unknown`` is a
+    first-class outcome, never a default that gets acted on — golden rule #2 means an
+    unclassifiable message parks for review instead of moving an application.
+
+    :data:`SIGNAL_KIND_TO_STATUS` is the single authority on what each kind *means*, so the
+    classifier and :class:`~app.services.status_sync` cannot disagree.
+    """
+
+    APPLICATION_RECEIVED = "application_received"
+    VIEWED = "viewed"
+    ASSESSMENT_REQUESTED = "assessment_requested"
+    INTERVIEW_INVITE = "interview_invite"
+    OFFER = "offer"
+    REJECTION = "rejection"
+    WITHDRAWN = "withdrawn"
+    GHOSTED_INFERRED = "ghosted_inferred"
+    UNKNOWN = "unknown"
+
+    def to_status(self) -> ApplicationStatus | None:
+        """Return the application status this kind implies.
+
+        Returns:
+            The implied :class:`ApplicationStatus`, or ``None`` when the kind carries
+            information but no status change (a "your application was viewed" notice, or a
+            message nothing could be made of).
+        """
+        return SIGNAL_KIND_TO_STATUS[self]
+
+    def changes_status(self) -> bool:
+        """Return whether acting on this kind would move the application's status."""
+        return SIGNAL_KIND_TO_STATUS[self] is not None
+
+
+#: What each :class:`SignalKind` means in :class:`ApplicationStatus` terms. Defined once,
+#: beside the vocabulary itself, because the classifier that produces a kind and the service
+#: that acts on one must never disagree about it.
+#:
+#: Three entries deserve their reasoning stated:
+#:
+#: * ``assessment_requested`` maps to ``needs_review``, not to a new outcome. A take-home or
+#:   an online assessment is work only the human can do, and the honest response is to
+#:   surface it rather than to record progress that has not happened (golden rule #2).
+#: * ``viewed`` and ``unknown`` map to ``None``. A view is real information for analytics but
+#:   says nothing about the outcome, and an unclassifiable message must never move anything.
+#: * ``ghosted_inferred`` maps to ``ghosted`` — the one status this system derives from
+#:   silence rather than from a message, gated by ``settings.ghosted_after_days``.
+SIGNAL_KIND_TO_STATUS: Final[dict[SignalKind, ApplicationStatus | None]] = {
+    SignalKind.APPLICATION_RECEIVED: ApplicationStatus.SUBMITTED,
+    SignalKind.VIEWED: None,
+    SignalKind.ASSESSMENT_REQUESTED: ApplicationStatus.NEEDS_REVIEW,
+    SignalKind.INTERVIEW_INVITE: ApplicationStatus.INTERVIEW,
+    SignalKind.OFFER: ApplicationStatus.OFFER,
+    SignalKind.REJECTION: ApplicationStatus.REJECTED,
+    SignalKind.WITHDRAWN: ApplicationStatus.ABANDONED,
+    SignalKind.GHOSTED_INFERRED: ApplicationStatus.GHOSTED,
+    SignalKind.UNKNOWN: None,
+}
+
+
+class MailProvider(StrEnum):
+    """The mailbox implementation behind an :class:`~app.models.tracking.EmailAccount`.
+
+    ``gmail`` and ``outlook`` authenticate through OAuth with read-only scopes
+    (``gmail.readonly``, ``Mail.Read``); ``imap`` opens the mailbox with ``readonly=True``.
+    Nothing in any of the three sends, deletes, moves, or re-flags a message.
+    """
+
+    GMAIL = "gmail"
+    OUTLOOK = "outlook"
+    IMAP = "imap"
+
+    def signal_source(self) -> SignalSource:
+        """Return the :class:`SignalSource` that signals from this mailbox carry."""
+        return MAIL_PROVIDER_TO_SIGNAL_SOURCE[self]
+
+
+#: Mailbox implementation to the source recorded on every signal it produces. Keeps the
+#: ``gmail`` → ``email_gmail`` correspondence in one place instead of in each tracker.
+MAIL_PROVIDER_TO_SIGNAL_SOURCE: Final[dict[MailProvider, SignalSource]] = {
+    MailProvider.GMAIL: SignalSource.EMAIL_GMAIL,
+    MailProvider.OUTLOOK: SignalSource.EMAIL_OUTLOOK,
+    MailProvider.IMAP: SignalSource.EMAIL_IMAP,
+}
+
+
+class StatusSource(StrEnum):
+    """Where an application's *current* status came from.
+
+    Recorded on :attr:`~app.models.application.Application.status_source` so that a status
+    the user typed in is never silently overwritten by a lower-confidence inference, and so
+    that "how did we learn this?" is answerable per application.
+
+    ``manual`` is the default and the highest authority: the human said so. ``pipeline`` is
+    what the submission flow writes. ``email`` and ``portal`` come from status sync.
+    ``inferred`` covers a status derived from the absence of news — ghosting.
+    """
+
+    MANUAL = "manual"
+    EMAIL = "email"
+    PORTAL = "portal"
+    INFERRED = "inferred"
+    PIPELINE = "pipeline"

@@ -61,6 +61,7 @@ ENTRY_POINT_GROUPS: Final[dict[PluginKind, str]] = {
     PluginKind.TEMPLATE: "applicantos.templates",
     PluginKind.PARSER: "applicantos.parsers",
     PluginKind.ANALYZER: "applicantos.analyzers",
+    PluginKind.TRACKER: "applicantos.trackers",
 }
 
 #: Packages whose import registers the built-in plugins. Importing the package is enough:
@@ -71,6 +72,7 @@ BUILTIN_PLUGIN_MODULES: Final[tuple[str, ...]] = (
     "app.ai.models",
     "app.knowledge.analyzers",
     "app.documents",
+    "app.tracking",
 )
 
 #: Guards the module-level loaded flag. Reentrant because :func:`reload_all` calls

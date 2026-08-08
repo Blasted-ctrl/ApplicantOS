@@ -61,6 +61,11 @@ __all__ = [
     "EVENT_SESSION_FINISHED",
     "EVENT_SESSION_STARTED",
     "EVENT_SESSION_UPDATED",
+    "EVENT_TRACKING_SIGNAL_FOUND",
+    "EVENT_TRACKING_STATUS_CHANGED",
+    "EVENT_TRACKING_SYNC_FINISHED",
+    "EVENT_TRACKING_SYNC_PROGRESS",
+    "EVENT_TRACKING_SYNC_STARTED",
     "MAX_DROPPED_BEFORE_DISCONNECT",
     "Event",
     "EventBus",
@@ -88,6 +93,14 @@ EVENT_KNOWLEDGE_INDEX_STARTED: Final[str] = "knowledge.index_started"
 EVENT_KNOWLEDGE_INDEX_PROGRESS: Final[str] = "knowledge.index_progress"
 EVENT_KNOWLEDGE_INDEX_FINISHED: Final[str] = "knowledge.index_finished"
 EVENT_LOG_ENTRY: Final[str] = "log.entry"
+# Application status sync (docs/CONTRACTS.md §17.7). Published by
+# :class:`app.tracking.service.StatusSyncService` as a mailbox is read, so the desktop app
+# can show a rejection landing rather than discovering it on the next refresh.
+EVENT_TRACKING_SYNC_STARTED: Final[str] = "tracking.sync_started"
+EVENT_TRACKING_SYNC_PROGRESS: Final[str] = "tracking.sync_progress"
+EVENT_TRACKING_SIGNAL_FOUND: Final[str] = "tracking.signal_found"
+EVENT_TRACKING_STATUS_CHANGED: Final[str] = "tracking.status_changed"
+EVENT_TRACKING_SYNC_FINISHED: Final[str] = "tracking.sync_finished"
 
 #: Every event name a publisher may use. Closed by contract: the desktop app switches on
 #: these strings, so an unlisted name would arrive as an unhandled frame.
@@ -105,6 +118,11 @@ EVENT_NAMES: Final[frozenset[str]] = frozenset(
         EVENT_KNOWLEDGE_INDEX_STARTED,
         EVENT_KNOWLEDGE_INDEX_PROGRESS,
         EVENT_KNOWLEDGE_INDEX_FINISHED,
+        EVENT_TRACKING_SYNC_STARTED,
+        EVENT_TRACKING_SYNC_PROGRESS,
+        EVENT_TRACKING_SIGNAL_FOUND,
+        EVENT_TRACKING_STATUS_CHANGED,
+        EVENT_TRACKING_SYNC_FINISHED,
         EVENT_LOG_ENTRY,
     }
 )

@@ -84,6 +84,56 @@ except ImportError as exc:  # pragma: no cover - depends on build order
 else:
     __all__.append("ReviewService")
 
+# ``CheckpointService`` comes with the step vocabulary and the two key builders. All four are
+# re-exported together: a caller writing a checkpoint needs ``step_key``/``owner_key`` to
+# build a key that is actually unique, and a caller rendering "5 of 7" needs
+# ``STEPS_BY_OWNER`` for the total.
+try:
+    from app.services.checkpoint_service import (
+        STEPS_BY_OWNER as STEPS_BY_OWNER,
+    )
+    from app.services.checkpoint_service import CheckpointService as CheckpointService
+    from app.services.checkpoint_service import owner_key as owner_key
+    from app.services.checkpoint_service import step_key as step_key
+except ImportError as exc:  # pragma: no cover - depends on build order
+    logger.debug(
+        "services.optional_import_failed", service="CheckpointService", error=str(exc)
+    )
+else:
+    __all__ += ["STEPS_BY_OWNER", "CheckpointService", "owner_key", "step_key"]
+
+try:
+    from app.services.session_service import SessionService as SessionService
+except ImportError as exc:  # pragma: no cover - depends on build order
+    logger.debug(
+        "services.optional_import_failed", service="SessionService", error=str(exc)
+    )
+else:
+    __all__.append("SessionService")
+
+# ``STEPS`` travels with ``OnboardingService`` because the wizard definition is the service's
+# public surface: the route that answers ``GET /onboarding/steps`` renders it directly.
+try:
+    from app.services.onboarding_service import (
+        STEPS as ONBOARDING_STEPS,
+    )
+    from app.services.onboarding_service import OnboardingService as OnboardingService
+except ImportError as exc:  # pragma: no cover - depends on build order
+    logger.debug(
+        "services.optional_import_failed", service="OnboardingService", error=str(exc)
+    )
+else:
+    __all__ += ["ONBOARDING_STEPS", "OnboardingService"]
+
+try:
+    from app.services.analytics_service import AnalyticsService as AnalyticsService
+except ImportError as exc:  # pragma: no cover - depends on build order
+    logger.debug(
+        "services.optional_import_failed", service="AnalyticsService", error=str(exc)
+    )
+else:
+    __all__.append("AnalyticsService")
+
 # ``Pipeline`` is imported last: it depends on every service above it, so a failure here is
 # most usefully read as "one of my collaborators is missing" rather than as its own fault.
 try:

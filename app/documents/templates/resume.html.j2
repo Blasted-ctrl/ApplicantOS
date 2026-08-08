@@ -1,0 +1,219 @@
+{#
+  ApplicantOS -- "web" one-page resume (HTML), rendered by app.documents.html.WebTemplate.
+
+  STANDARD Jinja2 delimiters here -- double-brace variables, brace-percent blocks,
+  brace-hash comments -- and autoescape is ON, unlike the .tex.j2 templates in this
+  directory, which need custom delimiters and manual escaping to keep LaTeX's
+  braces intact. Never interpolate a value with |safe: everything in the context
+  is model-produced text.
+
+  Two consumers, one file:
+    * WeasyPrint, which honours the @page rule below and produces the PDF;
+    * the desktop app's resume preview pane, which loads it as a plain document.
+
+  Constraints, all deliberate:
+    * NO external resources of any kind -- no webfont, no CDN stylesheet, no <img>. The
+      renderer runs with base_url=None and a PDF must be byte-identical offline.
+    * NO tables, no floats, no absolute positioning. Same reason as the LaTeX templates: an
+      ATS reads the PDF text stream in layout order, and multi-column layout interleaves it.
+    * The date column is right-aligned via flexbox on a single row, which lays out as one
+      text line and extracts as "Title, Organization    Dates".
+    * Every dimension derives from {{ font_size }} / {{ margin_in }} so that render_resume's
+      shrink loop can pull an overflowing resume back onto one page.
+#}
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ pdf_title }}</title>
+<meta name="author" content="{{ pdf_author }}">
+<meta name="generator" content="ApplicantOS">
+<style>
+  @page {
+    size: letter;
+    margin: {{ margin_in }}in;
+  }
+
+  :root {
+    --accent: {{ accent_css }};
+    --ink: #111111;
+    --muted: #3d3d3d;
+    --rule: {{ rule_css }};
+    --base: {{ font_size }}pt;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    font-size: var(--base);
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+    font-size: 1rem;
+    line-height: 1.28;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Screen preview only: paint a letter-sized sheet. Print/PDF uses @page instead. */
+  @media screen {
+    body {
+      max-width: {{ content_width_in }}in;
+      margin: 0 auto;
+      padding: {{ margin_in }}in;
+      background: #ffffff;
+    }
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  a:hover { text-decoration: underline; }
+
+  header.identity {
+    text-align: {{ header_align }};
+    margin-bottom: 0.55rem;
+  }
+
+  h1.name {
+    font-size: 2.05rem;
+    line-height: 1.1;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+
+  p.headline {
+    font-size: 1.02rem;
+    margin: 0.28rem 0 0;
+    color: var(--muted);
+  }
+
+  ul.contact {
+    list-style: none;
+    margin: 0.3rem 0 0;
+    padding: 0;
+    font-size: 0.94rem;
+    line-height: 1.45;
+    color: var(--muted);
+  }
+  ul.contact li {
+    display: inline;
+  }
+  ul.contact li + li::before {
+    content: "\00b7";
+    margin: 0 0.45em;
+    color: var(--rule);
+  }
+
+  h2.section {
+    font-size: 1.06rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0.9rem 0 0.16rem;
+    padding-bottom: 0.1rem;
+    border-bottom: 0.7pt solid var(--rule);
+    /* Never strand a heading at the foot of a page. */
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  p.summary {
+    margin: 0.2rem 0 0;
+  }
+
+  article.entry {
+    margin-top: 0.4rem;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  article.entry:first-of-type { margin-top: 0.2rem; }
+
+  /* One text line: role on the left, dates hard against the right margin. */
+  div.entry-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1.2em;
+  }
+  span.entry-role { flex: 1 1 auto; }
+  span.entry-role strong { font-weight: 700; }
+  span.entry-meta {
+    flex: 0 0 auto;
+    text-align: right;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  span.entry-meta .dot { margin: 0 0.35em; color: var(--rule); }
+
+  ul.bullets {
+    margin: 0.12rem 0 0;
+    padding-left: 1.05em;
+  }
+  ul.bullets li {
+    margin: 0;
+    padding: 0;
+  }
+
+  p.skills {
+    margin: 0.2rem 0 0;
+  }
+</style>
+</head>
+<body>
+
+<header class="identity">
+  <h1 class="name">{{ name }}</h1>
+  {% if headline %}<p class="headline">{{ headline }}</p>{% endif %}
+  {% if contact_items %}
+  <ul class="contact">
+    {% for item in contact_items %}
+    <li>{% if item.url %}<a href="{{ item.url }}">{{ item.text }}</a>{% else %}{{ item.text }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</header>
+
+{% if summary %}
+<section>
+  <h2 class="section">{{ summary_heading }}</h2>
+  <p class="summary">{{ summary }}</p>
+</section>
+{% endif %}
+
+{% for section in sections %}
+<section>
+  <h2 class="section">{{ section.heading }}</h2>
+  {% for entry in section.entries %}
+  <article class="entry">
+    <div class="entry-head">
+      <span class="entry-role">{% if entry.title %}<strong>{{ entry.title }}</strong>{% endif %}{% if entry.title and entry.organization %}, {% endif %}{% if entry.organization %}{{ entry.organization }}{% endif %}</span>
+      <span class="entry-meta">{% if entry.location %}{{ entry.location }}{% if entry.date_range %}<span class="dot">&middot;</span>{% endif %}{% endif %}{% if entry.date_range %}{{ entry.date_range }}{% endif %}</span>
+    </div>
+    {% if entry.bullets %}
+    <ul class="bullets">
+      {% for bullet in entry.bullets %}<li>{{ bullet }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endfor %}
+
+{% if skills_line %}
+<section>
+  <h2 class="section">{{ skills_heading }}</h2>
+  <p class="skills">{{ skills_line }}</p>
+</section>
+{% endif %}
+
+</body>
+</html>

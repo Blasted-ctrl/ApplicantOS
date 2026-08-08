@@ -1,0 +1,145 @@
+{#
+  ApplicantOS -- cover letter (HTML), rendered by app.documents.html.WebTemplate.
+
+  STANDARD Jinja2 delimiters -- double-brace variables, brace-percent blocks,
+  brace-hash comments -- with autoescape ON. Never use |safe:
+  the body paragraphs are LLM-produced text and must not be able to inject markup.
+
+  Same visual system as resume.html.j2 -- identical font stack, accent, rule colour and
+  @page rule -- so that a resume and its cover letter rendered back to back read as one
+  application packet. Block layout (no indents, blank line between paragraphs) with the
+  conventional American business-letter order: sender letterhead, date, recipient block,
+  salutation, body, closing, typed signature.
+
+  No external resources of any kind; WeasyPrint runs with base_url=None.
+#}
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ pdf_title }}</title>
+<meta name="author" content="{{ pdf_author }}">
+<meta name="generator" content="ApplicantOS">
+<style>
+  @page {
+    size: letter;
+    margin: {{ margin_in }}in;
+  }
+
+  :root {
+    --accent: {{ accent_css }};
+    --ink: #111111;
+    --muted: #3d3d3d;
+    --rule: {{ rule_css }};
+    --base: {{ font_size }}pt;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { font-size: var(--base); }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+    font-size: 1rem;
+    line-height: 1.45;
+  }
+
+  @media screen {
+    body {
+      max-width: {{ content_width_in }}in;
+      margin: 0 auto;
+      padding: {{ margin_in }}in;
+    }
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.letterhead {
+    border-bottom: 0.7pt solid var(--rule);
+    padding-bottom: 0.35rem;
+    margin-bottom: 1.1rem;
+  }
+
+  h1.sender-name {
+    font-size: 1.55rem;
+    line-height: 1.15;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  ul.contact {
+    list-style: none;
+    margin: 0.25rem 0 0;
+    padding: 0;
+    font-size: 0.95rem;
+    color: var(--muted);
+  }
+  ul.contact li { display: inline; }
+  ul.contact li + li::before {
+    content: "\00b7";
+    margin: 0 0.45em;
+    color: var(--rule);
+  }
+
+  p.date { margin: 0 0 1.1rem; }
+
+  address.recipient {
+    font-style: normal;
+    margin: 0 0 1.1rem;
+    line-height: 1.32;
+  }
+
+  p.salutation { margin: 0 0 0.85rem; }
+
+  p.body-paragraph {
+    margin: 0 0 0.85rem;
+    text-align: left;
+    orphans: 2;
+    widows: 2;
+  }
+
+  p.closing { margin: 1.1rem 0 0; }
+  p.signature { margin: 1.1rem 0 0; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header class="letterhead">
+  <h1 class="sender-name">{{ sender_name }}</h1>
+  {% if sender_items %}
+  <ul class="contact">
+    {% for item in sender_items %}
+    <li>{% if item.url %}<a href="{{ item.url }}">{{ item.text }}</a>{% else %}{{ item.text }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</header>
+
+{% if date %}<p class="date">{{ date }}</p>{% endif %}
+
+{% if recipient_lines %}
+<address class="recipient">
+  {% for line in recipient_lines %}{{ line }}{% if not loop.last %}<br>{% endif %}
+  {% endfor %}
+</address>
+{% endif %}
+
+<p class="salutation">{{ salutation }}</p>
+
+{% for paragraph in paragraphs %}
+<p class="body-paragraph">{{ paragraph }}</p>
+{% endfor %}
+
+<p class="closing">{{ closing }}</p>
+<p class="signature">{{ signature }}</p>
+
+</body>
+</html>

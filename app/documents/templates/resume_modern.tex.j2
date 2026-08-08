@@ -1,0 +1,166 @@
+<#
+  ApplicantOS -- "modern" one-page resume (LaTeX).
+
+  Rendered by app.documents.latex.ModernTemplate with NON-STANDARD Jinja2 delimiters so
+  that LaTeX's own braces survive untouched:
+
+      block tags      <% ... %>
+      variables       <<  ...  >>
+      comments        angle-bracket-hash, as this very block opens with
+
+  autoescape is OFF; every string reaching this file has already been through
+  ``escape_latex``/``escape_document`` on the Python side, and every URL has been
+  percent-encoded. Nothing here may introduce new markup around unescaped input.
+
+  ATS CONTRACT -- do not "improve" any of this without re-reading docs/CONTRACTS.md §11:
+
+    * single column, top-to-bottom reading order;
+    * NO tabular/tabularx/multicol for layout -- a resume parser reads a PDF's text stream,
+      and a two-column table interleaves the streams into nonsense;
+    * NO \fbox/minipage text boxes, NO \includegraphics, NO headers or footers
+      (\pagestyle{empty}), NO page numbers;
+    * selectable text only -- the right-hand date column is produced by \hfill inside a
+      normal paragraph, not by a table cell;
+    * package set frozen to: geometry, parskip, enumitem, titlesec, xcolor, hyperref and
+      (guarded) fontawesome5.
+
+  fontawesome5 is optional on purpose: a minimal TeX Live or a bare tectonic bundle may not
+  carry it, and a missing icon must never fail a render. When the .sty is absent \resicon
+  swallows its argument without ever expanding it, so \faEnvelope stays an unexecuted token.
+
+  Everything that affects height is derived from << font_size >> and << margin_in >>, which
+  is what lets render_resume's shrink loop pull a 1.05-page resume onto one page.
+#>
+<% set body_lead     = "%.2f"|format(font_size * 1.22) %>
+<% set name_pt       = "%.2f"|format(font_size * 2.05) %>
+<% set name_lead     = "%.2f"|format(font_size * 2.25) %>
+<% set headline_pt   = "%.2f"|format(font_size * 1.02) %>
+<% set headline_lead = "%.2f"|format(font_size * 1.22) %>
+<% set contact_pt    = "%.2f"|format(font_size * 0.94) %>
+<% set contact_lead  = "%.2f"|format(font_size * 1.28) %>
+<% set sec_pt        = "%.2f"|format(font_size * 1.06) %>
+<% set sec_lead      = "%.2f"|format(font_size * 1.20) %>
+<% set sec_before    = "%.2f"|format(font_size * 0.90) %>
+<% set sec_after     = "%.2f"|format(font_size * 0.30) %>
+<% set entry_gap     = "%.2f"|format(font_size * 0.40) %>
+<% set name_gap      = "%.2f"|format(font_size * 0.30) %>
+\documentclass[<<font_size>>pt,letterpaper]{article}
+
+<# ---------------------------------------------------------------- packages -- #>
+\usepackage[letterpaper,margin=<<margin_in>>in]{geometry}
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{xcolor}
+<#
+  fontawesome5 guard. \IfFileExists absorbs both branches as macro arguments, so a literal
+  #1 inside either one is read as a parameter of the *enclosing* definition and TeX aborts
+  with "Illegal parameter number". Both argument-taking macros are therefore defined at top
+  level, and the branch only switches which of them \resicon points at.
+#>
+\newcommand{\resiconoff}[1]{}
+\newcommand{\resiconon}[1]{{\footnotesize#1}\,}
+\newcommand{\resicon}{\resiconoff}
+\IfFileExists{fontawesome5.sty}
+  {\usepackage{fontawesome5}\renewcommand{\resicon}{\resiconon}}
+  {}
+\definecolor{accent}{HTML}{<<accent>>}
+\usepackage[unicode]{hyperref}
+\hypersetup{
+  colorlinks=true,
+  urlcolor=accent,
+  linkcolor=accent,
+  breaklinks=true,
+  pdftitle={<<pdf_title>>},
+  pdfauthor={<<pdf_author>>},
+  pdfcreator={ApplicantOS},
+  pdfsubject={Resume}
+}
+
+<# ------------------------------------------------------------- page setup -- #>
+\pagestyle{empty}
+\raggedright
+\setlength{\emergencystretch}{3em}
+\setlength{\parskip}{<<entry_gap>>pt}
+\hyphenpenalty=1200
+\tolerance=1200
+
+<# ------------------------------------------------------------------ lists -- #>
+\setlist[itemize]{leftmargin=*,nosep,topsep=2pt,partopsep=0pt,parsep=0pt,label=\textbullet}
+
+<# --------------------------------------------------------------- sections -- #>
+\titleformat{\section}
+  {\fontsize{<<sec_pt>>}{<<sec_lead>>}\selectfont\bfseries\color{accent}}
+  {}{0pt}{}
+  [{\color{accent}\titlerule[0.7pt]}]
+\titlespacing*{\section}{0pt}{<<sec_before>>pt}{<<sec_after>>pt}
+
+<#
+  \hfillline{left}{right} -- the "\textbf{Title}, Organization \hfill Dates" line.
+
+  Under \raggedright, \rightskip is "0pt plus 1fil" and \parfillskip is "0pt plus 1fil";
+  either one competes with \hfill for the slack and parks the date somewhere in the middle
+  of the line. Zeroing both inside a group makes \hfill the only stretchable glue, so the
+  right-hand text lands flush against the margin -- with no table involved.
+#>
+\newcommand{\hfillline}[2]{%
+  \par
+  \begingroup
+    \setlength{\rightskip}{0pt}%
+    \setlength{\parfillskip}{0pt}%
+    \noindent #1\hfill #2\par
+  \endgroup}
+
+\newcommand{\sepdot}{\hspace{0.45em}\textperiodcentered\hspace{0.45em}}
+
+\begin{document}
+\fontsize{<<font_size>>}{<<body_lead>>}\selectfont
+
+<# ------------------------------------------------------------ header block -- #>
+\begin{center}
+  {\fontsize{<<name_pt>>}{<<name_lead>>}\selectfont\bfseries <<name>>}
+<% if headline %>
+  \\[<<name_gap>>pt]
+  {\fontsize{<<headline_pt>>}{<<headline_lead>>}\selectfont <<headline>>}
+<% endif %>
+<% if contact_items %>
+  \\[<<name_gap>>pt]
+  {\fontsize{<<contact_pt>>}{<<contact_lead>>}\selectfont
+<% for item in contact_items %>
+<% if not loop.first %>\sepdot{}<% endif %>
+<% if item.icon %>\resicon{<<item.icon>>}<% endif %>
+<% if item.url %>\href{<<item.url>>}{<<item.text>>}<% else %><<item.text>><% endif %>
+<% endfor %>
+  }
+<% endif %>
+\end{center}
+
+<# ---------------------------------------------------------------- summary -- #>
+<% if summary %>
+\section*{<<summary_heading>>}
+<<summary>>
+<% endif %>
+
+<# --------------------------------------------------------------- sections -- #>
+<% for section in sections %>
+\section*{<<section.heading>>}
+<% for entry in section.entries %>
+<% if not loop.first %>\vspace{<<entry_gap>>pt}<% endif %>
+\hfillline{<% if entry.title %>\textbf{<<entry.title>>}<% endif %><% if entry.title and entry.organization %>, <% endif %><% if entry.organization %><<entry.organization>><% endif %>}{<% if entry.location %><<entry.location>><% if entry.date_range %>\sepdot{}<% endif %><% endif %><% if entry.date_range %><<entry.date_range>><% endif %>}
+<% if entry.bullets %>
+\begin{itemize}
+<% for bullet in entry.bullets %>
+  \item <<bullet>>
+<% endfor %>
+\end{itemize}
+<% endif %>
+<% endfor %>
+<% endfor %>
+
+<# ----------------------------------------------------------------- skills -- #>
+<% if skills_line %>
+\section*{<<skills_heading>>}
+<<skills_line>>
+<% endif %>
+
+\end{document}

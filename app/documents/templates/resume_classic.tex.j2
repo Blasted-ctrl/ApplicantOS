@@ -1,0 +1,154 @@
+<#
+  ApplicantOS -- "classic" one-page resume (LaTeX).
+
+  The conservative sibling of resume_modern.tex.j2: pure black, left-aligned header,
+  uppercase section headings, no icons, no coloured links. This is the template to reach for
+  when the target is a bank, a law-adjacent employer, or any ATS whose PDF text extractor
+  has a reputation for choking on anything decorative.
+
+  Same non-standard Jinja2 delimiters as the modern template, for the same reason -- LaTeX
+  braces must survive the template engine:
+
+      block tags      <% ... %>
+      variables       <<  ...  >>
+      comments        angle-bracket-hash, as this very block opens with
+
+  autoescape is OFF; every value interpolated here has already been through
+  ``escape_latex``/``escape_document``, and URLs have been percent-encoded.
+
+  ATS CONTRACT (identical to the modern template): single column, no tabular layout, no text
+  boxes, no images, no headers/footers, selectable text only. Package set frozen to
+  geometry, parskip, enumitem, titlesec, xcolor, hyperref and (guarded) fontawesome5 --
+  fontawesome5 is loaded only so the guard macro exists; this template never draws an icon.
+
+  Every vertical dimension derives from << font_size >> and << margin_in >> so that
+  render_resume's shrink loop has something to pull on.
+#>
+<% set body_lead     = "%.2f"|format(font_size * 1.24) %>
+<% set name_pt       = "%.2f"|format(font_size * 1.95) %>
+<% set name_lead     = "%.2f"|format(font_size * 2.15) %>
+<% set headline_pt   = "%.2f"|format(font_size * 1.02) %>
+<% set headline_lead = "%.2f"|format(font_size * 1.22) %>
+<% set contact_pt    = "%.2f"|format(font_size * 0.95) %>
+<% set contact_lead  = "%.2f"|format(font_size * 1.30) %>
+<% set sec_pt        = "%.2f"|format(font_size * 1.02) %>
+<% set sec_lead      = "%.2f"|format(font_size * 1.18) %>
+<% set sec_before    = "%.2f"|format(font_size * 0.95) %>
+<% set sec_after     = "%.2f"|format(font_size * 0.30) %>
+<% set entry_gap     = "%.2f"|format(font_size * 0.40) %>
+<% set name_gap      = "%.2f"|format(font_size * 0.28) %>
+\documentclass[<<font_size>>pt,letterpaper]{article}
+
+<# ---------------------------------------------------------------- packages -- #>
+\usepackage[letterpaper,margin=<<margin_in>>in]{geometry}
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{xcolor}
+<#
+  fontawesome5 guard. \IfFileExists absorbs both branches as macro arguments, so a literal
+  #1 inside either one is read as a parameter of the *enclosing* definition and TeX aborts
+  with "Illegal parameter number". Both argument-taking macros are therefore defined at top
+  level, and the branch only switches which of them \resicon points at.
+#>
+\newcommand{\resiconoff}[1]{}
+\newcommand{\resiconon}[1]{{\footnotesize#1}\,}
+\newcommand{\resicon}{\resiconoff}
+\IfFileExists{fontawesome5.sty}
+  {\usepackage{fontawesome5}\renewcommand{\resicon}{\resiconon}}
+  {}
+\usepackage[unicode,hidelinks]{hyperref}
+\hypersetup{
+  pdftitle={<<pdf_title>>},
+  pdfauthor={<<pdf_author>>},
+  pdfcreator={ApplicantOS},
+  pdfsubject={Resume}
+}
+
+<# ------------------------------------------------------------- page setup -- #>
+\pagestyle{empty}
+\raggedright
+\setlength{\emergencystretch}{3em}
+\setlength{\parskip}{<<entry_gap>>pt}
+\hyphenpenalty=1200
+\tolerance=1200
+
+<# ------------------------------------------------------------------ lists -- #>
+\setlist[itemize]{leftmargin=*,nosep,topsep=2pt,partopsep=0pt,parsep=0pt,label=\textbullet}
+
+<#
+  Uppercase rather than small caps: \MakeUppercase is font-independent, whereas a bold
+  small-caps series does not exist in every Computer Modern / Latin Modern install and would
+  silently trigger a font substitution.
+#>
+\titleformat{\section}
+  {\fontsize{<<sec_pt>>}{<<sec_lead>>}\selectfont\bfseries}
+  {}{0pt}{\MakeUppercase}
+  [\titlerule[0.6pt]]
+\titlespacing*{\section}{0pt}{<<sec_before>>pt}{<<sec_after>>pt}
+
+<#
+  \hfillline{left}{right} -- "\textbf{Title}, Organization \hfill Dates" without a table.
+  \rightskip and \parfillskip are both "0pt plus 1fil" under \raggedright and would each
+  claim a share of the slack, stranding the date mid-line; zeroing them inside a group
+  leaves \hfill as the only stretchable glue on the line.
+#>
+\newcommand{\hfillline}[2]{%
+  \par
+  \begingroup
+    \setlength{\rightskip}{0pt}%
+    \setlength{\parfillskip}{0pt}%
+    \noindent #1\hfill #2\par
+  \endgroup}
+
+\newcommand{\sepdot}{\hspace{0.45em}\textperiodcentered\hspace{0.45em}}
+
+\begin{document}
+\fontsize{<<font_size>>}{<<body_lead>>}\selectfont
+
+<# ------------------------------------------------------------ header block -- #>
+{\fontsize{<<name_pt>>}{<<name_lead>>}\selectfont\bfseries <<name>>}
+<% if headline %>
+\par\vspace{<<name_gap>>pt}
+{\fontsize{<<headline_pt>>}{<<headline_lead>>}\selectfont <<headline>>}
+<% endif %>
+<% if contact_items %>
+\par\vspace{<<name_gap>>pt}
+{\fontsize{<<contact_pt>>}{<<contact_lead>>}\selectfont
+<% for item in contact_items %>
+<% if not loop.first %>\sepdot{}<% endif %>
+<% if item.url %>\href{<<item.url>>}{<<item.text>>}<% else %><<item.text>><% endif %>
+<% endfor %>
+}
+<% endif %>
+\par
+
+<# ---------------------------------------------------------------- summary -- #>
+<% if summary %>
+\section*{<<summary_heading>>}
+<<summary>>
+<% endif %>
+
+<# --------------------------------------------------------------- sections -- #>
+<% for section in sections %>
+\section*{<<section.heading>>}
+<% for entry in section.entries %>
+<% if not loop.first %>\vspace{<<entry_gap>>pt}<% endif %>
+\hfillline{<% if entry.title %>\textbf{<<entry.title>>}<% endif %><% if entry.title and entry.organization %>, <% endif %><% if entry.organization %><<entry.organization>><% endif %>}{<% if entry.location %><<entry.location>><% if entry.date_range %>\sepdot{}<% endif %><% endif %><% if entry.date_range %><<entry.date_range>><% endif %>}
+<% if entry.bullets %>
+\begin{itemize}
+<% for bullet in entry.bullets %>
+  \item <<bullet>>
+<% endfor %>
+\end{itemize}
+<% endif %>
+<% endfor %>
+<% endfor %>
+
+<# ----------------------------------------------------------------- skills -- #>
+<% if skills_line %>
+\section*{<<skills_heading>>}
+<<skills_line>>
+<% endif %>
+
+\end{document}

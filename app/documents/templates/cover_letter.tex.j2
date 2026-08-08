@@ -1,0 +1,124 @@
+<#
+  ApplicantOS -- cover letter (LaTeX), standard American business-letter layout.
+
+  Shared by app.documents.latex.ModernTemplate and ClassicTemplate; the only difference
+  between the two is the << accent >> colour they pass in (classic passes pure black), so
+  there is one letter template rather than two near-identical ones.
+
+  Non-standard Jinja2 delimiters, as everywhere under this directory:
+
+      block tags      <% ... %>
+      variables       <<  ...  >>
+      comments        angle-bracket-hash, as this very block opens with
+
+  autoescape is OFF; every value has already been through ``escape_latex`` and every URL has
+  been percent-encoded before it arrives here.
+
+  Block order is the conventional one and matters -- a recruiter skims it in this sequence:
+  sender block, date, recipient block, salutation, body, sign-off, typed signature. Ragged
+  right, no indentation, a blank line between paragraphs: modern block format.
+
+  Package set is the same frozen list as the resumes (geometry, parskip, enumitem, titlesec,
+  xcolor, hyperref, guarded fontawesome5); enumitem and titlesec are loaded for parity with
+  the resume preamble so a letter and a resume rendered together look like one document.
+#>
+<% set body_lead    = "%.2f"|format(font_size * 1.35) %>
+<% set name_pt      = "%.2f"|format(font_size * 1.55) %>
+<% set name_lead    = "%.2f"|format(font_size * 1.75) %>
+<% set contact_pt   = "%.2f"|format(font_size * 0.95) %>
+<% set contact_lead = "%.2f"|format(font_size * 1.28) %>
+<% set block_gap    = "%.2f"|format(font_size * 1.10) %>
+<% set para_gap     = "%.2f"|format(font_size * 0.85) %>
+\documentclass[<<font_size>>pt,letterpaper]{article}
+
+<# ---------------------------------------------------------------- packages -- #>
+\usepackage[letterpaper,margin=<<margin_in>>in]{geometry}
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{xcolor}
+<#
+  fontawesome5 guard. \IfFileExists absorbs both branches as macro arguments, so a literal
+  #1 inside either one is read as a parameter of the *enclosing* definition and TeX aborts
+  with "Illegal parameter number". Both argument-taking macros are therefore defined at top
+  level, and the branch only switches which of them \resicon points at.
+#>
+\newcommand{\resiconoff}[1]{}
+\newcommand{\resiconon}[1]{{\footnotesize#1}\,}
+\newcommand{\resicon}{\resiconoff}
+\IfFileExists{fontawesome5.sty}
+  {\usepackage{fontawesome5}\renewcommand{\resicon}{\resiconon}}
+  {}
+\definecolor{accent}{HTML}{<<accent>>}
+\usepackage[unicode,hidelinks]{hyperref}
+\hypersetup{
+  pdftitle={<<pdf_title>>},
+  pdfauthor={<<pdf_author>>},
+  pdfcreator={ApplicantOS},
+  pdfsubject={Cover letter}
+}
+
+<# ------------------------------------------------------------- page setup -- #>
+\pagestyle{empty}
+\raggedright
+\setlength{\emergencystretch}{3em}
+\setlength{\parskip}{<<para_gap>>pt}
+\hyphenpenalty=1200
+\tolerance=1200
+
+\newcommand{\sepdot}{\hspace{0.45em}\textperiodcentered\hspace{0.45em}}
+
+\begin{document}
+\fontsize{<<font_size>>}{<<body_lead>>}\selectfont
+
+<# ------------------------------------------------------- sender letterhead -- #>
+{\fontsize{<<name_pt>>}{<<name_lead>>}\selectfont\bfseries\color{accent}<<sender_name>>}
+<% if sender_items %>
+\par
+{\fontsize{<<contact_pt>>}{<<contact_lead>>}\selectfont
+<% for item in sender_items %>
+<% if not loop.first %>\sepdot{}<% endif %>
+<% if item.url %>\href{<<item.url>>}{<<item.text>>}<% else %><<item.text>><% endif %>
+<% endfor %>
+}
+<% endif %>
+\par\vspace{<<block_gap>>pt}
+
+<# -------------------------------------------------------------------- date -- #>
+<% if date %>
+<<date>>
+\par\vspace{<<block_gap>>pt}
+<% endif %>
+
+<#
+  One \par-terminated paragraph per line with \parskip zeroed for the block, rather than
+  "line\\line\\line": \\ scans ahead for an optional [length] argument, so an address line
+  that happens to begin with a bracket would be swallowed. Stacked zero-skip paragraphs have
+  no such failure mode and extract from the PDF in the same reading order.
+#>
+<% if recipient_lines %>
+\begingroup\setlength{\parskip}{0pt}
+<% for line in recipient_lines %>
+\noindent <<line>>\par
+<% endfor %>
+\endgroup
+\vspace{<<block_gap>>pt}
+<% endif %>
+
+<# -------------------------------------------------------------- salutation -- #>
+<<salutation>>
+\par\vspace{<<para_gap>>pt}
+
+<# -------------------------------------------------------------------- body -- #>
+<% for paragraph in paragraphs %>
+<<paragraph>>
+\par
+<% endfor %>
+
+<# ----------------------------------------------------------------- sign-off -- #>
+\vspace{<<para_gap>>pt}
+<<closing>>
+\par\vspace{<<block_gap>>pt}
+<<signature>>
+
+\end{document}

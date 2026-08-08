@@ -57,4 +57,41 @@ except ImportError as exc:  # pragma: no cover - depends on build order
 else:
     __all__.append("DiscoveryService")
 
+# ``ApplicationService`` comes with the state machine and the error type that guards it.
+# All three are re-exported together: a caller that catches ``InvalidTransition`` needs the
+# name, and a caller rendering "what can I do next?" needs ``ALLOWED_TRANSITIONS``.
+try:
+    from app.services.application_service import (
+        ALLOWED_TRANSITIONS as ALLOWED_TRANSITIONS,
+    )
+    from app.services.application_service import (
+        ApplicationService as ApplicationService,
+    )
+    from app.services.application_service import InvalidTransition as InvalidTransition
+except ImportError as exc:  # pragma: no cover - depends on build order
+    logger.debug(
+        "services.optional_import_failed", service="ApplicationService", error=str(exc)
+    )
+else:
+    __all__ += ["ALLOWED_TRANSITIONS", "ApplicationService", "InvalidTransition"]
+
+try:
+    from app.services.review_service import ReviewService as ReviewService
+except ImportError as exc:  # pragma: no cover - depends on build order
+    logger.debug(
+        "services.optional_import_failed", service="ReviewService", error=str(exc)
+    )
+else:
+    __all__.append("ReviewService")
+
+# ``Pipeline`` is imported last: it depends on every service above it, so a failure here is
+# most usefully read as "one of my collaborators is missing" rather than as its own fault.
+try:
+    from app.services.pipeline import Pipeline as Pipeline
+    from app.services.pipeline import PipelineResult as PipelineResult
+except ImportError as exc:  # pragma: no cover - depends on build order
+    logger.debug("services.optional_import_failed", service="Pipeline", error=str(exc))
+else:
+    __all__ += ["Pipeline", "PipelineResult"]
+
 __all__.sort()

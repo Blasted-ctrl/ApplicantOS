@@ -23,6 +23,21 @@ have submitted an application — the same posture Workday and LinkedIn hold per
 
 from __future__ import annotations
 
+from app.browser.playwright_runner import (
+    BrowserArtifacts,
+    BrowserAutomationUnavailable,
+    BrowserSession,
+    BrowserSessionError,
+)
+from app.browser.recorder import ArtifactRecorder
 from app.browser.selectors import SelectorPack, pack_for
 
-__all__ = ["SelectorPack", "pack_for"]
+__all__ = [
+    "ArtifactRecorder",
+    "BrowserArtifacts",
+    "BrowserAutomationUnavailable",
+    "BrowserSession",
+    "BrowserSessionError",
+    "SelectorPack",
+    "pack_for",
+]

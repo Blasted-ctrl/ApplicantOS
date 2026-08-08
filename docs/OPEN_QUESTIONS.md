@@ -1288,3 +1288,54 @@ posting being expired and deleted.
 knowledge engine reaches into the application-tracking half of the schema.
 `AnalyticsService.what_gets_interviews` will want exactly this data and may prefer to own the
 join, in which case `record_outcome` should take the description rather than derive it.
+
+---
+
+## Findings from the evolveagent-ai research pass (2026-08-07)
+
+### A. Prompt injection via job descriptions — REAL EXPOSURE, spec'd in CONTRACTS §10b
+Job descriptions are attacker-controlled text piped into `ResumeEngine.tailor`,
+`CoverLetterWriter.write` and `FieldAnswerer.answer`. The fact-id validator defeats the
+fabrication half of the attack on resumes (an invented degree has no `KnowledgeFact` behind
+it), but `FieldAnswerer` emits free text with no equivalent backstop. Needs
+`app/ai/untrusted.py` and four call sites. **Owner: Phase 5 follow-up.**
+
+### B. `CheckpointService` is spec'd but not implemented — golden rule 8 has no runtime
+`app/models/checkpoint.py` exists with a good design (unique `key` as the idempotency
+mechanism, `attempt`, `resumable`, and a `COMPENSATED` status distinguishing deliberate
+rollback from failure). But there is no `app/services/checkpoint_service.py`, and nothing
+outside `app/models/` imports `Checkpoint`. **Owner: Phase 6.**
+
+Add alongside it a module-level ordered step declaration per owner kind, e.g.
+`APPLY_STEPS = ("score", "retrieve", "tailor", "render", "fill", "verify", "submit")`, so the
+desktop app can render "5 of 7" rather than "the rows that happen to exist". A tuple, not a
+graph — the moment it becomes a data-driven registry we have rebuilt a workflow engine we do
+not need for a fixed linear sequence.
+
+### C. `ReviewService.dismiss` loses the negative signal
+`resolve()` feeds `MemoryStore.record_correction`, so "here is the right answer" is captured.
+`dismiss()` writes a note to `Application.notes` and nothing else, so "I don't want jobs like
+this" is discarded. `MemoryEntry.kind` already has a `feedback` value. Cheapest real
+self-improvement win available. **Owner: Phase 6.**
+
+### D. No USD cost surface
+We count real tokens (`usage.input_tokens` from the provider) and enforce a real daily budget,
+which is more than most systems do — but there is no `cost_usd` anywhere. A per-model
+input/output rate table turns the existing `token_usage` JSON on `RunSession` and
+`ResumeVersion` into a number the user understands. **Owner: Phase 8.**
+
+### E. Second-opinion retry before escalating to a human
+When `FieldAnswerer` falls below `min_answer_confidence`, try a *different* model plugin before
+routing to `NEEDS_REVIEW`. Human interrupts are the real cost in this product. Gate behind a
+setting, default off, and fire it only where the alternative is interrupting the user — never
+as a general quality pass, since it doubles tokens on exactly the expensive requests.
+**Owner: Phase 6, optional.**
+
+### F. What NOT to take from evolveagent-ai
+Task DAG (their `depends_on` has 2 writers, 0 readers; our pipeline is a fixed linear
+sequence), the agent registry (4 hardcoded classes that all run on every task; `find_capable`
+is substring matching with an alphabetical tiebreak), the 6-call multi-agent fan-out (no
+measured quality gain, 6x token cost), the LLM judge (never calls an LLM — scores by output
+length and whether the text contains "##"), `DurableWorkflowService` (simulated execution,
+checkpoints with zero readers, `resume_run` that cannot resume a crash), and their usage ledger
+(flat $0.002/call, `response.usage` discarded).

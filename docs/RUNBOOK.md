@@ -7,6 +7,58 @@ command assumes the repository root and a configured `.env`.
 
 ---
 
+## 0. Bringing the stack up
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml up -d          # production shape
+docker compose up -d                                # dev shape: adds the override
+```
+
+**Use `-f docker-compose.yml` explicitly when you want the production shape.** Compose applies
+`docker-compose.override.yml` automatically whenever it exists, and that file deliberately runs
+the API with `--reload` and **disables its healthcheck** — a reloading process flaps unhealthy on
+every save and would drag anything with a `depends_on: service_healthy` down with it. Both files
+say so inline. If `docker compose ps` shows the API with no health status, this is why, and it is
+correct.
+
+### Port conflicts
+
+Every published port is parameterised, because 5432 and 6379 are the first ports any other local
+stack takes. If `up` fails with *"Bind for 0.0.0.0:6379 failed: port is already allocated"*, shift
+the host side in `.env` — the containers keep talking to each other on the standard ports inside
+the compose network, so only the host mapping moves:
+
+```bash
+POSTGRES_PORT=5442
+REDIS_PORT=6389
+API_PORT=8010
+PROMETHEUS_PORT=9091
+GRAFANA_PORT=3001
+```
+
+Find the culprit with `docker ps --format '{{.Names}}\t{{.Ports}}'` before assuming it is another
+copy of this stack.
+
+### Confirming the database came up correctly
+
+Two things are worth checking once, because they are silent when wrong — the extension and the
+column type. `EmbeddingType` stores JSON on SQLite and a native `vector` on PostgreSQL, so a
+missing extension does not fail loudly; it just degrades every similarity search:
+
+```bash
+docker compose exec postgres psql -U applicantos -d applicantos -tAc \
+  "select extname||' '||extversion from pg_extension order by 1;"
+# expect: plpgsql 1.0 / vector 0.8.x
+
+docker compose exec postgres psql -U applicantos -d applicantos -tAc \
+  "select table_name||'.'||column_name||' -> '||udt_name from information_schema.columns
+   where column_name='embedding' order by 1;"
+# expect four rows, each ending in "-> vector" (not "-> json")
+```
+
+---
+
 ## 1. Is it healthy?
 
 Three endpoints, and they answer different questions on purpose.

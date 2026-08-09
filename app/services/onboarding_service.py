@@ -662,7 +662,7 @@ class OnboardingService:
             "sources": self._write_sources,
             "master_resume": self._write_master_resume,
         }
-        await handlers[key](user, data)  # type: ignore[operator,arg-type]
+        await handlers[key](user, data)
 
         await self._session.flush()
         await self._session.commit()

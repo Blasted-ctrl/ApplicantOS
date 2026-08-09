@@ -115,9 +115,7 @@ async def test_cleanup_deletes_the_rendered_bytes(session, settings, rendered_ap
     path = rendered_application["path"]
     assert path.is_file(), "fixture did not write the render"
 
-    await Pipeline(session, settings).cleanup_application(
-        rendered_application["application"].id
-    )
+    await Pipeline(session, settings).cleanup_application(rendered_application["application"].id)
 
     assert not path.exists(), "the rendered resume survived cleanup"
 
@@ -129,9 +127,7 @@ async def test_cleanup_unlinks_and_soft_deletes_the_file_row(
     version = rendered_application["version"]
     uploaded = rendered_application["file"]
 
-    await Pipeline(session, settings).cleanup_application(
-        rendered_application["application"].id
-    )
+    await Pipeline(session, settings).cleanup_application(rendered_application["application"].id)
 
     await session.refresh(version)
     await session.refresh(uploaded)
@@ -147,9 +143,7 @@ async def test_cleanup_retires_the_version_from_the_documents_view(
     version = rendered_application["version"]
     assert version.deleted_at is None
 
-    await Pipeline(session, settings).cleanup_application(
-        rendered_application["application"].id
-    )
+    await Pipeline(session, settings).cleanup_application(rendered_application["application"].id)
 
     await session.refresh(version)
     assert version.deleted_at is not None
@@ -171,9 +165,7 @@ async def test_cleanup_preserves_content_json_exactly(
     version = rendered_application["version"]
     before = copy.deepcopy(version.content_json)
 
-    await Pipeline(session, settings).cleanup_application(
-        rendered_application["application"].id
-    )
+    await Pipeline(session, settings).cleanup_application(rendered_application["application"].id)
 
     await session.refresh(version)
     assert version.content_json == before
@@ -188,9 +180,7 @@ async def test_cleanup_preserves_the_fact_trail(session, settings, rendered_appl
     version = rendered_application["version"]
     before = list(version.fact_ids)
 
-    await Pipeline(session, settings).cleanup_application(
-        rendered_application["application"].id
-    )
+    await Pipeline(session, settings).cleanup_application(rendered_application["application"].id)
 
     await session.refresh(version)
     assert version.fact_ids == before
@@ -203,13 +193,9 @@ async def test_the_version_row_itself_survives(session, settings, rendered_appli
 
     version_id = rendered_application["version"].id
 
-    await Pipeline(session, settings).cleanup_application(
-        rendered_application["application"].id
-    )
+    await Pipeline(session, settings).cleanup_application(rendered_application["application"].id)
 
-    still_there = await session.scalar(
-        select(ResumeVersion).where(ResumeVersion.id == version_id)
-    )
+    still_there = await session.scalar(select(ResumeVersion).where(ResumeVersion.id == version_id))
     assert still_there is not None
 
 

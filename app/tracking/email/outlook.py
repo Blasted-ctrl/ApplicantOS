@@ -217,9 +217,7 @@ class OutlookMailbox(OAuthMailbox):
         """
         await super().connect()
         try:
-            payload = await self._get_json(
-                self._delta_url(), params={"$deltatoken": "latest"}
-            )
+            payload = await self._get_json(self._delta_url(), params={"$deltatoken": "latest"})
         except MailboxError as exc:
             self.logger.debug("outlook.delta_token_unavailable", error=type(exc).__name__)
             return
@@ -288,14 +286,10 @@ class OutlookMailbox(OAuthMailbox):
 
         collected.sort(key=lambda item: item.received_at)
         if len(collected) > query.limit:
-            self.logger.warning(
-                "outlook.run_truncated", matched=len(collected), limit=query.limit
-            )
+            self.logger.warning("outlook.run_truncated", matched=len(collected), limit=query.limit)
             collected = collected[: query.limit]
 
-        self.logger.info(
-            "outlook.searched", fetched=len(collected), candidates=len(candidates)
-        )
+        self.logger.info("outlook.searched", fetched=len(collected), candidates=len(candidates))
         for message in collected:
             yield message
 
@@ -373,9 +367,7 @@ class OutlookMailbox(OAuthMailbox):
                 url, params = next_link, None
         return collected
 
-    async def _delta_candidates(
-        self, token: str, query: MailQuery
-    ) -> list[dict[str, Any]] | None:
+    async def _delta_candidates(self, token: str, query: MailQuery) -> list[dict[str, Any]] | None:
         """Run the incremental path: metadata for everything, bodies for survivors only.
 
         This is where privacy invariant §17.8.2 is enforced on the one path where Graph
@@ -409,9 +401,7 @@ class OutlookMailbox(OAuthMailbox):
         # bodies of the oldest matches and the newest arrive on the next incremental run.
         matched.sort(key=lambda item: item.received_at)
         if len(matched) > query.limit:
-            self.logger.warning(
-                "outlook.run_truncated", matched=len(matched), limit=query.limit
-            )
+            self.logger.warning("outlook.run_truncated", matched=len(matched), limit=query.limit)
             matched = matched[: query.limit]
 
         hydrated: list[dict[str, Any]] = []
@@ -484,9 +474,7 @@ class OutlookMailbox(OAuthMailbox):
                     self.logger.info("outlook.delta_token_expired")
                     return None
                 raise
-            collected.extend(
-                item for item in self._values(payload) if "@removed" not in item
-            )
+            collected.extend(item for item in self._values(payload) if "@removed" not in item)
             delta_link = str(payload.get("@odata.deltaLink") or "")
             if delta_link:
                 self._delta_token = self._token_from_link(delta_link) or self._delta_token

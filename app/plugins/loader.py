@@ -195,7 +195,7 @@ def _register_entry_point_class(kind: PluginKind, group: str, name: str, cls: ty
             expected_kind=str(kind),
         )
     try:
-        registry.register(cls)  # type: ignore[arg-type]
+        registry.register(cls)
     except PluginError as exc:
         logger.warning(
             "plugins.entry_point_rejected",

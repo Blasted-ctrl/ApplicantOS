@@ -387,9 +387,7 @@ class GmailMailbox(OAuthMailbox):
         # bodies of the oldest matches and the newest arrive on the next incremental run.
         matched.sort(key=lambda item: item.received_at)
         if len(matched) > query.limit:
-            self.logger.warning(
-                "gmail.run_truncated", matched=len(matched), limit=query.limit
-            )
+            self.logger.warning("gmail.run_truncated", matched=len(matched), limit=query.limit)
             matched = matched[: query.limit]
 
         collected: list[RawMessage] = []
@@ -426,9 +424,7 @@ class GmailMailbox(OAuthMailbox):
         if metadata_only:
             params = {"format": FORMAT_METADATA, "metadataHeaders": list(METADATA_HEADERS)}
         try:
-            payload = await self._get_json(
-                f"{GMAIL_API_BASE}/messages/{message_id}", params=params
-            )
+            payload = await self._get_json(f"{GMAIL_API_BASE}/messages/{message_id}", params=params)
         except MailboxError as exc:
             self.logger.debug(
                 "gmail.message_unavailable", message_id=message_id, error=type(exc).__name__

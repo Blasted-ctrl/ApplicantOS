@@ -50,7 +50,7 @@ class ATSProviderName(StrEnum):
     LEVER = "lever"
     ASHBY = "ashby"
     WORKDAY = "workday"
-    HIREBASE = "hirebase"        # <- new
+    HIREBASE = "hirebase"  # <- new
     MANUAL = "manual"
 ```
 
@@ -227,94 +227,97 @@ through `app/cache`.
 bad posting kill the run.
 
 ```python
-    def _boards(self, q: SearchQuery) -> list[str]:
-        """Boards to poll: the user's own tokens, else the packaged seed list."""
-        return boards_from_query(self.provider_name, q.extra)
+def _boards(self, q: SearchQuery) -> list[str]:
+    """Boards to poll: the user's own tokens, else the packaged seed list."""
+    return boards_from_query(self.provider_name, q.extra)
 
-    async def _cached_json(
-        self,
-        url: str,
-        *,
-        key_parts: Sequence[Any],
-        ttl: int,
-        params: Mapping[str, Any] | None = None,
-    ) -> Any:
-        """``GET`` a JSON document, reading through the shared cache.
 
-        Golden rule #9: job descriptions are cached by contract (``docs/CONTRACTS.md`` §7),
-        under ``NAMESPACES.POSTING``. The cache import is lazy because it pulls in settings
-        and possibly a Redis client — a provider that is registered but never polled should
-        pay for neither.
-        """
-        from app.cache import NAMESPACES, get_cache, make_key
+async def _cached_json(
+    self,
+    url: str,
+    *,
+    key_parts: Sequence[Any],
+    ttl: int,
+    params: Mapping[str, Any] | None = None,
+) -> Any:
+    """``GET`` a JSON document, reading through the shared cache.
 
-        cache = get_cache()
-        key = make_key(NAMESPACES.POSTING, self.provider_name.value, *key_parts)
+    Golden rule #9: job descriptions are cached by contract (``docs/CONTRACTS.md`` §7),
+    under ``NAMESPACES.POSTING``. The cache import is lazy because it pulls in settings
+    and possibly a Redis client — a provider that is registered but never polled should
+    pay for neither.
+    """
+    from app.cache import NAMESPACES, get_cache, make_key
 
-        async def factory() -> Any:
-            return await self._get_json(url, params=params)
+    cache = get_cache()
+    key = make_key(NAMESPACES.POSTING, self.provider_name.value, *key_parts)
 
-        return await cache.get_or_set(key, factory, ttl=ttl)
+    async def factory() -> Any:
+        return await self._get_json(url, params=params)
 
-    async def _feed(self, board: str, cursor: str | None) -> Mapping[str, Any]:
-        """One page of a board feed."""
-        params: dict[str, Any] = {"limit": PAGE_SIZE}
-        if cursor:
-            params["cursor"] = cursor
-        payload = await self._cached_json(
-            f"{API_ROOT}/boards/{board}/jobs",
-            key_parts=("feed", board, cursor or ""),
-            ttl=FEED_TTL_SECONDS,
-            params=params,
-        )
-        if not isinstance(payload, Mapping):
-            raise ProviderError(f"hirebase board {board!r} returned a non-object payload")
-        return payload
+    return await cache.get_or_set(key, factory, ttl=ttl)
 
-    async def search(self, q: SearchQuery) -> AsyncIterator[RawPosting]:
-        """Yield postings matching *q* from every configured board.
 
-        Args:
-            q: The search. ``q.extra['boards']`` overrides the seed list.
+async def _feed(self, board: str, cursor: str | None) -> Mapping[str, Any]:
+    """One page of a board feed."""
+    params: dict[str, Any] = {"limit": PAGE_SIZE}
+    if cursor:
+        params["cursor"] = cursor
+    payload = await self._cached_json(
+        f"{API_ROOT}/boards/{board}/jobs",
+        key_parts=("feed", board, cursor or ""),
+        ttl=FEED_TTL_SECONDS,
+        params=params,
+    )
+    if not isinstance(payload, Mapping):
+        raise ProviderError(f"hirebase board {board!r} returned a non-object payload")
+    return payload
 
-        Yields:
-            One :class:`~app.jobs.base.RawPosting` per surviving posting.
 
-        Raises:
-            ProviderRateLimitError: Propagated from the transport so the worker backs off.
-            ProviderAuthError: If Hirebase starts requiring a key.
-        """
-        yielded = 0
-        for board in self._boards(q):
-            cursor: str | None = None
-            while True:
-                try:
-                    page = await self._feed(board, cursor)
-                except PostingUnavailableError:
-                    # A board that 404s has been renamed or migrated to another ATS.
-                    # Expected, never an error: skip it and poll the rest.
-                    logger.info("hirebase.board_missing", board=board)
-                    break
+async def search(self, q: SearchQuery) -> AsyncIterator[RawPosting]:
+    """Yield postings matching *q* from every configured board.
 
-                for entry in page.get("jobs", []):
-                    # Cheap tests first, over the *unparsed* entry. A five-hundred-posting
-                    # board should parse five descriptions for a five-result search, not
-                    # five hundred.
-                    if not self._matches_cheaply(entry, q):
-                        continue
-                    posting = self._to_posting(board, entry)
-                    if posting is None:
-                        continue
-                    if not q.matches_freshness(posting.posted_at):
-                        continue
-                    yield posting
-                    yielded += 1
-                    if q.limit and yielded >= q.limit:
-                        return
+    Args:
+        q: The search. ``q.extra['boards']`` overrides the seed list.
 
-                cursor = page.get("next_cursor")
-                if not cursor:
-                    break
+    Yields:
+        One :class:`~app.jobs.base.RawPosting` per surviving posting.
+
+    Raises:
+        ProviderRateLimitError: Propagated from the transport so the worker backs off.
+        ProviderAuthError: If Hirebase starts requiring a key.
+    """
+    yielded = 0
+    for board in self._boards(q):
+        cursor: str | None = None
+        while True:
+            try:
+                page = await self._feed(board, cursor)
+            except PostingUnavailableError:
+                # A board that 404s has been renamed or migrated to another ATS.
+                # Expected, never an error: skip it and poll the rest.
+                logger.info("hirebase.board_missing", board=board)
+                break
+
+            for entry in page.get("jobs", []):
+                # Cheap tests first, over the *unparsed* entry. A five-hundred-posting
+                # board should parse five descriptions for a five-result search, not
+                # five hundred.
+                if not self._matches_cheaply(entry, q):
+                    continue
+                posting = self._to_posting(board, entry)
+                if posting is None:
+                    continue
+                if not q.matches_freshness(posting.posted_at):
+                    continue
+                yield posting
+                yielded += 1
+                if q.limit and yielded >= q.limit:
+                    return
+
+            cursor = page.get("next_cursor")
+            if not cursor:
+                break
 ```
 
 Three habits worth copying:
@@ -331,42 +334,42 @@ Three habits worth copying:
 ### Parsing one entry
 
 ```python
-    def _to_posting(self, board: str, entry: Mapping[str, Any]) -> RawPosting | None:
-        """Convert one feed entry into a :class:`RawPosting`, or ``None`` if unusable.
+def _to_posting(self, board: str, entry: Mapping[str, Any]) -> RawPosting | None:
+    """Convert one feed entry into a :class:`RawPosting`, or ``None`` if unusable.
 
-        Returns ``None`` rather than raising: one malformed entry must degrade that entry,
-        never the whole search.
-        """
-        job_id = clean_text(entry.get("id"))
-        title = clean_text(entry.get("title"))
-        if not job_id or not title:
-            logger.debug("hirebase.entry_skipped", board=board, reason="missing id or title")
-            return None
+    Returns ``None`` rather than raising: one malformed entry must degrade that entry,
+    never the whole search.
+    """
+    job_id = clean_text(entry.get("id"))
+    title = clean_text(entry.get("title"))
+    if not job_id or not title:
+        logger.debug("hirebase.entry_skipped", board=board, reason="missing id or title")
+        return None
 
-        self._board_by_job_id[job_id] = board
-        description = html_to_text(entry.get("description_html") or "")
-        location = clean_text((entry.get("location") or {}).get("name"))
-        comp = entry.get("compensation") or {}
+    self._board_by_job_id[job_id] = board
+    description = html_to_text(entry.get("description_html") or "")
+    location = clean_text((entry.get("location") or {}).get("name"))
+    comp = entry.get("compensation") or {}
 
-        return RawPosting(
-            provider=self.name,
-            external_id=job_id,
-            url=JOB_URL_TEMPLATE.format(board=board, job_id=job_id),
-            title=title,
-            company_name=clean_text(entry.get("company_name")) or board,
-            description=description,
-            location=location,
-            # infer_* return UNKNOWN rather than guessing — that is correct and wanted.
-            work_arrangement=infer_arrangement(location, description),
-            employment_type=infer_employment_type(title, description),
-            salary_min=comp.get("min"),
-            salary_max=comp.get("max"),
-            salary_currency=comp.get("currency"),
-            posted_at=parse_date(entry.get("published_at")),
-            closes_at=parse_date(entry.get("closes_at")),
-            apply_url=entry.get("apply_url"),
-            raw=dict(entry),          # <- keep the untouched payload
-        )
+    return RawPosting(
+        provider=self.name,
+        external_id=job_id,
+        url=JOB_URL_TEMPLATE.format(board=board, job_id=job_id),
+        title=title,
+        company_name=clean_text(entry.get("company_name")) or board,
+        description=description,
+        location=location,
+        # infer_* return UNKNOWN rather than guessing — that is correct and wanted.
+        work_arrangement=infer_arrangement(location, description),
+        employment_type=infer_employment_type(title, description),
+        salary_min=comp.get("min"),
+        salary_max=comp.get("max"),
+        salary_currency=comp.get("currency"),
+        posted_at=parse_date(entry.get("published_at")),
+        closes_at=parse_date(entry.get("closes_at")),
+        apply_url=entry.get("apply_url"),
+        raw=dict(entry),  # <- keep the untouched payload
+    )
 ```
 
 **`RawPosting.__post_init__` normalises for you.** Enum-shaped strings become enum members, dates
@@ -428,30 +431,31 @@ submit-control whitelist — lives in `AutoFiller`. A provider that fills forms 
 around all of them.
 
 ```python
-    async def apply(self, ctx: ApplyContext) -> ApplyResult:
-        """Submit one application through the browser layer.
+async def apply(self, ctx: ApplyContext) -> ApplyResult:
+    """Submit one application through the browser layer.
 
-        Args:
-            ctx: The application context, including the rendered resume path and the
-                caller's ``dry_run`` flag.
+    Args:
+        ctx: The application context, including the rendered resume path and the
+            caller's ``dry_run`` flag.
 
-        Returns:
-            The result. ``needs_review`` whenever anything could not be answered
-            confidently; ``ok=False`` on a genuine failure.
-        """
-        return await run_browser_apply(ctx, provider=self.name)
+    Returns:
+        The result. ``needs_review`` whenever anything could not be answered
+        confidently; ``ok=False`` on a genuine failure.
+    """
+    return await run_browser_apply(ctx, provider=self.name)
 
-    async def healthcheck(self) -> bool:
-        """Report whether discovery — and, honestly, submission — can work right now."""
-        if not browser_available():
-            logger.info("hirebase.browser_unavailable")
-            # Discovery still works; report the truth rather than a flat False.
-        try:
-            await self._feed(HEALTHCHECK_BOARD, None)
-        except Exception as exc:
-            logger.warning("hirebase.healthcheck_failed", error=str(exc))
-            return False
-        return True
+
+async def healthcheck(self) -> bool:
+    """Report whether discovery — and, honestly, submission — can work right now."""
+    if not browser_available():
+        logger.info("hirebase.browser_unavailable")
+        # Discovery still works; report the truth rather than a flat False.
+    try:
+        await self._feed(HEALTHCHECK_BOARD, None)
+    except Exception as exc:
+        logger.warning("hirebase.healthcheck_failed", error=str(exc))
+        return False
+    return True
 ```
 
 `run_browser_apply` resolves `app.browser` **by name at call time**, so importing `app.jobs` never
@@ -556,17 +560,17 @@ Record a real payload once, commit it, and never touch the network in a test.
 ```python
 # tests/fixtures/hirebase_board.json  — captured from the live feed, trimmed to 3 postings
 
+
 def test_parses_a_real_payload(hirebase_provider, hirebase_fixture):
     postings = [
-        hirebase_provider._to_posting("acme-robotics", entry)
-        for entry in hirebase_fixture["jobs"]
+        hirebase_provider._to_posting("acme-robotics", entry) for entry in hirebase_fixture["jobs"]
     ]
     assert all(p is not None for p in postings)
     first = postings[0]
     assert first.provider is ATSProviderName.HIREBASE
     assert first.external_id and first.title and first.url.startswith("https://hirebase.io/b/")
-    assert first.posted_at.tzinfo is not None          # normalised to aware UTC
-    assert first.raw                                    # untouched payload retained
+    assert first.posted_at.tzinfo is not None  # normalised to aware UTC
+    assert first.raw  # untouched payload retained
 
 
 def test_one_bad_entry_does_not_kill_the_batch(hirebase_provider):
@@ -581,6 +585,7 @@ def test_url_routing(hirebase_provider):
 
 def test_posture_is_declared():
     import app.jobs.hirebase as module
+
     assert HirebaseProvider.supports_auto_apply is True
     assert "posture" in (module.__doc__ or "").lower()
 ```

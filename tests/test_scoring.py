@@ -117,7 +117,7 @@ def test_the_canonical_total_equals_the_sum_of_its_components(scorer) -> None:
 def test_cannot_sponsor_is_a_penalty_not_a_veto_for_a_candidate_who_needs_none(
     scorer,
 ) -> None:
-    """"We cannot sponsor" costs 40 points but does not veto — and that is correct.
+    """ "We cannot sponsor" costs 40 points but does not veto — and that is correct.
 
     A posting refusing to sponsor is irrelevant to an applicant who needs no sponsorship, so
     treating it as a hard negative would silently delete valid jobs from their feed. The
@@ -208,7 +208,7 @@ def test_score_rules_needs_no_event_loop_and_no_model(scorer) -> None:
     ],
 )
 def test_term_matching_respects_word_boundaries(haystack, term, expected) -> None:
-    """"go" must not match "going", and "c++" must survive punctuation stripping."""
+    """ "go" must not match "going", and "c++" must survive punctuation stripping."""
     assert matches_term(normalize_text(haystack), term) is expected
 
 

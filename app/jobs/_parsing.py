@@ -40,7 +40,7 @@ import re
 import unicodedata
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser as _StdlibHTMLParser
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import structlog
 
@@ -69,7 +69,7 @@ logger = structlog.get_logger(__name__)
 #: Unicode normal form applied before anything else. NFKC folds compatibility characters
 #: (full-width Latin, ligatures, superscripts) onto their ordinary equivalents, so a title
 #: pasted out of a PDF compares equal to one typed into a form.
-_UNICODE_NORMAL_FORM: Final[str] = "NFKC"
+_UNICODE_NORMAL_FORM: Final[Literal["NFKC"]] = "NFKC"
 
 #: Code points that occupy no visual space and carry no meaning in a job posting. Rich-text
 #: editors sprinkle them through ATS feeds, where they silently defeat every string

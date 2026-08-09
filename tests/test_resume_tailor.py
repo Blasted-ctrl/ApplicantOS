@@ -33,9 +33,7 @@ def request_for(user, posting):
 
     def _make(**overrides) -> TailorRequest:
         values = {
-            "user": UserProfileDTO(
-                user_id=user.id, full_name=user.full_name, email=user.email
-            ),
+            "user": UserProfileDTO(user_id=user.id, full_name=user.full_name, email=user.email),
             "posting": JobPostingDTO.from_model(posting),
             "prefs": UserPreferences(),
         }
@@ -73,9 +71,7 @@ def _response_from(facts) -> dict:
                 "entries": [
                     {
                         "title": "",
-                        "bullets": [
-                            {"fact_id": str(fact.id), "text": fact.text} for fact in facts
-                        ],
+                        "bullets": [{"fact_id": str(fact.id), "text": fact.text} for fact in facts],
                     }
                 ],
             }
@@ -185,9 +181,7 @@ async def test_the_posting_is_sent_to_the_model(session, master_facts, request_f
     assert "Backend" in sent or "Python" in sent
 
 
-async def test_only_prefiltered_facts_reach_the_prompt(
-    session, master_facts, request_for
-) -> None:
+async def test_only_prefiltered_facts_reach_the_prompt(session, master_facts, request_for) -> None:
     """The prompt carries the candidate set, which is what makes the id validator meaningful.
 
     If the model were free to see facts outside the prefiltered set, "the id is not in the

@@ -377,7 +377,7 @@ class SourceRef:
         self.uri = str(self.uri).strip()
         if self.label is not None:
             self.label = str(self.label).strip() or None
-        if self.config is None:  # type: ignore[unreachable]
+        if self.config is None:
             self.config = {}
 
     @property
@@ -437,7 +437,7 @@ class ExtractedDocument:
         self.uri = str(self.uri).strip()
         self.title = str(self.title).strip()
         self.text = self.text or ""
-        if self.metadata is None:  # type: ignore[unreachable]
+        if self.metadata is None:
             self.metadata = {}
         if not self.content_hash:
             self.content_hash = self.derive_content_hash()
@@ -551,7 +551,7 @@ class ExtractedEntity:
         self.name = str(self.name).strip()
         if self.summary is not None:
             self.summary = str(self.summary).strip() or None
-        if self.attributes is None:  # type: ignore[unreachable]
+        if self.attributes is None:
             self.attributes = {}
         self.aliases = [alias for alias in _clean_list(self.aliases) if alias != self.name]
         self.confidence = _clamp_confidence(self.confidence)
@@ -594,7 +594,7 @@ class ExtractedEdge:
         self.target = _coerce_endpoint(self.target)
         self.relation = RelationKind(self.relation)
         self.weight = float(self.weight)
-        if self.evidence is None:  # type: ignore[unreachable]
+        if self.evidence is None:
             self.evidence = {}
 
     @property

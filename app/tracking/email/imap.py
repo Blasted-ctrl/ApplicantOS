@@ -321,8 +321,7 @@ class ImapMailbox:
             ) from exc
         except OSError as exc:
             raise MailboxUnavailableError(
-                f"the IMAP connection to {self._host} dropped during login "
-                f"({type(exc).__name__})"
+                f"the IMAP connection to {self._host} dropped during login ({type(exc).__name__})"
             ) from exc
         self._connection = connection
 

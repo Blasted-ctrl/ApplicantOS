@@ -556,9 +556,7 @@ def domain_allowed(domain: str, allowlist: Sequence[str]) -> bool:
     candidate = normalize_domain(domain)
     if not candidate:
         return False
-    return any(
-        candidate == allowed or candidate.endswith(f".{allowed}") for allowed in allowlist
-    )
+    return any(candidate == allowed or candidate.endswith(f".{allowed}") for allowed in allowlist)
 
 
 def resolve_since(
@@ -665,9 +663,7 @@ class MailQuery:
         """
         return message.received_at >= self.since and self.allows(message.sender_domain)
 
-    def sender_chunks(
-        self, size: int = DEFAULT_SENDERS_PER_QUERY
-    ) -> tuple[tuple[str, ...], ...]:
+    def sender_chunks(self, size: int = DEFAULT_SENDERS_PER_QUERY) -> tuple[tuple[str, ...], ...]:
         """Split :attr:`senders` into per-request groups.
 
         Args:
@@ -799,8 +795,7 @@ def load_credential(credential_ref: str) -> str:
 
     if not secret:
         raise MailboxAuthError(
-            "no credential is stored in the OS keychain for this mailbox; reconnect the "
-            "account"
+            "no credential is stored in the OS keychain for this mailbox; reconnect the account"
         )
     return secret
 
@@ -829,8 +824,7 @@ def load_credential_json(credential_ref: str) -> dict[str, Any]:
         return {"refresh_token": secret}
     if not isinstance(decoded, dict):
         raise MailboxAuthError(
-            "the stored mailbox credential is not an OAuth token object; reconnect the "
-            "account"
+            "the stored mailbox credential is not an OAuth token object; reconnect the account"
         )
     return decoded
 

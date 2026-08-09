@@ -91,7 +91,7 @@ def test_parameter_order_is_preserved() -> None:
 
 
 def test_the_root_path_keeps_its_slash() -> None:
-    """"/" is the path, not a trailing slash to strip."""
+    """ "/" is the path, not a trailing slash to strip."""
     assert canonical_url("https://example.com/") == "https://example.com/"
 
 
@@ -223,7 +223,7 @@ def test_title_normalisation_strips_decorations(raw, expected_equal) -> None:
 
 
 def test_title_normalisation_keeps_seniority() -> None:
-    """"Senior" and "Junior" are the job, not decoration."""
+    """ "Senior" and "Junior" are the job, not decoration."""
     assert normalize_title("Senior Backend Engineer") != normalize_title("Junior Backend Engineer")
 
 
@@ -265,7 +265,7 @@ def test_two_different_roles_at_one_company_are_not_duplicates() -> None:
 
 
 def test_two_seniorities_of_one_role_are_not_duplicates() -> None:
-    """"Senior" and "Staff" are different jobs with different pay."""
+    """ "Senior" and "Staff" are different jobs with different pay."""
     senior = _posting(title="Senior Backend Engineer", external_id="1")
     staff = _posting(title="Staff Backend Engineer", external_id="2")
     assert is_duplicate(senior, staff) is False

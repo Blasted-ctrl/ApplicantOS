@@ -355,7 +355,7 @@ class ResumePreviewRequest(Schema):
         description="Bullet budget for the tailoring pass.",
     )
     render_format: RenderFormat = Field(
-        default="pdf",  # type: ignore[assignment]
+        default="pdf",
         description="Format to render the preview in.",
     )
     render: bool = Field(

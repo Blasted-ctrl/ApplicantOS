@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
@@ -73,7 +73,7 @@ _AMPERSAND_EXPANSION: Final[str] = " and "
 _SEPARATOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
 
 #: Unicode normal form used before ASCII folding, so ``"Nestlé"`` → ``"Nestle"``.
-_UNICODE_NORMAL_FORM: Final[str] = "NFKD"
+_UNICODE_NORMAL_FORM: Final[Literal["NFKD"]] = "NFKD"
 
 #: Maximum length of the stored display name and of its normalised key.
 COMPANY_NAME_MAX_LENGTH: Final[int] = 255

@@ -229,10 +229,13 @@ ordinary −40 there — which is exactly what the worked example relies on.
 ## 5. Verdicts, and the hard-negative lock
 
 ```python
-threshold = prefs.min_score          # default 70
-if total >= threshold:               verdict = "apply"
-elif total >= threshold - 15:        verdict = "review"     # REVIEW_BAND
-else:                                verdict = "skip"
+threshold = prefs.min_score  # default 70
+if total >= threshold:
+    verdict = "apply"
+elif total >= threshold - 15:
+    verdict = "review"  # REVIEW_BAND
+else:
+    verdict = "skip"
 ```
 
 `REVIEW_BAND = 15` is a product decision, not a magic number: 15 points is roughly one strong

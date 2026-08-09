@@ -453,9 +453,7 @@ def flow_review_resolve(client: Client, report: Report) -> None:
     else:
         item = items[0]
         application_id = (item.get("application") or {}).get("id") or item.get("id")
-        resolved = client.post(
-            f"{API_PREFIX}/reviews/{application_id}/resolve", {"answers": {}}
-        )
+        resolved = client.post(f"{API_PREFIX}/reviews/{application_id}/resolve", {"answers": {}})
         report.record(area, "resolve", resolved.status < 500, f"status {resolved.status}")
 
     missing = client.post(f"{API_PREFIX}/reviews/{RANDOM_ID}/resolve", {})

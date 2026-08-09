@@ -172,9 +172,7 @@ def load_trackers() -> None:
         except ImportError as exc:
             logger.debug("tracking.tracker_absent", module=module_name, error=str(exc))
         except Exception as exc:
-            logger.warning(
-                "tracking.tracker_import_failed", module=module_name, error=str(exc)
-            )
+            logger.warning("tracking.tracker_import_failed", module=module_name, error=str(exc))
 
 
 def __getattr__(name: str) -> Any:

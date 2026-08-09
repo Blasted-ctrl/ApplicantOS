@@ -53,7 +53,7 @@ and it is consulted *before* any further attempt:
 outcome = run_async(pipeline.submit(application_id))
 if is_terminal_outcome(outcome):
     log.info("apply.submit_terminal", verdict=outcome.verdict)
-    return outcome            # no retry, no exception, done
+    return outcome  # no retry, no exception, done
 ```
 
 It is **not** left to the fact that a terminal verdict happens not to raise. A future refactor

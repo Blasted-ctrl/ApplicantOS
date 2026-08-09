@@ -41,7 +41,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 import structlog
@@ -75,7 +75,7 @@ logger = structlog.get_logger(__name__)
 
 #: Unicode normal form applied before ASCII folding, so that ``"Nestlé"`` and ``"Nestle"``
 #: produce one key rather than two employer rows.
-_UNICODE_NORMAL_FORM: Final[str] = "NFKD"
+_UNICODE_NORMAL_FORM: Final[Literal["NFKD"]] = "NFKD"
 
 #: Everything that is not an ASCII letter or digit is a separator. Runs collapse, so
 #: ``"Acme,   Inc."`` and ``"Acme - Inc"`` normalise identically.

@@ -329,8 +329,7 @@ async def master_facts(session: AsyncSession, user: User) -> list[KnowledgeFact]
         {
             "kind": FactKind.ACCOMPLISHMENT,
             "text": (
-                "Cut p99 checkout latency from 840ms to 120ms by adding a "
-                "read-through Redis cache."
+                "Cut p99 checkout latency from 840ms to 120ms by adding a read-through Redis cache."
             ),
             "organization": "Acme Robotics",
             "role": "Backend Engineer",

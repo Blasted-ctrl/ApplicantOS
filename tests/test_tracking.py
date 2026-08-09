@@ -159,7 +159,7 @@ def test_a_rejection_is_not_read_as_an_interview(classifier) -> None:
 
 
 def test_an_acknowledgement_is_not_read_as_an_offer(classifier) -> None:
-    """"We are pleased to have received your application" is not an offer."""
+    """ "We are pleased to have received your application" is not an offer."""
     result = classifier.classify_rules(
         _signal(
             subject="Application received",
@@ -192,9 +192,7 @@ async def test_the_llm_is_not_consulted_for_a_confident_rule_match(classifier) -
     hostile = StatusClassifier()
     hostile._llm = Forbidden()
 
-    result = await hostile.classify(
-        _signal(subject=CORPUS[4][0], body=CORPUS[4][1]), use_llm=True
-    )
+    result = await hostile.classify(_signal(subject=CORPUS[4][0], body=CORPUS[4][1]), use_llm=True)
     assert result.status is ApplicationStatus.OFFER
 
 
@@ -541,9 +539,7 @@ def test_the_requested_scopes_are_read_only() -> None:
     from pathlib import Path
 
     mail = Path(__file__).resolve().parent.parent / "app" / "tracking" / "email"
-    literals = [
-        literal for path in mail.rglob("*.py") for literal in _string_literals(path)
-    ]
+    literals = [literal for path in mail.rglob("*.py") for literal in _string_literals(path)]
     scopes = [
         literal
         for literal in literals

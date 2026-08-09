@@ -52,11 +52,11 @@ work names a task the worker owns, so both are coordinated changes.
 whether a credential is configured, the answer is a boolean:
 
 ```python
-anthropic_configured: bool     # not anthropic_api_key: str | None
+anthropic_configured: bool  # not anthropic_api_key: str | None
 github_configured: bool
 aws_configured: bool
 sentry_configured: bool
-database_backend: Literal["postgresql", "sqlite", "other"]   # not database_url
+database_backend: Literal["postgresql", "sqlite", "other"]  # not database_url
 ```
 
 Masking is rejected on purpose. `"sk-ant-…4f2a"` still leaks length, prefix and enough tail to
@@ -83,6 +83,7 @@ Every endpoint that starts long-running work hands it to Celery **by string name
 
 ```python
 from app.api.tasks import TASK_APPLY_SUBMIT, dispatch
+
 result = await dispatch(TASK_APPLY_SUBMIT, str(application_id))
 ```
 

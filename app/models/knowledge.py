@@ -48,7 +48,7 @@ import re
 import unicodedata
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import structlog
 from sqlalchemy import (
@@ -153,7 +153,7 @@ REPR_TEXT_PREVIEW: Final[int] = 60
 
 #: Unicode normal form applied before matching. NFKC folds compatibility variants — full
 #: width Latin, ligatures, non-breaking spaces — onto their canonical equivalents.
-UNICODE_NORMAL_FORM: Final[str] = "NFKC"
+UNICODE_NORMAL_FORM: Final[Literal["NFKC"]] = "NFKC"
 
 #: Punctuation removed outright rather than replaced with a space, because it sits *inside*
 #: a token: "Node.js" → "nodejs" (which then matches "NodeJS"), "O'Brien" → "obrien". The

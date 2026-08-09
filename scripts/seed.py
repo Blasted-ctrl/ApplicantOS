@@ -741,9 +741,7 @@ SEED_FACTS: Final[tuple[SeedFact, ...]] = (
     ),
     SeedFact(
         kind="award",
-        text=(
-            "Placed 3rd of 41 teams at the national collegiate robotics competition, 2025"
-        ),
+        text=("Placed 3rd of 41 teams at the national collegiate robotics competition, 2025"),
         organization="University Robotics Team",
         role="Embedded Software Lead",
         date_start="2025-04",
@@ -1453,9 +1451,7 @@ async def _ensure_memories(session: AsyncSession, user: User, report: SeedReport
     await session.flush()
 
 
-async def _maybe_embed(
-    settings: Any, facts: list[Any], entities: list[Any]
-) -> tuple[int, str]:
+async def _maybe_embed(settings: Any, facts: list[Any], entities: list[Any]) -> tuple[int, str]:
     """Embed the seeded rows, but only when doing so costs nothing.
 
     Retrieval fuses a keyword ranking with a vector ranking, so facts without embeddings are

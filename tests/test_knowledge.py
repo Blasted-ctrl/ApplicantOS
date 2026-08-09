@@ -273,9 +273,7 @@ async def test_a_skipped_index_writes_nothing_new(indexer, session, source, user
     assert after == before
 
 
-async def test_a_changed_fingerprint_re_analyzes(
-    indexer, source, analyzer, probe_cache
-) -> None:
+async def test_a_changed_fingerprint_re_analyzes(indexer, source, analyzer, probe_cache) -> None:
     """The other half: a source that really changed must not be skipped.
 
     The probe memo is cleared first to stand in for its TTL expiring. That memo is a

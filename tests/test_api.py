@@ -138,11 +138,7 @@ async def test_no_exposed_url_carries_embedded_credentials(api_client, planted) 
     ``scheme://user:password@host`` must never appear.
     """
     payload = (await api_client.get("/api/v1/settings")).json()
-    urls = [
-        value
-        for key, value in payload.items()
-        if isinstance(value, str) and "://" in value
-    ]
+    urls = [value for key, value in payload.items() if isinstance(value, str) and "://" in value]
     for url in urls:
         authority = url.split("://", 1)[1].split("/", 1)[0]
         assert "@" not in authority, f"{url} embeds credentials"
@@ -230,17 +226,13 @@ async def test_postings_filter_by_provider(api_client, make_posting) -> None:
         url="https://jobs.lever.co/acme/lv-f1",
     )
 
-    payload = (
-        await api_client.get("/api/v1/postings", params={"provider": "lever"})
-    ).json()
+    payload = (await api_client.get("/api/v1/postings", params={"provider": "lever"})).json()
 
     assert payload["total"] >= 1
     assert all(item["provider"] == "lever" for item in payload["items"])
 
 
-async def test_applications_filter_by_status(
-    api_client, make_posting, make_application
-) -> None:
+async def test_applications_filter_by_status(api_client, make_posting, make_application) -> None:
     """The applications list is filtered by the same enum values the client sends."""
     ready = await make_application(await make_posting(external_id="s1"))
     await make_application(
@@ -330,9 +322,7 @@ async def test_reviews_lists_the_queue(api_client, review_item) -> None:
 async def test_reviews_shows_the_reason(api_client, review_item) -> None:
     """The reason is what tells the person where to look."""
     payload = (await api_client.get("/api/v1/reviews")).json()
-    item = next(
-        i for i in payload["items"] if i["application"]["id"] == str(review_item.id)
-    )
+    item = next(i for i in payload["items"] if i["application"]["id"] == str(review_item.id))
     assert item["reason"] == "unknown_field"
 
 
@@ -351,7 +341,7 @@ async def test_resolving_a_review_moves_it_out_of_the_queue(
 
 
 async def test_dismissing_a_review_settles_it(api_client, session, review_item) -> None:
-    """"I don't want this one" is a valid resolution."""
+    """ "I don't want this one" is a valid resolution."""
     response = await api_client.post(f"/api/v1/reviews/{review_item.id}/dismiss", json={})
     assert response.status_code in (200, 202)
 

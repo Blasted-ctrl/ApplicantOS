@@ -137,7 +137,7 @@ class InsightItem(Schema):
     title: str = Field(description="One-line finding.")
     detail: str | None = Field(default=None, description="Supporting explanation.")
     sentiment: InsightSentiment = Field(
-        default="neutral",  # type: ignore[assignment]
+        default="neutral",
         description="Whether this reads as something working, failing, or neutral.",
     )
     metric: float | None = Field(

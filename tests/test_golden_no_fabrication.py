@@ -59,9 +59,7 @@ def _payload(*bullets: dict, heading: str = "Experience", title: str = "") -> di
     return {
         "summary": "",
         "skills_line": "",
-        "sections": [
-            {"heading": heading, "entries": [{"title": title, "bullets": list(bullets)}]}
-        ],
+        "sections": [{"heading": heading, "entries": [{"title": title, "bullets": list(bullets)}]}],
     }
 
 

@@ -131,7 +131,7 @@ class StrEnum(str, Enum):
             ``True`` when :meth:`_missing_`-style lookup would succeed.
         """
         try:
-            cls(value)  # type: ignore[call-arg]
+            cls(value)
         except ValueError:
             return False
         return True
@@ -150,7 +150,7 @@ class StrEnum(str, Enum):
         if value is None:
             return default
         try:
-            return cls(value)  # type: ignore[call-arg,return-value]
+            return cls(value)
         except ValueError:
             return default
 

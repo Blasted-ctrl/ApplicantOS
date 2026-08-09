@@ -236,7 +236,7 @@ async def test_no_submit_control_means_no_click(submission_allowed) -> None:
 
 
 async def test_substring_named_button_is_not_clicked(submission_allowed) -> None:
-    """"Submit your details to our newsletter" must never satisfy a "Submit" match.
+    """ "Submit your details to our newsletter" must never satisfy a "Submit" match.
 
     Accessible-name matching is whole-string and exact. A substring fallback would click a
     newsletter signup, and that mistake is not recoverable.

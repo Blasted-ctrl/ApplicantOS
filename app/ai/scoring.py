@@ -299,7 +299,7 @@ COMPANY_LEGAL_SUFFIXES: Final[frozenset[str]] = frozenset(
 _COMPANY_SEPARATOR_RE: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
 
 #: Unicode normal form applied before ASCII folding, so ``"Nestlé"`` becomes ``"Nestle"``.
-_UNICODE_NORMAL_FORM: Final[str] = "NFKD"
+_UNICODE_NORMAL_FORM: Final[Literal["NFKD"]] = "NFKD"
 
 # --------------------------------------------------------------------------------------
 # Word-boundary machinery

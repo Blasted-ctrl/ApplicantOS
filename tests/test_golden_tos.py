@@ -218,8 +218,8 @@ def test_no_authorization_or_cookie_header_is_constructed() -> None:
             if lowered in ("authorization", "cookie", "set-cookie", "x-li-identity"):
                 offenders.append(f"line {node.lineno}: {node.value!r}")
 
-    assert not offenders, (
-        "app/jobs/linkedin.py constructs an auth header:\n  " + "\n  ".join(offenders)
+    assert not offenders, "app/jobs/linkedin.py constructs an auth header:\n  " + "\n  ".join(
+        offenders
     )
 
 

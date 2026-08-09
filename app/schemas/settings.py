@@ -87,7 +87,7 @@ class SettingsRead(Schema):
 
     # -- persistence (credentials reduced to a backend name) ------------------------
     database_backend: DatabaseBackend = Field(
-        default="postgresql",  # type: ignore[assignment]
+        default="postgresql",
         description="Backend name only; the connection URL carries credentials.",
     )
     sqlite_mode: bool = Field(

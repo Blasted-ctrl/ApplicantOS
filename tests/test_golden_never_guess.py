@@ -124,7 +124,7 @@ async def test_confidence_exactly_at_the_threshold_is_accepted(settings, monkeyp
 
 
 async def test_an_optional_field_at_low_confidence_is_still_refused(settings, monkeypatch) -> None:
-    """"Optional" does not license a guess — the answer still goes out under the user's name."""
+    """ "Optional" does not license a guess — the answer still goes out under the user's name."""
     monkeypatch.setattr(settings, "min_answer_confidence", 0.75)
 
     field = _field("How did you hear about us?", required=False)
@@ -170,7 +170,7 @@ async def test_empty_value_at_full_confidence_is_never_written(settings, monkeyp
 
 
 async def test_whitespace_only_value_is_treated_as_no_answer() -> None:
-    """"   " is not an answer either."""
+    """ "   " is not an answer either."""
     field = _field("Preferred Name")
     plan = AnswerPlan(field=field, value="   ", confidence=1.0, source="profile")
     assert plan.answered is False
@@ -323,7 +323,7 @@ async def test_blockers_reach_the_right_reason_with_nothing_typed(blocker, expec
 
 
 async def test_a_failed_blocker_probe_is_treated_as_a_blocker() -> None:
-    """"We could not look" is not "all clear"."""
+    """ "We could not look" is not "all clear"."""
     fields = [_field("Name")]
     resolver = StubResolver(default=lambda f: AnswerPlan(field=f, value="Ada", confidence=1.0))
     page = FakePage(present={fields[0].selector})

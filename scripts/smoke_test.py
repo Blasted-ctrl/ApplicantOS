@@ -722,6 +722,14 @@ def remove_fixtures(fixtures: Fixtures) -> str | None:
     if not fixtures.attempted:
         return None
 
+    # Seeding was tried and could not reach the database — a remote backend, or a missing
+    # driver when the script runs bare against the default Postgres URL. Nothing was written,
+    # so there is nothing to delete, and attempting it produces a red "synthetic rows may
+    # remain" naming rows that never existed *and* a non-zero exit on a perfectly clean tree.
+    # A cleanup that cannot have anything to clean must not be able to fail the run.
+    if not fixtures.available:
+        return None
+
     async def _run() -> None:
         if fixtures.application_id:
             # Golden rule #6: the rendered PDF is disposable and must not be left on disk.

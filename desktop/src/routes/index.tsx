@@ -99,12 +99,29 @@ export function DashboardRoute() {
 
   const showTileSkeletons = useDelayedFlag(overview.isPending);
 
-  const finished = useMemo<SessionRead[]>(
-    () => (sessions.data?.items ?? []).filter((session) => session.status !== 'running'),
+  // `completed` only — not `!== 'running'`. SessionStatus has four members, so excluding just
+  // the running one let a cancelled or failed run be read as a finished one: a run that died
+  // three seconds in with nothing discovered reported "finished · 0 applications", which is
+  // indistinguishable from an ordinary quiet night. It also poisoned `previousRun`, so the
+  // delta showed a -100% collapse in output that never happened.
+  const completed = useMemo<SessionRead[]>(
+    () => (sessions.data?.items ?? []).filter((session) => session.status === 'completed'),
     [sessions.data],
   );
-  const lastRun = finished[0];
-  const previousRun = finished[1];
+  const lastRun = completed[0];
+  const previousRun = completed[1];
+
+  // A run that ended badly is not hidden — hiding it would be the same lie in the other
+  // direction. It is surfaced separately, with its own wording, and only when it is more
+  // recent than the last good run.
+  const lastEndedBadly = useMemo<SessionRead | undefined>(() => {
+    const bad = (sessions.data?.items ?? []).find(
+      (session) => session.status === 'failed' || session.status === 'cancelled',
+    );
+    if (bad === undefined) return undefined;
+    if (lastRun === undefined) return bad;
+    return Date.parse(bad.started_at) > Date.parse(lastRun.started_at) ? bad : undefined;
+  }, [sessions.data, lastRun]);
 
   // Two honest readings, never one dressed as the other: what the last finished run did, or —
   // when nothing has finished yet — what has been submitted today.
@@ -153,9 +170,14 @@ export function DashboardRoute() {
     <Page
       title="Overnight"
       subtitle={
-        lastRun === undefined
-          ? 'No run has finished yet. Everything below fills in after the first one.'
-          : `Last run finished ${formatTime(lastRun.ended_at ?? lastRun.started_at)} · ${formatDuration(lastRun.duration_seconds)} · ${String(lastRun.applications_completed)} applications · ${String(lastRun.manual_review)} need review`
+        // A run that was cancelled or failed is reported as exactly that, and it wins the
+        // subtitle when it is the most recent thing that happened — being told the run died
+        // is the whole point, and it is what the old `!== 'running'` filter concealed.
+        lastEndedBadly !== undefined
+          ? `Last run ${lastEndedBadly.status === 'failed' ? 'failed' : 'was cancelled'} ${formatTime(lastEndedBadly.ended_at ?? lastEndedBadly.started_at)} after ${formatDuration(lastEndedBadly.duration_seconds)} · ${String(lastEndedBadly.applications_completed)} applications submitted before it stopped`
+          : lastRun === undefined
+            ? 'No run has finished yet. Everything below fills in after the first one.'
+            : `Last run finished ${formatTime(lastRun.ended_at ?? lastRun.started_at)} · ${formatDuration(lastRun.duration_seconds)} · ${String(lastRun.applications_completed)} applications · ${String(lastRun.manual_review)} need review`
       }
       busy={overview.isFetching}
       actions={

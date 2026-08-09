@@ -21,10 +21,10 @@ From the brief: *"When this project is 'done', it should…"*
 | 5 | Generate a tailored cover letter | ✅ | `CoverLetterWriter`, policy-gated |
 | 6 | Apply automatically to supported flows | ✅ | Driven against real Greenhouse, Lever and Ashby forms in a real Chromium. `tests/integration/test_browser_live.py` (25 tests, nightly) discovers 26/9/12 fields, locates the real submit control, uploads and verifies a placeholder résumé, and proves the kill switch holds with zero recorded clicks. It found five selector defects. **G2** |
 | 7 | Detect manual-input cases and pause | ✅ | 10 `ReviewReason` paths, mutation-tested |
-| 8 | Store metadata, documents, timestamps, screenshots | 🟡 | Stored; **`ApplicationVerifier` had no caller** → in flight, **G3** |
+| 8 | Store metadata, documents, timestamps, screenshots | ✅ | `ApplicationVerifier` now runs on the live submit path (`app/browser/apply.py:742`); its verdict drives confirmed / failed / `VERIFICATION_FAILED` |
 | 9 | Clean up temp résumés after submission | ✅ | `test_golden_cleanup.py` |
 | 10 | Dashboard: search, filter, stats, logs | ✅ | Driven in a real Chromium against a real backend. All 13 routes settle on real content or a genuine empty state, zero console errors, and the §10.14 budget holds on the production build. It found four defects, including a CORS default that broke the entire desktop dev loop. Screenshots in `docs/screenshots/`. **G8**, **G11** |
-| 11 | Run continuously in Docker with retries + health checks | 🟡 | Compose + Dockerfiles written and `config`-validated; **images never built or run.** → **G4** |
+| 11 | Run continuously in Docker with retries + health checks | ✅ | 10 services up and healthy; migrations on real Postgres, pgvector 0.8.2, native `vector` columns; beat → Redis → worker executed on schedule |
 | 12 | Modular — new ATS as a plugin, no core changes | ✅ | `test_golden_plugin_isolation.py` enforces it statically |
 
 ---
@@ -33,11 +33,13 @@ From the brief: *"When this project is 'done', it should…"*
 
 ### In flight (workflow `wire-and-close`)
 
-- **G3 — Three subsystems have no caller.** `ApplicationVerifier` (submission proof never
-  verified), `as_prompt_context` (the AI memory learns nothing that reaches a prompt),
-  `reinforce()` (memory weight never moves). Plus `sanitize_external_text` was specified in
-  CONTRACTS §10b and never implemented, leaving job descriptions — attacker-controlled text —
-  going straight into prompts.
+- **G3 — Three subsystems had no caller** — ✅ **closed.** `ApplicationVerifier` at
+  `app/browser/apply.py:742`; `as_prompt_context` via `build_memory_block` at
+  `app/ai/memory_prompt.py:205`, called from `resume_engine.py:901` and
+  `field_answer.py:1308`; `reinforce` via `reinforce_used` at `memory_prompt.py:392`;
+  `sanitize_external_text` at `app/ai/untrusted.py:1019`, called from `field_answer.py`,
+  `extractors.py:2367`, and via `sanitize_or_raise` in `resume_engine.py` and
+  `cover_letter.py`.
 - **G5 — The apply pipeline is unexercised end to end** — ✅ **closed.** `scripts/smoke_test.py`
   now reports `85 passed, 0 failed, 0 skipped`. It seeds a synthetic account, posting and status
   signal before the flows run, drives every flow as that account so nothing it does can touch real
@@ -293,10 +295,16 @@ From the brief: *"When this project is 'done', it should…"*
 
 ### Not yet started
 
-- **G4 — Docker images have never been built or run.** `docker compose config` validates and env
-  parity was checked against `Settings`, but no image exists. Needs a real
-  `docker compose build && up`, a health-check pass on every service, and one end-to-end run
-  through the composed stack.
+- **G4 — Docker images had never been built or run** — ✅ **closed.** All 10 services up and
+  healthy: api (483MB), worker (2.28GB, Chromium + tectonic), postgres, redis, four workers,
+  beat, prometheus, grafana. Migrations ran against real Postgres; pgvector 0.8.2 present and
+  all four `embedding` columns are native `vector` rather than JSON, which is the first proof
+  `EmbeddingType` behaves correctly on both backends. Queue routing verified per container, and
+  beat drove `session.watchdog` through Redis to the maintenance worker three times on schedule.
+  Prometheus scrapes the API with the target `up`.
+  Fixed en route: the worker healthcheck's outer timeout (15s) was shorter than the probe it
+  runs (~6s Celery import + 1s broker + 10s ping), so all four workers reported unhealthy while
+  consuming their queues perfectly. Now 40s, and all four go healthy in 45s.
 - **G12 — every domain metric has no producer.** Found by the G10 decoration sweep. The
   infrastructure metrics are wired (HTTP, cache, LLM, Celery, review-queue and session gauges),
   but `record_posting_discovered`, `record_posting_deduped`, `record_score`,
@@ -315,7 +323,8 @@ These must be green at all times, not just once:
 ruff check .                 # target: clean            (clean ✅)
 mypy app                     # target: clean            (clean ✅ — 173 files, 2026-08-09)
 pytest                       # target: all pass         (643 passed, 37 deselected ✅)
-python -m scripts.smoke_test # target: 85/0/0           (85/0/0 ✅)
+python -m scripts.smoke_test --start   # 85/0/0 ✅  (--start applies SQLITE_MODE;
+                             #          bare, it resolves the Postgres URL and skips)
 cd desktop && npm run typecheck && npm run lint && npm run build   # ✅
 ```
 

@@ -29,8 +29,11 @@ __all__ = [
     "FakeSession",
     "FakeStorage",
     "MockRouter",
+    "PageTransition",
     "RecordingLLM",
     "build_mock_transport",
+    "discovery_payload",
+    "form_control",
 ]
 
 
@@ -51,8 +54,43 @@ class Action:
         return f"Action({self.kind!r}, {self.target!r}, {self.value!r})"
 
 
+@dataclass
+class PageTransition:
+    """What the page becomes after the **first** click — i.e. after a real submit.
+
+    Without this a fake page is frozen, and a frozen page cannot tell the two halves of the
+    apply path apart: ``AutoFiller.submit`` reads the page to decide whether a marker
+    appeared, and ``ApplicationVerifier.verify`` reads it again to decide whether the
+    employer really has the application. Both would see the *pre-submit* page, so a
+    confirmation could never be distinguished from silence.
+
+    Every field is optional and replaces the corresponding page state wholesale; a field left
+    ``None`` is untouched. Applied once, so a second click (the kill-switch test flips a
+    switch and clicks again) does not compound it.
+
+    Attributes:
+        present: The selectors that exist afterwards — normally the confirmation element,
+            and normally *not* the submit button, which the confirmation page has replaced.
+        text: The visible copy afterwards, matched against the pack's success and error
+            markers and scanned for a confirmation id.
+        url: The URL afterwards, which is the only machine-readable evidence some ATSs give.
+        html: The markup afterwards.
+    """
+
+    present: set[str] | None = None
+    text: str | None = None
+    url: str | None = None
+    html: str | None = None
+
+
 class FakeLocator:
-    """A duck-typed Playwright ``Locator`` that reports its actions to the page."""
+    """A duck-typed Playwright ``Locator`` that reports its actions to the page.
+
+    Built by :meth:`FakePage.locator` with the *alternative it matched* rather than the whole
+    query, so an action taken through a selector list — which is what every
+    :class:`~app.browser.selectors.SelectorPack` submit selector is — records the element the
+    browser would really have acted on.
+    """
 
     def __init__(self, page: FakePage, selector: str, *, matches: int) -> None:
         self._page = page
@@ -68,11 +106,21 @@ class FakeLocator:
         """How many elements this locator matches."""
         return self._matches
 
+    async def is_visible(self, **_kwargs: Any) -> bool:
+        """Whether this locator matches something on the page."""
+        return self._matches > 0
+
     async def click(self, **_kwargs: Any) -> None:
-        """Record a click. **This is what the kill-switch test asserts never happens.**"""
+        """Record a click, then move the page on.
+
+        **This is what the kill-switch test asserts never happens.** The transition runs
+        after the action is recorded, so a page that becomes a confirmation still shows a
+        click in the log.
+        """
         if self._matches < 1:
             raise RuntimeError(f"locator {self._selector!r} matches nothing; cannot click")
         self._page.actions.append(Action("click", self._selector))
+        self._page.apply_transition()
 
     async def fill(self, value: str, **_kwargs: Any) -> None:
         """Record a value typed into a control."""
@@ -113,6 +161,8 @@ class FakePage:
         discovery: The payload :data:`~app.browser.autofill.DISCOVERY_SCRIPT` should return.
         text: The page's visible text, used for success/error marker matching.
         url: The current URL.
+        after_submit: What the page becomes once something is clicked, or ``None`` for a page
+            that never changes.
     """
 
     def __init__(
@@ -124,6 +174,7 @@ class FakePage:
         text: str = "",
         html: str = "<html><body></body></html>",
         url: str = "https://boards.greenhouse.io/acme/jobs/1",
+        after_submit: PageTransition | None = None,
     ) -> None:
         self.actions: list[Action] = []
         self.present: set[str] = set(present or ())
@@ -134,6 +185,37 @@ class FakePage:
         self.url = url
         self.uploaded_files: dict[str, list[str]] = {}
         self.reject_uploads: set[str] = set()
+        self.after_submit = after_submit
+        self.transitioned = False
+
+    # -- state ------------------------------------------------------------------------
+
+    @property
+    def html(self) -> str:
+        """The serialised DOM, as ``BrowserSession.html`` exposes it."""
+        return self._html
+
+    def apply_transition(self) -> bool:
+        """Move the page to its post-submit state, at most once.
+
+        Returns:
+            Whether anything changed. Called from :meth:`FakeLocator.click`; a page with no
+            :attr:`after_submit` is left exactly as it was, which is what keeps every
+            existing kill-switch assertion true.
+        """
+        transition = self.after_submit
+        if transition is None or self.transitioned:
+            return False
+        self.transitioned = True
+        if transition.present is not None:
+            self.present = set(transition.present)
+        if transition.text is not None:
+            self.text = transition.text
+        if transition.url is not None:
+            self.url = transition.url
+        if transition.html is not None:
+            self._html = transition.html
+        return True
 
     # -- recorded views ---------------------------------------------------------------
 
@@ -179,9 +261,17 @@ class FakePage:
     # -- Playwright surface -----------------------------------------------------------
 
     def locator(self, selector: str) -> FakeLocator:
-        """Build a locator, recording the lookup."""
+        """Build a locator, recording the lookup.
+
+        A comma-separated selector list matches when **any** alternative is present, as CSS
+        does — and the resulting locator carries that alternative, so the recorded click names
+        the control rather than the query. Every pack's submit selector is such a list, so
+        without this the pack path (§12 invariant 4) could never be exercised.
+        """
         self.actions.append(Action("lookup", selector))
-        return FakeLocator(self, selector, matches=1 if selector in self.present else 0)
+        alternatives = [part.strip() for part in selector.split(",") if part.strip()]
+        matched = next((part for part in alternatives if part in self.present), None)
+        return FakeLocator(self, matched or selector, matches=1 if matched else 0)
 
     def get_by_role(self, role: str, *, name: str = "", exact: bool = False) -> FakeLocator:
         """Build an accessible-name locator, recording the lookup."""
@@ -216,7 +306,18 @@ class FakePage:
 
 
 class FakeSession:
-    """A duck-typed ``BrowserSession``: a page, screenshots, and blocker detection."""
+    """A duck-typed ``BrowserSession``: a page, screenshots, and blocker detection.
+
+    Carries the whole surface ``docs/CONTRACTS.md`` §12 gives a session — ``page``,
+    ``goto``, ``screenshot``, ``html``, ``detect_blockers``, ``dismiss_cookie_banner`` — so a
+    complete apply attempt can be driven through
+    :func:`app.browser.apply.run_apply` with no Playwright installed.
+
+    Attributes:
+        screenshots: Artifact names captured, in order. ``"verification"`` appearing here is
+            proof that :class:`~app.browser.verification.ApplicationVerifier` ran; its
+            *absence* after a dry run is proof that it did not.
+    """
 
     def __init__(
         self,
@@ -238,20 +339,122 @@ class FakeSession:
         base = self.artifacts_dir or Path.cwd()
         return base / f"{name}.png"
 
-    async def detect_blockers(self) -> set[str]:
-        """Report captcha / MFA / login walls, or raise when the test wants a failed probe."""
+    async def detect_blockers(self, _pack: Any = None) -> set[str]:
+        """Report captcha / MFA / login walls, or raise when the test wants a failed probe.
+
+        The pack argument is accepted and ignored, exactly as
+        ``BrowserSession.detect_blockers`` accepts an optional one: the autofiller calls this
+        with no arguments and the apply driver calls it with the provider's pack.
+        """
         if self._blocker_error is not None:
             raise self._blocker_error
         return set(self._blockers)
 
+    async def dismiss_cookie_banner(self, pack: Any) -> bool:
+        """Click the pack's consent-banner control, if this page is showing one.
+
+        Mirrors the real implementation — locate, check visibility, click — so a test that
+        puts a banner on the page sees the click recorded like any other.
+        """
+        selector = str(getattr(pack, "cookie_banner", "") or "").strip()
+        if not selector:
+            return False
+        control = self.page.locator(selector).first
+        if not await control.is_visible():
+            return False
+        await control.click()
+        return True
+
     @property
     def html(self) -> str:
         """The page markup, as ``BrowserSession`` exposes it."""
-        return self.page._html
+        return self.page.html
 
     async def goto(self, url: str, **_kwargs: Any) -> None:
         """Navigate, recording the destination."""
         self.page.url = url
+
+
+# ======================================================================================
+# Discovery payloads
+# ======================================================================================
+
+
+def form_control(
+    selector: str,
+    *,
+    label: str = "",
+    tag: str = "input",
+    control_type: str = "text",
+    name: str = "",
+    required: bool = False,
+    options: list[dict[str, str]] | None = None,
+    max_length: int | None = None,
+    placeholder: str = "",
+    heading: str = "",
+    hidden: bool = False,
+    disabled: bool = False,
+) -> dict[str, Any]:
+    """Build one raw control descriptor, exactly as ``DISCOVERY_SCRIPT`` emits them.
+
+    The script does DOM access only and every policy decision — which label wins, which
+    :class:`~app.models.enums.FieldKind` applies, what counts as required — is made in Python
+    by :meth:`~app.browser.autofill.AutoFiller.discover_fields`. That is what makes a canned
+    descriptor a faithful stand-in for a real page.
+
+    Args:
+        selector: The control's unique CSS selector.
+        label: Its ``<label for>`` text.
+        tag: ``input``, ``textarea`` or ``select``.
+        control_type: The ``type`` attribute, or the tag name for non-inputs.
+        name: The ``name`` attribute, which is what groups radios and checkboxes.
+        required: Whether the control carries ``required``.
+        options: ``{"value": …, "label": …}`` entries, for a ``<select>``.
+        max_length: The advertised character limit.
+        placeholder: Placeholder text, which doubles as the field's hint.
+        heading: The nearest preceding heading, which is a radio group's question.
+        hidden: Whether the control is hidden, and therefore skipped.
+        disabled: Whether the control is disabled, and therefore skipped.
+
+    Returns:
+        The descriptor.
+    """
+    return {
+        "selector": selector,
+        "tag": tag,
+        "type": control_type,
+        "name": name,
+        "id": selector.lstrip("#"),
+        "value": "",
+        "disabled": disabled,
+        "readOnly": False,
+        "hidden": hidden,
+        "required": required,
+        "ariaRequired": False,
+        "maxLength": max_length,
+        "multiple": False,
+        "labelFor": label,
+        "labelWrap": "",
+        "ariaLabel": "",
+        "ariaLabelledBy": "",
+        "placeholder": placeholder,
+        "title": "",
+        "heading": heading,
+        "options": options or [],
+    }
+
+
+def discovery_payload(*controls: dict[str, Any], root: str = "#application_form") -> dict[str, Any]:
+    """Wrap control descriptors in the envelope ``DISCOVERY_SCRIPT`` returns.
+
+    Args:
+        controls: Descriptors from :func:`form_control`.
+        root: The selector of the form the controls were found in.
+
+    Returns:
+        The payload :meth:`FakePage.evaluate` answers the discovery script with.
+    """
+    return {"root": root, "matched": 1, "controls": list(controls)}
 
 
 # ======================================================================================

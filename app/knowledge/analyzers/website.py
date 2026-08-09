@@ -588,7 +588,7 @@ class WebsiteAnalyzer(Analyzer):
         except Exception as exc:
             logger.debug("website.cache_write_failed", error=str(exc))
 
-    # -- robots.txt ---------------------------------------------------------------------------------
+    # -- robots.txt --------------------------------------------------------------------------------
 
     async def _load_robots(self, origin: str, result: AnalysisResult) -> RobotFileParser:
         """Fetch and parse a site's ``robots.txt``, once per origin.
@@ -684,7 +684,7 @@ class WebsiteAnalyzer(Analyzer):
             delay = MAX_CRAWL_DELAY_SECONDS
         return max(configured, delay)
 
-    # -- fetching -------------------------------------------------------------------------------------
+    # -- fetching ----------------------------------------------------------------------------------
 
     async def _fetch(self, url: str, *, origin: str | None) -> _Page:
         """Fetch one page, conditionally and within the size cap.
@@ -851,7 +851,7 @@ class WebsiteAnalyzer(Analyzer):
                 continue
         return raw.decode(DEFAULT_ENCODING, errors="replace")
 
-    # -- fingerprinting -----------------------------------------------------------------------------------
+    # -- fingerprinting ----------------------------------------------------------------------------
 
     def _compose_fingerprint(
         self, root: str, etag: str, last_modified: str, body: str | None
@@ -927,7 +927,7 @@ class WebsiteAnalyzer(Analyzer):
             return await super().fingerprint(source)
         return self._compose_fingerprint(root, page.etag, page.last_modified, page.body)
 
-    # -- analysis --------------------------------------------------------------------------------------------
+    # -- analysis ----------------------------------------------------------------------------------
 
     async def analyze(self, source: SourceRef) -> AnalysisResult:
         """Crawl the site and extract everything it says about the user.
@@ -1117,7 +1117,14 @@ class WebsiteAnalyzer(Analyzer):
         extracted = await self._get_extractor().extract(
             text,
             kind=FactKind.ACCOMPLISHMENT,
-            context={"organization": project, "source_uri": page.url},
+            context={
+                "organization": project,
+                "source_uri": page.url,
+                # Declares this text as web-fetched, which is what turns on the
+                # `docs/CONTRACTS.md` §10b screen inside the extractor. A page on a host the
+                # user does not control can be edited by whoever does.
+                "source_kind": source.kind.value,
+            },
         )
         result.facts.extend(extracted.facts)
 
@@ -1183,7 +1190,7 @@ class WebsiteAnalyzer(Analyzer):
             visited.add(link)
             queue.append((link, depth))
 
-    # -- interpretation ------------------------------------------------------------------------------------------
+    # -- interpretation ----------------------------------------------------------------------------
 
     def _detect_project(self, url: str, text: str, metadata: dict[str, Any]) -> str | None:
         """Decide whether a page describes one project, and name it.

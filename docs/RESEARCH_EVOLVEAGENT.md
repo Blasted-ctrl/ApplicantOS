@@ -177,10 +177,30 @@ Also: inject memories into the **system** prompt as style/preference constraints
 validators must stay authoritative over anything a memory suggests. `field_answer.py` is the safer
 first target.
 
+**Closed 2026-08-09.** `app/ai/memory_prompt.py` is the seam: it retrieves, screens every entry
+through `contains_pii` with the profile's own contact details allow-listed, **excludes** — never
+redacts — anything that carries personal data, and renders what survives into the **system**
+prompt of `FieldAnswerer._llm_answer` and `ResumeEngine._complete`. `$facts` is untouched, so the
+four validators stay authoritative by construction. `reinforce()` is called where the outcome is
+known — `Pipeline.prepare` on the `ready` branch, `FieldAnswerer.answer` on a field that cleared
+`min_answer_confidence` — with a reward on clean outcomes and no penalty on escalations.
+`ReviewService.dismiss` now records the negative signal of finding **C**. Trade-offs are items
+64–71 of `OPEN_QUESTIONS.md`; the tests are `tests/test_memory_prompt.py`. One thing is *not*
+closed: `app/browser/apply.py` builds its resolver without `knowledge=`, because `ApplyContext`
+carries no session, so the field-answering path reaches memory only for callers that build a
+`FieldAnswerer` themselves (item 66).
+
 ### Gap 3 — `ApplicationVerifier` has no caller
 It is better designed than anything in their repo — four independent signals, error markers checked
 first, confirmation-ID stopword validation, explicitly asymmetric verdict. It just has no entry
 point yet. The gap is wiring, not design. **Do not build a second verifier.**
+
+**Closed 2026-08-09.** `app/browser/apply.py::run_apply` is the entry point: it drives the
+attempt, and after a real submit click — never in a dry run — it calls `verify()` and maps the
+verdict onto the `ApplyResult` (`confirmed` → `CONFIRMED`, error marker → `FAILED`,
+`inconclusive` → `NEEDS_REVIEW` / `VERIFICATION_FAILED`). No second verifier was built; the
+existing one was left untouched. `tests/test_apply_driver.py` proves each branch against a
+recording browser double.
 
 ---
 

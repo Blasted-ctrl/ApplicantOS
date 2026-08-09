@@ -510,7 +510,7 @@ def _annualize(value: Any, multiplier: int) -> int | None:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    annual = int(round(float(value) * multiplier))
+    annual = round(float(value) * multiplier)
     if MIN_PLAUSIBLE_ANNUAL_SALARY <= annual <= MAX_PLAUSIBLE_ANNUAL_SALARY:
         return annual
     return None
@@ -908,8 +908,8 @@ class LeverProvider(ATSProvider):
         if q.keywords and not _matches_any(q.keywords, _keyword_haystacks(job, title)):
             return False
 
-        if q.remote_only and not _may_be_remote(job, title, locations):
-            return False
+        if q.remote_only:
+            return _may_be_remote(job, title, locations)
         return True
 
     # -- the provider contract ----------------------------------------------------------

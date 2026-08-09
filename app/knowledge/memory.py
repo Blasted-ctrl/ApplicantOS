@@ -42,7 +42,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 from sqlalchemy import delete, func, or_, select
@@ -57,7 +57,14 @@ from app.models.knowledge import (
     normalize_for_matching,
 )
 
+if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.ai.embeddings import Embedder
+    from app.knowledge.vector.base import VectorStore
+
 __all__ = [
+    "CONTEXT_KEY_PII",
     "CORRECTION_TEMPLATE",
     "KIND_WEIGHTS",
     "MAX_MEMORY_WEIGHT",
@@ -178,6 +185,11 @@ CONTEXT_KEY_TITLE: Final[str] = "title"
 CONTEXT_KEY_POSTING_ID: Final[str] = "posting_id"
 CONTEXT_KEY_OBSERVATIONS: Final[str] = "observations"
 
+#: Where :func:`app.ai.untrusted.contains_pii`'s verdict is stamped when a memory body turns
+#: out to carry personal data. Written at record time and never acted on here: the screen
+#: reports, the *reader* decides. See :meth:`MemoryStore._screen_pii`.
+CONTEXT_KEY_PII: Final[str] = "pii"
+
 #: Seconds in a day, for the recency arithmetic.
 _SECONDS_PER_DAY: Final[float] = 86_400.0
 
@@ -216,7 +228,30 @@ class MemoryStore(KnowledgeStore):
 
     Scoped to one ``user_id`` on every write and every search. Flushes but never commits, so
     a correction recorded during a review can share the transaction that resolves it.
+
+    Every write also passes its body through :meth:`_screen_pii`, which records *what personal
+    data the memory carries* without altering it — the prerequisite for injecting memories
+    into a prompt at all.
     """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        embedder: Embedder | None = None,
+        vector_store: VectorStore | None = None,
+    ) -> None:
+        """Bind the store and prepare the per-user contact allow-list cache.
+
+        Args:
+            session: The async session to run queries on.
+            embedder: Embedder to use; resolved from settings on first use when omitted.
+            vector_store: Vector index to use; resolved from settings on first use when
+                omitted.
+        """
+        super().__init__(session, embedder=embedder, vector_store=vector_store)
+        #: Per-user contact allow-lists, resolved once each. See :meth:`_contact_allowlist`.
+        self._allowlists: dict[uuid.UUID, tuple[str, ...]] = {}
 
     # ----------------------------------------------------------------------------------
     # Writing
@@ -438,6 +473,8 @@ class MemoryStore(KnowledgeStore):
         if not cleaned:
             raise ValueError(f"a {kind.value} memory must carry text")
 
+        context = await self._screen_pii(user_id, cleaned, context)
+
         existing = await self._find_identical(user_id, kind, cleaned)
         if existing is not None:
             existing.weight = _clamp_weight(float(existing.weight or 0.0) + REPEAT_REINFORCEMENT)
@@ -482,6 +519,95 @@ class MemoryStore(KnowledgeStore):
             weight=entry.weight,
         )
         return entry
+
+    async def _screen_pii(
+        self,
+        user_id: uuid.UUID,
+        text: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Stamp a memory with what personal data its body carries, and change nothing else.
+
+        The only writer of a ``correction`` memory is
+        :meth:`app.services.review_service.ReviewService._remember`, and what it stores is
+        **the human's literal answer to a form field**. A reviewer who types a Social Security
+        number, a date of birth or a bank account into an ``unknown_field`` therefore creates a
+        memory whose body *is* that value, and
+        :func:`~app.config.logging.redact_secrets` will not catch it: that processor is
+        key-based and log-scoped, and it never runs on a prompt.
+
+        This method is the screen ``docs/RESEARCH_EVOLVEAGENT.md`` gap #2 requires **before**
+        :meth:`as_prompt_context` may be wired into a prompt. It deliberately does three
+        things and no more: it screens the memory *body*, it exempts the user's own contact
+        details (their email address and phone number belong on their own résumé, and treating
+        those as a leak would exclude nearly every useful memory), and it records the
+        categories found under :data:`CONTEXT_KEY_PII`.
+
+        It does **not** redact and it does **not** refuse. Redacting leaves a lesson that no
+        longer parses — "Preferred wording: ***" teaches nothing — and refusing would lose the
+        user's answer over a false positive. The reader decides, and a reader that injects
+        memories into a prompt is expected to skip any entry carrying this stamp.
+
+        Args:
+            user_id: Owning user, used to resolve their own contact allow-list.
+            text: The rendered memory body.
+            context: The caller's context dictionary.
+
+        Returns:
+            The context, with the PII verdict merged in when anything was found. The original
+            mapping is never mutated.
+        """
+        from app.ai.untrusted import contains_pii
+
+        verdict = contains_pii(text, allow=await self._contact_allowlist(user_id))
+        if not verdict.found:
+            return context
+
+        logger.warning(
+            "memory.pii_detected",
+            user_id=str(user_id),
+            categories=[category.value for category in verdict.categories],
+            hits=verdict.hits,
+            allowed=verdict.allowed,
+        )
+        return {**context, CONTEXT_KEY_PII: verdict.as_dict()}
+
+    async def _contact_allowlist(self, user_id: uuid.UUID) -> tuple[str, ...]:
+        """Return the user's own contact values, as allow-list comparison keys.
+
+        Resolved once per store instance and per user: memory writes are rare, and paying one
+        small query for them is cheaper than threading the profile through every caller.
+
+        Args:
+            user_id: Owning user.
+
+        Returns:
+            Keys from :func:`app.ai.untrusted.contact_allowlist`, empty when the user or their
+            profile could not be read — the safe direction, since an empty allow-list only
+            makes the screen *more* cautious.
+        """
+        from app.ai.untrusted import contact_allowlist
+        from app.models.profile import UserProfile
+        from app.models.user import User
+
+        cached = self._allowlists.get(user_id)
+        if cached is not None:
+            return cached
+
+        statement = (
+            select(User.email, UserProfile.phone)
+            .join(UserProfile, UserProfile.user_id == User.id, isouter=True)
+            .where(User.id == user_id)
+        )
+        try:
+            row = (await self.session.execute(statement)).first()
+        except Exception as exc:  # pragma: no cover - a read failure must not lose a memory
+            logger.warning("memory.allowlist_unavailable", user_id=str(user_id), error=str(exc))
+            row = None
+
+        keys = contact_allowlist(*(row or ()))
+        self._allowlists[user_id] = keys
+        return keys
 
     async def _find_identical(
         self, user_id: uuid.UUID, kind: MemoryKind, text: str

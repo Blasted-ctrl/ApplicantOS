@@ -131,15 +131,16 @@ def _collect(*candidates: tuple[str, str]) -> tuple[type[BaseException], ...]:
 RETRYABLE_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     ConnectionError,
     TimeoutError,
-) + _collect(
-    ("app.jobs.base", "ProviderRateLimitError"),
-    ("app.ai.llm", "LLMRateLimited"),
-    ("app.ai.llm", "LLMTimeout"),
-    ("app.browser.playwright_runner", "BrowserSessionError"),
-    ("sqlalchemy.exc", "OperationalError"),
-    ("sqlalchemy.exc", "InterfaceError"),
-    ("sqlalchemy.exc", "DisconnectionError"),
-    ("sqlalchemy.exc", "TimeoutError"),
+    *_collect(
+        ("app.jobs.base", "ProviderRateLimitError"),
+        ("app.ai.llm", "LLMRateLimited"),
+        ("app.ai.llm", "LLMTimeout"),
+        ("app.browser.playwright_runner", "BrowserSessionError"),
+        ("sqlalchemy.exc", "OperationalError"),
+        ("sqlalchemy.exc", "InterfaceError"),
+        ("sqlalchemy.exc", "DisconnectionError"),
+        ("sqlalchemy.exc", "TimeoutError"),
+    ),
 )
 
 #: Failures that will reproduce exactly, and outcomes that are decisions rather than errors.
@@ -151,14 +152,15 @@ TERMINAL_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     LookupError,
     ValueError,
     NotImplementedError,
-) + _collect(
-    ("app.jobs.base", "UnsupportedFlowError"),
-    ("app.jobs.base", "ProviderAuthError"),
-    ("app.ai.llm", "TokenBudgetExceeded"),
-    ("app.ai.llm", "LLMParseError"),
-    ("app.browser.playwright_runner", "BrowserAutomationUnavailable"),
-    ("sqlalchemy.exc", "IntegrityError"),
-    ("sqlalchemy.exc", "ProgrammingError"),
+    *_collect(
+        ("app.jobs.base", "UnsupportedFlowError"),
+        ("app.jobs.base", "ProviderAuthError"),
+        ("app.ai.llm", "TokenBudgetExceeded"),
+        ("app.ai.llm", "LLMParseError"),
+        ("app.browser.playwright_runner", "BrowserAutomationUnavailable"),
+        ("sqlalchemy.exc", "IntegrityError"),
+        ("sqlalchemy.exc", "ProgrammingError"),
+    ),
 )
 
 

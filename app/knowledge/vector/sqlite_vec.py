@@ -53,6 +53,7 @@ process (a Celery worker, say) read while this one writes.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sqlite3
 import sys
@@ -890,10 +891,8 @@ def _load_sqlite_vec(connection: sqlite3.Connection) -> bool:
         logger.debug("vector.sqlite.extension_unavailable", reason="load_failed", error=str(exc))
         return False
     finally:
-        try:
+        with contextlib.suppress(AttributeError, sqlite3.Error):
             connection.enable_load_extension(False)
-        except (AttributeError, sqlite3.Error):  # pragma: no cover - build dependent
-            pass
 
     probe = _encode_embedding(_PROBE_VECTOR)
     try:

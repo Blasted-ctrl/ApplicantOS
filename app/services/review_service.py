@@ -20,9 +20,13 @@ Three operations, and the shape of each is deliberate:
   looked at this and decided not to apply" — as opposed to ``failed``, which means the
   machine broke.
 
-Answers supplied by a human are also recorded as :class:`~app.models.knowledge.MemoryEntry`
-corrections, so the same question answers itself next time. That write is best-effort: the
-feedback loop is valuable, but it is never worth failing a resolution over.
+**Both verdicts feed the memory.** Answers supplied by a human are recorded as
+:class:`~app.models.knowledge.MemoryEntry` corrections, so the same question answers itself
+next time — and a *dismissal* is recorded as ``feedback``, because "I don't want jobs like
+this" is a judgement about the work the system chose, and dropping it on the floor while
+carefully keeping "here is the right answer" was an asymmetry with no justification behind it.
+Both writes are best-effort: the feedback loop is valuable, but it is never worth failing a
+resolution or a dismissal over.
 """
 
 from __future__ import annotations
@@ -47,7 +51,10 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 
 __all__ = [
     "DEFAULT_REVIEW_LIMIT",
+    "DISMISS_TEMPLATE",
     "MAX_REVIEW_LIMIT",
+    "MEMORY_SOURCE_DISMISS",
+    "MEMORY_SOURCE_RESOLVE",
     "REVIEW_FIELDS_PAYLOAD_KEY",
     "ReviewService",
 ]
@@ -69,6 +76,29 @@ MAX_REVIEW_LIMIT: Final[int] = 200
 #: by :class:`app.services.pipeline.Pipeline`. Read here so a resolved answer can be paired
 #: with the suggestion it replaced when the correction is recorded.
 REVIEW_FIELDS_PAYLOAD_KEY: Final[str] = "unanswered_fields"
+
+#: ``MemoryEntry.context["source"]`` values written by this service, so a later audit can tell
+#: a correction the user typed from a judgement they made about a whole application.
+MEMORY_SOURCE_RESOLVE: Final[str] = "review_resolve"
+MEMORY_SOURCE_DISMISS: Final[str] = "review_dismiss"
+
+#: How a dismissal is rendered as retrievable, promptable text. The company and the title are
+#: resolved *now* and written into the body, exactly as
+#: :meth:`app.knowledge.memory.MemoryStore.record_outcome` does it: postings expire and get
+#: deleted, and a memory reading "application 8f3a… was dismissed" teaches nothing six months
+#: later. The negative half of the signal is the whole value here — "not this kind of role" is
+#: precisely what a résumé engine and a field answerer should hear.
+DISMISS_TEMPLATE: Final[str] = (
+    "Declined to apply to {company} for {title} — the user dismissed it from the review queue."
+)
+DISMISS_TEMPLATE_MINIMAL: Final[str] = (
+    "The user dismissed an application from the review queue rather than applying."
+)
+
+#: Longest dismissal note carried into the memory body. The full note stays on
+#: ``Application.notes`` and in the memory's ``context``; the body is what gets embedded and
+#: injected, and a three-paragraph rant is not a useful retrieval key.
+MAX_DISMISS_NOTE_CHARS: Final[int] = 300
 
 #: Filter keys :meth:`ReviewService.list_pending` understands. Anything else is ignored
 #: rather than rejected: the desktop app sends its whole filter state, and a key this
@@ -299,10 +329,17 @@ class ReviewService:
         ``abandoned`` rather than ``failed``: nothing broke, a person made a decision, and
         conflating the two would corrupt every reliability number the dashboard shows.
 
+        A dismissal is also **recorded as a memory** (:attr:`~app.models.enums.MemoryKind.
+        FEEDBACK`). :meth:`resolve` has always fed the feedback loop and this method never did,
+        which meant the system learned "here is the right answer to that field" and learned
+        nothing at all from "I don't want jobs like this" — the cheaper and more general of the
+        two signals. It is now recorded with the company and the title in the body, so it stays
+        legible after the posting expires.
+
         Args:
             application_id: The application being dismissed.
-            note: Why, in the user's own words. Appended to ``Application.notes`` and
-                recorded on the event.
+            note: Why, in the user's own words. Appended to ``Application.notes``, recorded on
+                the event, and carried into the memory.
 
         Returns:
             The application, now ``abandoned``, committed.
@@ -318,6 +355,8 @@ class ReviewService:
         if text:
             existing = (application.notes or "").strip()
             application.notes = f"{existing}\n{text}".strip() if existing else text
+
+        await self._remember_dismissal(application, text)
 
         dismissed = await self._applications.transition(
             application,
@@ -372,7 +411,7 @@ class ReviewService:
                     context={
                         "application_id": str(application.id),
                         "field": field,
-                        "source": "review_resolve",
+                        "source": MEMORY_SOURCE_RESOLVE,
                     },
                 )
             except Exception as exc:
@@ -394,6 +433,95 @@ class ReviewService:
                 application_id=str(application.id),
                 count=recorded,
             )
+
+    async def _remember_dismissal(self, application: Application, note: str) -> None:
+        """Record a dismissal as a ``feedback`` memory.
+
+        Best-effort, for the same reason :meth:`_remember` is: the user has decided not to
+        apply, and an embedding backend that is down must not stop that decision being
+        recorded on the application itself.
+
+        The body names the company and the role rather than the application id, because that is
+        what makes it *useful* when it is retrieved: the résumé engine and the field answerer
+        read memories as prose, and "declined to apply to Acme Robotics for Senior Backend
+        Engineer" is a lesson, while a UUID is not.
+
+        Args:
+            application: The application being dismissed, before its transition.
+            note: The user's own words, already trimmed; ``""`` when they gave none. A
+                dismissal with no note is still recorded — the choice itself is the signal.
+        """
+        from app.knowledge.memory import MemoryStore
+
+        company, title = await self._describe(application)
+        if company or title:
+            body = DISMISS_TEMPLATE.format(
+                company=company or "an unnamed company",
+                title=f"“{title}”" if title else "an unnamed role",
+            )
+        else:
+            body = DISMISS_TEMPLATE_MINIMAL
+        if note:
+            body = f"{body} Reason given: {_excerpt(note, MAX_DISMISS_NOTE_CHARS)}"
+
+        context: dict[str, Any] = {
+            "application_id": str(application.id),
+            "source": MEMORY_SOURCE_DISMISS,
+        }
+        if application.posting_id is not None:
+            context["posting_id"] = str(application.posting_id)
+        if company:
+            context["company"] = company
+        if title:
+            context["title"] = title
+        if application.review_reason is not None:
+            context["review_reason"] = application.review_reason.value
+        if note:
+            context["note"] = note
+
+        try:
+            entry = await MemoryStore(self._session).record_feedback(
+                application.user_id, body, context
+            )
+        except Exception as exc:
+            logger.warning(
+                "review.dismissal_memory_failed",
+                application_id=str(application.id),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        logger.debug(
+            "review.dismissal_recorded",
+            application_id=str(application.id),
+            memory_id=str(entry.id),
+            has_note=bool(note),
+        )
+
+    async def _describe(self, application: Application) -> tuple[str | None, str | None]:
+        """Resolve an application's company name and job title in one query.
+
+        Args:
+            application: The application being described.
+
+        Returns:
+            ``(company, title)``, each ``None`` when unavailable. A missing posting is not an
+            error — a dismissal is still worth remembering, just less specifically.
+        """
+        statement = (
+            select(Company.name, JobPosting.title)
+            .select_from(Application)
+            .outerjoin(Company, Company.id == Application.company_id)
+            .outerjoin(JobPosting, JobPosting.id == Application.posting_id)
+            .where(Application.id == application.id)
+            .limit(1)
+        )
+        row = (await self._session.execute(statement)).first()
+        if row is None:
+            return (None, None)
+        company, title = row
+        return (company or None, title or None)
 
 
 # ======================================================================================
@@ -588,6 +716,22 @@ def _as_text(value: Any) -> str:
     if isinstance(value, (list, tuple, set)):
         return ", ".join(sorted(str(item).strip() for item in value if str(item).strip()))
     return str(value).strip()
+
+
+def _excerpt(text: str, limit: int) -> str:
+    """Shorten a user-typed note for inclusion in a memory body.
+
+    Args:
+        text: The full note; kept in full on ``Application.notes`` and in the memory's context.
+        limit: Maximum characters to keep.
+
+    Returns:
+        A single-line excerpt, ellipsised when it had to be cut.
+    """
+    collapsed = " ".join((text or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[:limit].rstrip()}…"
 
 
 def _as_optional_text(value: Any) -> str | None:

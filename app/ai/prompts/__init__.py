@@ -40,7 +40,7 @@ fact extractor actually runs, rather than documentation of prompts it ignores.
 from __future__ import annotations
 
 import re
-from functools import cache, lru_cache
+from functools import cache
 from pathlib import Path
 from string import Template
 from typing import Any, Final

@@ -178,6 +178,12 @@ ignore = [
 # Package __init__ files exist to re-export; unsorted __all__ blocks there are grouped
 # by subsystem on purpose, which reads better than alphabetical.
 "app/**/__init__.py" = ["RUF022"]
+# `@declared_attr` is a SQLAlchemy class-level descriptor, not a method: the decorated
+# function is handed the mapped *class* and its first parameter must therefore be `cls`.
+# pep8-naming reads it as an ordinary method and asks for `self`, which would break the
+# declarative API outright — `UserOwnedMixin.user_id` is how every user-scoped table gets
+# its cascading foreign key.
+"app/models/mixins.py" = ["N805"]
 
 [tool.mypy]
 python_version = "3.12"

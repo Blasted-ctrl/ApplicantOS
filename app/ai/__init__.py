@@ -28,6 +28,18 @@ four::
 :mod:`app.ai.prompts`
     Prompts as reviewable ``.md`` files, rendered by
     :func:`~app.ai.prompts.load_prompt`.
+:mod:`app.ai.untrusted`
+    The ``docs/CONTRACTS.md`` §10b chokepoint. Every externally-sourced string passes
+    through :func:`~app.ai.untrusted.sanitize_external_text` before it can reach a prompt,
+    and :func:`~app.ai.untrusted.contains_pii` reports what personal data a string carries
+    so a caller can decide to leave it out.
+:mod:`app.ai.memory_prompt`
+    The other direction: what the user has already taught the system, screened for personal
+    data and rendered into a **system** prompt by
+    :func:`~app.ai.memory_prompt.build_memory_block`, and credited by
+    :func:`~app.ai.memory_prompt.reinforce_used` once the work it shaped is known not to have
+    needed a human. Not re-exported here — like :mod:`app.ai.field_answer` and
+    :mod:`app.ai.resume_engine`, it is imported by the call site that needs it.
 
 **Everything degrades to an offline path.** With no API keys and no provider SDKs
 installed, :func:`~app.ai.llm.get_llm` returns the deterministic
@@ -82,6 +94,17 @@ from app.ai.prompts import (  # isort: skip
     available_prompts,
     load_prompt,
 )
+from app.ai.untrusted import (  # isort: skip
+    InjectionRisk,
+    InjectionVerdict,
+    PiiCategory,
+    PiiVerdict,
+    UntrustedContentError,
+    contact_allowlist,
+    contains_pii,
+    sanitize_external_text,
+    sanitize_or_raise,
+)
 
 # Imported last and for its registration side effect: executing the four client modules is
 # what puts them in the plugin registry. Re-exported so `app.ai.NullModel` resolves, but
@@ -101,6 +124,8 @@ __all__ = [
     "EmbeddingError",
     "GuardedModelPlugin",
     "HashingEmbedder",
+    "InjectionRisk",
+    "InjectionVerdict",
     "LLMError",
     "LLMParseError",
     "LLMRateLimited",
@@ -113,11 +138,16 @@ __all__ = [
     "NullModel",
     "OpenAIEmbedder",
     "OpenAIModel",
+    "PiiCategory",
+    "PiiVerdict",
     "PromptError",
     "PromptNotFound",
     "TokenBudget",
     "TokenBudgetExceeded",
+    "UntrustedContentError",
     "available_prompts",
+    "contact_allowlist",
+    "contains_pii",
     "cosine",
     "embed_texts",
     "get_budget",
@@ -127,6 +157,8 @@ __all__ = [
     "reset_budget",
     "reset_embedder_cache",
     "reset_llm_cache",
+    "sanitize_external_text",
+    "sanitize_or_raise",
     "tokenize",
     "top_k",
 ]

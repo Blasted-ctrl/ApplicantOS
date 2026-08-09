@@ -43,9 +43,17 @@ rate limit, a budget exhaustion, an unparseable reply, a schema the model ignore
 composed of the user's own sentences in impact order is a perfectly good résumé. An outage is
 not a reason to skip a posting.
 
-Results are cached on ``(user, posting content, preferences, fact set)``, so re-running a
-pipeline over the same posting is free and re-tailoring after the knowledge graph changes is
-not.
+**Memory influences style, never substance.** What the user has already taught the system
+(:mod:`app.ai.memory_prompt`) is injected into the **system** prompt and never into the fact
+list the model selects from. That separation is structural, not a matter of wording: the four
+validators above read ``$facts`` and the model's reply, and a memory is in neither, so there is
+no path by which "mention my Kubernetes work" can put Kubernetes on a résumé that has no
+Kubernetes fact behind it. A memory can change which of two supplied facts leads, how tight a
+sentence is, and which section gets the emphasis — and that is all it can change.
+
+Results are cached on ``(user, posting content, preferences, fact set, injected memories)``, so
+re-running a pipeline over the same posting is free, and re-tailoring after the knowledge graph
+changes — or after the user corrects something — is not.
 """
 
 from __future__ import annotations
@@ -60,7 +68,9 @@ from typing import TYPE_CHECKING, Any, Final
 import structlog
 
 from app.ai.embeddings import content_tokens, cosine, embed_texts
+from app.ai.memory_prompt import MEMORY_PROMPT_K, MemoryBlock, build_memory_block
 from app.ai.prompts import load_prompt
+from app.ai.untrusted import contact_allowlist, sanitize_or_raise
 from app.cache import NAMESPACES, hash_payload, make_key
 from app.documents.models import (
     PRIORITIES_META_KEY,
@@ -89,6 +99,7 @@ __all__ = [
     "KEYWORD_WEIGHT",
     "MAX_IMPACT_SCORE",
     "MAX_SKILLS_ON_LINE",
+    "MEMORY_PURPOSE",
     "MIN_REWRITE_OVERLAP",
     "MIN_SUMMARY_GROUNDING",
     "MIN_TITLE_GROUNDING",
@@ -270,6 +281,9 @@ CACHE_DISCRIMINATOR: Final[str] = "resume_tailor"
 #: already covers the fact set, so a knowledge change invalidates precisely (golden rule #9).
 TAILOR_CACHE_TTL_SECONDS: Final[int | None] = None
 
+#: Label this module's memory injections carry in the logs (:mod:`app.ai.memory_prompt`).
+MEMORY_PURPOSE: Final[str] = "resume_tailor"
+
 # -- text analysis ------------------------------------------------------------------------
 
 #: A number as it appears in prose: digits, with optional thousands separators or decimals.
@@ -447,18 +461,41 @@ class TailorRequest:
     template: str = DEFAULT_TEMPLATE
     max_bullets: int = DEFAULT_MAX_BULLETS
     variant_label: str | None = None
+    #: Memoised output of :meth:`posting_text`. The posting is screened once per request
+    #: rather than once per caller, so :meth:`ResumeEngine.prefilter`, :meth:`.tailor` and
+    #: the prompt builder all read the same screened text and log one verdict between them.
+    _screened_posting: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def posting_text(self) -> str:
         """Return the posting rendered as the text retrieval and tailoring read.
 
+        **This is the §10b chokepoint for the résumé path** — both
+        :meth:`ResumeEngine.prefilter` and :meth:`ResumeEngine.tailor` reach the posting body
+        only through here, so nothing can route around it. A posting is attacker-controlled
+        text fetched from the open internet, and the fact-id validator downstream defeats
+        fabrication but not, for example, an instruction to select the wrong facts.
+
         Returns:
             The title on its own first line — which is what
             :meth:`app.knowledge.retrieval.KnowledgeRetriever.retrieve_for_posting` lifts as
-            the role — followed by the bounded description.
+            the role — followed by the bounded, screened description.
+
+        Raises:
+            UntrustedContentError: If the posting scored
+                :attr:`~app.ai.untrusted.InjectionRisk.HIGH`. §10b forbids sanitising and
+                hoping, so the résumé is not written at all and
+                :meth:`app.services.pipeline.Pipeline.prepare` routes the application to a
+                human with :attr:`~app.models.enums.ReviewReason.POLICY_BLOCK`.
         """
-        title = _one_line(self.posting.title, MAX_TITLE_CHARS)
-        body = _WHITESPACE.sub(" ", self.posting.description or "").strip()
-        return f"{title}\n{body[:MAX_POSTING_CHARS]}".strip()
+        if self._screened_posting is None:
+            title = _one_line(self.posting.title, MAX_TITLE_CHARS)
+            body = _WHITESPACE.sub(" ", self.posting.description or "").strip()
+            self._screened_posting = sanitize_or_raise(
+                f"{title}\n{body[:MAX_POSTING_CHARS]}".strip(),
+                source=f"posting:{self.posting.id or self.posting.external_id or 'unknown'}",
+                max_chars=MAX_TITLE_CHARS + MAX_POSTING_CHARS + 1,
+            )
+        return self._screened_posting
 
     def bullet_budget(self) -> int:
         """Return the effective bullet ceiling, never below one.
@@ -492,6 +529,11 @@ class TailorResult:
         degraded: Whether the LLM path failed and :meth:`ResumeEngine.fallback_tailor`
             produced this. Appended to the contract's fields so the pipeline can surface
             "written offline" in the UI without inspecting :attr:`token_usage`.
+        memory_ids: The :class:`~app.models.knowledge.MemoryEntry` ids that were injected into
+            the **system** prompt, as strings. Carried out so
+            :meth:`app.services.pipeline.Pipeline.prepare` — which is where the outcome of this
+            work is finally known — can reinforce them if the application reached ``ready``
+            rather than the review queue. Empty on the fallback path, which makes no call.
     """
 
     document: ResumeDocument
@@ -500,6 +542,7 @@ class TailorResult:
     token_usage: dict[str, int] = field(default_factory=dict)
     cached: bool = False
     degraded: bool = False
+    memory_ids: list[str] = field(default_factory=list)
 
     def bullet_count(self) -> int:
         """Return how many bullets the finished document carries."""
@@ -647,13 +690,24 @@ class ResumeEngine:
             At most *top_k* facts, highest composite score first. Empty when the user has no
             facts, when the posting has no text, or when the request carries no ``user_id`` —
             each of which is a legitimate state, not an error.
+
+        Raises:
+            UntrustedContentError: If the posting body is a prompt injection
+                (``docs/CONTRACTS.md`` §10b). Deliberately *not* degraded to an empty fact
+                list: retrieving nothing looks like an empty knowledge graph, and the human
+                needs to be told the real reason.
         """
+        # §10b runs first, ahead of every early return. A guard that fires before the screen
+        # would let a poisoned posting leave through a quiet "nothing to do" path instead of
+        # the escalation the contract requires, and the ordering would then be load-bearing
+        # for a safety property while looking like an optimisation.
+        posting_text = req.posting_text()
+
         user_id = getattr(req.user, "user_id", None)
         if user_id is None:
             logger.warning("resume_engine.no_user_id", posting=str(req.posting.id or ""))
             return []
 
-        posting_text = req.posting_text()
         if not posting_text:
             logger.warning("resume_engine.empty_posting", posting=str(req.posting.id or ""))
             return []
@@ -766,14 +820,24 @@ class ResumeEngine:
         Returns:
             The result, with ``cached=True`` when it was served from the cache and
             ``degraded=True`` when the deterministic fallback produced it.
+
+        Raises:
+            UntrustedContentError: If the posting body is a prompt injection (§10b). The one
+                failure this method does not absorb, because absorbing it would mean writing
+                a résumé from text an adversary controls.
         """
         facts = await self.prefilter(req)
         if not facts:
             return self.fallback_tailor(req, facts)
 
-        key = self._cache_key(req, facts)
+        memories = await self._memories_for(req)
+        key = self._cache_key(req, facts, memories)
         cached = await self._cache_read(key)
         if cached is not None:
+            # The key covers the injected block, so a hit was written under exactly these
+            # memories. They shaped the document that is about to be used, and the outcome of
+            # using it is as informative as it was the first time.
+            cached.memory_ids = [str(value) for value in memories.memory_ids]
             logger.info(
                 "resume_engine.cache_hit",
                 posting=str(req.posting.id or ""),
@@ -782,7 +846,7 @@ class ResumeEngine:
             return cached
 
         try:
-            payload, usage = await self._complete(req, facts)
+            payload, usage = await self._complete(req, facts, memories)
             result = self._assemble(req, facts, payload, usage)
         except asyncio.CancelledError:
             raise
@@ -795,6 +859,7 @@ class ResumeEngine:
             )
             return self.fallback_tailor(req, facts)
 
+        result.memory_ids = [str(value) for value in memories.memory_ids]
         await self._cache_write(key, result)
         logger.info(
             "resume_engine.tailored",
@@ -804,17 +869,58 @@ class ResumeEngine:
             bullets=result.bullet_count(),
             estimated_lines=result.document.estimated_lines(),
             tokens=result.token_usage.get("total_tokens", 0),
+            memories=len(result.memory_ids),
         )
         return result
 
+    async def _memories_for(self, req: TailorRequest) -> MemoryBlock:
+        """Retrieve, screen and render what the user has taught the system about work like this.
+
+        The query is the screened posting text, so the memories that surface are the ones about
+        roles of this shape — which is what makes "keep the robotics work above the web work"
+        arrive on a robotics posting and stay silent on a frontend one.
+
+        **The block only ever reaches the system prompt** (:meth:`_complete`). It is never
+        rendered into ``$facts``, never offered to :meth:`validate`, and never a candidate
+        ``fact_id``; golden rule #7 and the four validators stay authoritative over anything a
+        memory suggests, by construction rather than by instruction.
+
+        Args:
+            req: The tailoring request. Its ``user.email`` and ``user.phone`` become the PII
+                screen's allow-list, so the applicant's own contact details do not exclude
+                every memory that mentions them.
+
+        Returns:
+            The block, empty when the retriever exposes no memory store, when the request
+            carries no ``user_id``, or when nothing survived the screen.
+        """
+        user_id = getattr(req.user, "user_id", None)
+        store = getattr(self.retriever, "memory", None)
+        if user_id is None or store is None:
+            return MemoryBlock()
+        return await build_memory_block(
+            store,
+            user_id,
+            req.posting_text(),
+            allow=contact_allowlist(req.user.email, req.user.phone),
+            purpose=MEMORY_PURPOSE,
+            k=MEMORY_PROMPT_K,
+        )
+
     async def _complete(
-        self, req: TailorRequest, facts: Sequence[KnowledgeFact]
+        self,
+        req: TailorRequest,
+        facts: Sequence[KnowledgeFact],
+        memories: MemoryBlock,
     ) -> tuple[dict[str, Any], dict[str, int]]:
         """Ask the model to select and rewrite, and account for the call.
 
         Args:
             req: The tailoring request.
             facts: The prefiltered facts, which are the only material the prompt carries.
+            memories: The screened memory block. It goes into the **system** prompt as a style
+                constraint and never into the user message, whose ``$facts`` block is the only
+                thing a bullet may cite.
 
         Returns:
             The decoded reply and the estimated token usage.
@@ -824,7 +930,7 @@ class ResumeEngine:
                 caller degrades; this method deliberately does not swallow anything, so the
                 failure is logged with its real type.
         """
-        system = load_prompt("resume_tailor.system")
+        system = load_prompt("resume_tailor.system", memories=memories.for_prompt())
         prompt = load_prompt(
             "resume_tailor.user",
             posting_title=req.posting.title or ABSENT_FIELD,
@@ -906,7 +1012,8 @@ class ResumeEngine:
 
         One fact per line, id first::
 
-            <id> | <kind> | <organization> | <role> | <dates> | <text> | skills: … | tech: … | metrics: …
+            <id> | <kind> | <organization> | <role> | <dates> | <text>
+                | skills: … | tech: … | metrics: …
 
         Leading with the id is deliberate: the model must return ids, and a format that puts
         the id anywhere else invites it to summarise the line and drop the identifier. Absent
@@ -1461,17 +1568,27 @@ class ResumeEngine:
     # Caching
     # ----------------------------------------------------------------------------------
 
-    def _cache_key(self, req: TailorRequest, facts: Sequence[KnowledgeFact]) -> str:
+    def _cache_key(
+        self,
+        req: TailorRequest,
+        facts: Sequence[KnowledgeFact],
+        memories: MemoryBlock,
+    ) -> str:
         """Return the content-addressed key for one tailoring.
 
-        Four things decide whether a stored result is still correct, and all four are in the
+        Five things decide whether a stored result is still correct, and all five are in the
         key: **who** it is for, **what** posting it targets, **which policy** was in force,
-        and **which facts** were available. A knowledge re-index that changes the fact set
-        therefore invalidates precisely, without a sweeping purge (golden rule #9).
+        **which facts** were available, and **what the user had already taught the system**. A
+        knowledge re-index that changes the fact set therefore invalidates precisely, and so
+        does a correction the user made this morning — without either forcing a sweeping purge
+        (golden rule #9). Keying on the rendered block rather than on the memory ids is
+        deliberate: an id set that survives a reinforcement is the same prompt, and an entry
+        that fell off the token budget did not reach the model at all.
 
         Args:
             req: The tailoring request.
             facts: The prefiltered facts.
+            memories: The screened memory block that will be injected.
 
         Returns:
             The cache key.
@@ -1494,6 +1611,7 @@ class ResumeEngine:
             posting_hash,
             hash_payload(req.prefs),
             hash_payload([str(fact.id) for fact in facts]),
+            hash_payload(memories.text),
             req.template,
             req.variant_label or "",
             req.bullet_budget(),

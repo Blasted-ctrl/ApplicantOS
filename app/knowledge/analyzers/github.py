@@ -1663,7 +1663,7 @@ class GitHubAnalyzer(Analyzer):
             )
         )
 
-    # -- per-repository fetches ---------------------------------------------------------------------
+    # -- per-repository fetches --------------------------------------------------------------------
 
     async def _fetch_languages(self, owner: str, name: str) -> dict[str, Any]:
         """Fetch a repository's language byte histogram.

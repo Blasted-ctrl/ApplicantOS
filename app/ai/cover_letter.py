@@ -45,6 +45,7 @@ import structlog
 
 from app.ai.prompts import load_prompt
 from app.ai.resume_engine import numbers_in
+from app.ai.untrusted import sanitize_or_raise
 from app.cache import NAMESPACES, hash_payload, make_key
 from app.documents.models import Contact, CoverLetterDocument, ResumeDocument
 
@@ -116,6 +117,10 @@ LETTER_MAX_TOKENS: Final[int] = 1536
 #: Characters of the posting body sent to the model. A letter needs the requirements section,
 #: not the benefits appendix.
 MAX_POSTING_CHARS: Final[int] = 4000
+
+#: Headroom the §10b screening cap allows above :data:`MAX_POSTING_CHARS` for the title and
+#: company lines, which are prepended to the body before screening.
+MAX_SCREENED_HEADER_CHARS: Final[int] = 400
 
 #: Characters of the résumé rendered into the prompt.
 MAX_RESUME_CHARS: Final[int] = 6000
@@ -235,7 +240,9 @@ COVER_LETTER_SCHEMA: Final[dict[str, Any]] = {
     "properties": {
         "recipient": {
             "type": "string",
-            "description": "Hiring manager's name if the posting states one, else 'Hiring Manager'.",
+            "description": (
+                "Hiring manager's name if the posting states one, else 'Hiring Manager'."
+            ),
         },
         "body": {
             "type": "string",
@@ -359,20 +366,40 @@ class CoverLetterRequest:
     max_words: int = DEFAULT_MAX_WORDS
     score: int | None = None
     recipient: str | None = None
+    #: Memoised output of :meth:`posting_text`, so the prompt builder and the number
+    #: validator share one screening pass and one log line.
+    _screened_posting: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def posting_text(self) -> str:
         """Return the posting as the model and the number validator read it.
 
+        **The §10b chokepoint for the letter path.** The letter's body is free prose written
+        under the user's name and has no fact-id validator behind it, which makes this the
+        second most exposed surface in the product after
+        :class:`~app.ai.field_answer.FieldAnswerer`.
+
         Returns:
-            Title, company and a bounded description on separate lines.
+            Title, company and a bounded, screened description on separate lines.
+
+        Raises:
+            UntrustedContentError: If the posting scored
+                :attr:`~app.ai.untrusted.InjectionRisk.HIGH`. No letter is written and the
+                application goes to a human with
+                :attr:`~app.models.enums.ReviewReason.POLICY_BLOCK`.
         """
-        body = _WHITESPACE.sub(" ", self.posting.description or "").strip()
-        parts = [
-            self.posting.title or "",
-            self.posting.company_name or "",
-            body[:MAX_POSTING_CHARS],
-        ]
-        return "\n".join(part for part in parts if part)
+        if self._screened_posting is None:
+            body = _WHITESPACE.sub(" ", self.posting.description or "").strip()
+            parts = [
+                self.posting.title or "",
+                self.posting.company_name or "",
+                body[:MAX_POSTING_CHARS],
+            ]
+            self._screened_posting = sanitize_or_raise(
+                "\n".join(part for part in parts if part),
+                source=f"posting:{self.posting.id or self.posting.external_id or 'unknown'}",
+                max_chars=MAX_POSTING_CHARS + MAX_SCREENED_HEADER_CHARS,
+            )
+        return self._screened_posting
 
     def word_budget(self) -> int:
         """Return the effective word ceiling, never below one paragraph's worth.
@@ -541,7 +568,15 @@ class CoverLetterWriter:
         Returns:
             The result, with ``cached=True`` when served from the cache and ``degraded=True``
             when the deterministic template produced it.
+
+        Raises:
+            UntrustedContentError: If the posting body is a prompt injection (§10b). Screened
+                **before** the cache is consulted, so a poisoned posting cannot be answered
+                from a hit that predates the defence, and before
+                :meth:`fallback_letter` can quietly write a letter from the same text.
         """
+        req.posting_text()
+
         key = self._cache_key(req)
         cached = await self._cache_read(key, req)
         if cached is not None:
@@ -843,7 +878,7 @@ class CoverLetterWriter:
         if paragraphs and _word_count(paragraphs) > budget:
             sentences = _SENTENCE_SPLIT.split(paragraphs[-1])
             while (
-                len(sentences) > 1 and _word_count(paragraphs[:-1] + [" ".join(sentences)]) > budget
+                len(sentences) > 1 and _word_count([*paragraphs[:-1], " ".join(sentences)]) > budget
             ):
                 sentences.pop()
             paragraphs[-1] = " ".join(sentences).strip()

@@ -148,7 +148,7 @@ from app.schemas.session import (
     SessionStartRequest,
 )
 
-# -- settings and plugins ----------------------------------------------------------------------------
+# -- settings and plugins --------------------------------------------------------------------------
 from app.schemas.settings import (
     DatabaseBackend,
     PluginInfo,

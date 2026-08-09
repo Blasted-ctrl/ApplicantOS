@@ -1652,6 +1652,12 @@ _OVERLAP_STOPWORDS: Final[frozenset[str]] = frozenset(
 #: :func:`~app.knowledge.analyzers.base.chunk_text`; this is a cost guard, not a strategy.
 MAX_LLM_INPUT_CHARS: Final[int] = 16_000
 
+#: Source kinds whose text a crawler fetched from a host the user does not control, and which
+#: therefore pass through the ``docs/CONTRACTS.md`` §10b screen before extraction. Stored as
+#: raw enum *values* so this module keeps no import of :class:`SourceKind` it does not
+#: otherwise need.
+_UNTRUSTED_SOURCE_KINDS: Final[frozenset[str]] = frozenset({"personal_website", "portfolio_page"})
+
 #: Response ceiling for one extraction call.
 _LLM_MAX_TOKENS: Final[int] = 4_096
 
@@ -2323,6 +2329,54 @@ class KnowledgeExtractor:
             edges=edges,
         )
 
+    @staticmethod
+    def _screen_web_text(
+        body: str,
+        details: dict[str, Any],
+        *,
+        source_uri: str | None,
+    ) -> str:
+        """Apply the §10b screen to text that came off the open web.
+
+        Only web sources are screened. A résumé, a LinkedIn export or a project folder is
+        material the *user* handed over: screening those would fight the product's whole
+        purpose, and an adversary who can write to the user's own disk has already won.
+        :attr:`~app.models.enums.SourceKind.PERSONAL_WEBSITE` and
+        :attr:`~app.models.enums.SourceKind.PORTFOLIO_PAGE` are different — a crawler fetched
+        them, and a page can be edited by whoever controls the host.
+
+        Args:
+            body: The already-stripped source text.
+            details: The caller's context dictionary; ``source_kind`` selects the screen.
+            source_uri: Provenance uri, for the log line.
+
+        Returns:
+            The screened text, or ``""`` when it scored
+            :attr:`~app.ai.untrusted.InjectionRisk.HIGH` and must not be extracted from.
+        """
+        from app.ai.untrusted import InjectionRisk, sanitize_external_text
+
+        raw_kind = details.get("source_kind")
+        kind_value = getattr(raw_kind, "value", raw_kind)
+        if kind_value not in _UNTRUSTED_SOURCE_KINDS:
+            return body
+
+        screened, verdict = sanitize_external_text(
+            body,
+            source=f"{kind_value}:{source_uri or 'unknown'}",
+            max_chars=MAX_LLM_INPUT_CHARS,
+        )
+        if verdict.risk is InjectionRisk.HIGH:
+            logger.warning(
+                "extractor.untrusted_blocked",
+                source_uri=source_uri,
+                source_kind=kind_value,
+                score=verdict.score,
+                signals=verdict.signals,
+            )
+            return ""
+        return screened
+
     async def extract(
         self,
         text: str,
@@ -2339,12 +2393,19 @@ class KnowledgeExtractor:
             text: The source text to extract from.
             kind: Default :class:`~app.models.enums.FactKind` for the extracted claims.
             context: Optional provenance and framing. Recognised keys — ``organization``,
-                ``role``, ``source_uri`` — are attached to every fact; anything else is
-                ignored, so a caller may pass a richer dictionary safely.
+                ``role``, ``source_uri``, ``source_kind`` — are attached to every fact;
+                anything else is ignored, so a caller may pass a richer dictionary safely.
+                ``source_kind`` additionally selects the ``docs/CONTRACTS.md`` §10b screen:
+                a page fetched from the open web is untrusted input, a résumé the user handed
+                us is not.
 
         Returns:
             The extracted knowledge. ``documents`` is always empty: this operates on text an
-            analyzer already extracted, and the document is that analyzer's to emit.
+            analyzer already extracted, and the document is that analyzer's to emit. Web text
+            that scored :attr:`~app.ai.untrusted.InjectionRisk.HIGH` yields an empty result
+            and never reaches the model: an injection in a crawled page would otherwise write
+            itself into the knowledge graph as a fact, where golden rule #7 would then make it
+            authoritative forever.
         """
         from app.knowledge.analyzers.base import AnalysisResult
 
@@ -2355,6 +2416,10 @@ class KnowledgeExtractor:
         resolved_kind = FactKind(kind)
 
         body = (text or "").strip()
+        if not body:
+            return AnalysisResult()
+
+        body = self._screen_web_text(body, details, source_uri=source_uri)
         if not body:
             return AnalysisResult()
 

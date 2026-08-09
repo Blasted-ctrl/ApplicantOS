@@ -48,6 +48,7 @@ import random
 import re
 import threading
 from importlib.util import find_spec
+from itertools import pairwise
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import structlog
@@ -1993,7 +1994,7 @@ class HashingEmbedder(BaseEmbedder):
         if not tokens:
             return vector
 
-        bigrams = [f"{first} {second}" for first, second in zip(tokens, tokens[1:], strict=False)]
+        bigrams = [f"{first} {second}" for first, second in pairwise(tokens)]
 
         self._add_family(vector, tokens, person=_PERSON_UNIGRAM, weight=UNIGRAM_WEIGHT)
         self._add_family(

@@ -372,7 +372,7 @@ class SettingsUpdate(Schema):
     resume_max_pages: int | None = Field(default=None, ge=1)
     resume_template: str | None = None
 
-    # -- observability -------------------------------------------------------------------------------
+    # -- observability -----------------------------------------------------------------------------
     log_level: str | None = None
     log_json: bool | None = None
     metrics_enabled: bool | None = None

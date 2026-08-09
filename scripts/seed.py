@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed a fresh clone with a user, preferences, a profile, and a real knowledge graph.
+"""Seed a fresh clone with a user, a knowledge graph, and a scored feed of job postings.
 
     python -m scripts.seed
 
@@ -8,17 +8,27 @@ is a *view* over ``KnowledgeFact`` rows (golden rule #6), so an empty database c
 generate a resume, cannot score a posting against anything, and makes every screen in the
 desktop app look broken. This script is the difference between "it installed" and "it works".
 
+Two halves, and the second one exists because the first is not enough on its own: the
+knowledge graph makes a resume *possible*, but with no ``job_postings`` rows the dashboard,
+the feed and the review queue all render empty and the pipeline has no input to act on. So
+this also seeds six synthetic postings across greenhouse / lever / ashby and scores them
+with the real engine.
+
 **Everything here is idempotent.** Each row is looked up by its natural key before it is
 written — the user by email, sources by ``(user_id, kind, uri)``, documents by
 ``(source_id, uri)``, entities by ``(user_id, kind, normalized_name)``, facts by
-``content_hash``, edges by ``(source, target, relation)``. Running it ten times produces
+``content_hash``, edges by ``(source, target, relation)``, companies by
+``normalized_name``, postings by ``(provider, external_id)``. Running it ten times produces
 exactly the same database as running it once, which is what lets it sit inside ``make dev``
 and inside a CI job without either one having to know whether it already ran.
 
 **Nothing here is fabricated on the user's behalf.** The seed persona is obviously a persona
 — ``ada.embedded@example.invalid``, on the RFC 2606 reserved TLD that can never resolve — and
 every fact traces to a seeded ``KnowledgeDocument`` exactly as a real indexed fact would. The
-point is to exercise the same code paths real data takes, not to pre-fill a real résumé.
+seeded employers live on the same reserved TLD, their postings carry ``seed-`` external ids,
+and **not one score is written by hand**: :func:`_score_postings` runs the same
+:class:`~app.ai.scoring.Scorer` the discovery pipeline runs. The point is to exercise the
+same code paths real data takes, not to pre-fill a real résumé or a fake dashboard.
 
 The domain flavour is deliberate: embedded firmware, robotics, C++ and CUDA. That is the
 worked example ``docs/CONTRACTS.md`` §10 scores against, so a freshly seeded install produces
@@ -29,6 +39,7 @@ Options::
     python -m scripts.seed                      # seed, or top up an existing seed
     python -m scripts.seed --email me@host      # a different account
     python -m scripts.seed --reset              # delete the seed user, then re-seed
+    python -m scripts.seed --no-postings        # account and knowledge only
     python -m scripts.seed --quiet              # exit code only
 
 It requires the schema to already exist (``alembic upgrade head`` / ``make migrate``) and
@@ -51,13 +62,17 @@ import structlog
 if TYPE_CHECKING:  # pragma: no cover - imports are deferred; see _seed()
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from app.models.company import Company
     from app.models.knowledge import KnowledgeDocument, KnowledgeEntity, KnowledgeSource
+    from app.models.posting import JobPosting
     from app.models.user import User
 
 __all__ = [
+    "SEED_COMPANIES",
     "SEED_EMAIL",
     "SEED_FACTS",
     "SEED_FULL_NAME",
+    "SEED_POSTINGS",
     "SeedReport",
     "main",
     "seed",
@@ -222,6 +237,69 @@ class SeedMemory:
     kind: str
     text: str
     weight: float = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class SeedCompany:
+    """One employer behind the seeded postings.
+
+    Attributes:
+        key: Internal handle used by :class:`SeedPosting` to name its employer.
+        name: Display name, spelled the way an ATS feed writes it (with the legal suffix,
+            so ``Company.normalize`` has something to actually collapse).
+        domain: Careers-site host, on the RFC 2606 ``.invalid`` TLD so it can never resolve.
+        industry: Sector label. ``blocked_industries`` in the user's preferences is matched
+            against this, which is what makes the blocked example below score honestly.
+        size_bucket: Head-count band shown in the company panel.
+        is_startup: Whether this is an early-stage employer.
+    """
+
+    key: str
+    name: str
+    domain: str
+    industry: str
+    size_bucket: str
+    is_startup: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SeedPosting:
+    """One synthetic job posting, written so the real scorer produces a real number.
+
+    Nothing here is scored by hand. :func:`_score_postings` runs the same
+    :class:`~app.ai.scoring.Scorer` the discovery pipeline runs, against the same rule pack
+    and the same preferences, so the spread of scores on a freshly seeded install is
+    genuinely produced by the engine rather than typed into a fixture.
+
+    Attributes:
+        key: Internal handle, unique within the seed data.
+        company: :attr:`SeedCompany.key` of the employer.
+        provider: ``ATSProviderName`` member value.
+        external_id: Provider-native identifier. Prefixed ``seed-`` so a seeded row can
+            never be confused with — or collide with — one a real feed produced.
+        title: Role title as advertised.
+        location: Location string as advertised.
+        work_arrangement: ``WorkArrangement`` member value.
+        employment_type: ``EmploymentType`` member value.
+        salary_min: Bottom of the advertised range, or ``None`` when undisclosed.
+        salary_max: Top of the advertised range, or ``None`` when undisclosed.
+        posted_days_ago: Age of the posting, so the feed has a believable recency order.
+        description: The advertised body, already stripped of markup as an analyzer would
+            have left it.
+    """
+
+    key: str
+    company: str
+    provider: str
+    external_id: str
+    title: str
+    location: str
+    work_arrangement: str
+    employment_type: str
+    salary_min: int | None
+    salary_max: int | None
+    posted_days_ago: int
+    description: str
 
 
 # --------------------------------------------------------------------------------------
@@ -787,6 +865,218 @@ SEED_MEMORIES: Final[tuple[SeedMemory, ...]] = (
 
 
 # --------------------------------------------------------------------------------------
+# Employers and postings
+# --------------------------------------------------------------------------------------
+#
+# Why the seed carries postings at all: the knowledge graph above makes a resume
+# *possible*, but a database with no `job_postings` rows makes the dashboard, the feed and
+# the review queue all render empty, and every cross-service flow in
+# `scripts/smoke_test.py` has nothing to run against. Scoring is the first stage of the
+# pipeline and it needs an input.
+#
+# Every one of these is obviously synthetic — `.invalid` hosts, `seed-` external ids — and
+# the spread is deliberate: three strong matches for the persona, one adjacent role, one
+# clear mismatch, and one that a hard-negative rule refuses outright. That covers the four
+# things the UI has to be able to render (apply / consider / skip / blocked) without any of
+# the numbers being hand-written.
+
+SEED_COMPANIES: Final[tuple[SeedCompany, ...]] = (
+    SeedCompany(
+        key="northwind",
+        name="Northwind Robotics, Inc.",
+        domain="northwind-robotics.invalid",
+        industry="Robotics",
+        size_bucket="51-200",
+        is_startup=True,
+    ),
+    SeedCompany(
+        key="helios",
+        name="Helios Avionics LLC",
+        domain="helios-avionics.invalid",
+        industry="Aerospace",
+        size_bucket="201-1000",
+        is_startup=False,
+    ),
+    SeedCompany(
+        key="tesserae",
+        name="Tesserae Compute",
+        domain="tesserae-compute.invalid",
+        industry="Semiconductors",
+        size_bucket="1001-5000",
+        is_startup=False,
+    ),
+    SeedCompany(
+        key="calder",
+        name="Calder Payments Group",
+        domain="calder-payments.invalid",
+        industry="Financial Services",
+        size_bucket="1001-5000",
+        is_startup=False,
+    ),
+    SeedCompany(
+        key="brightloop",
+        name="Brightloop Media",
+        domain="brightloop-media.invalid",
+        industry="Adtech",
+        size_bucket="201-1000",
+        is_startup=False,
+    ),
+)
+
+SEED_POSTINGS: Final[tuple[SeedPosting, ...]] = (
+    SeedPosting(
+        key="northwind_firmware",
+        company="northwind",
+        provider="greenhouse",
+        external_id="seed-gh-northwind-firmware",
+        title="Embedded Firmware Engineer, Mobile Robotics",
+        location="Austin, TX",
+        work_arrangement="hybrid",
+        employment_type="full_time",
+        salary_min=135_000,
+        salary_max=175_000,
+        posted_days_ago=2,
+        description=(
+            "Northwind Robotics builds warehouse mobile robots that run for eighteen hours "
+            "on a charge. You will own firmware on the drive controller: bare-metal C++17 "
+            "on an STM32H7, a Zephyr RTOS application layer, and the real-time control loop "
+            "that keeps a 400 kg robot from running into anything.\n\n"
+            "What you will do: write and review embedded C++ for motor control and sensor "
+            "fusion; instrument the control loop so timing regressions are caught in CI; "
+            "bring up new boards alongside the electrical team; and take a feature from "
+            "schematic review to a fleet-wide over-the-air update.\n\n"
+            "What we look for: strong C or C++ on a microcontroller, comfort with an "
+            "oscilloscope and a logic analyser, and an understanding of why a missed "
+            "deadline in a real-time system is a safety problem rather than a latency "
+            "problem. Experience with ROS 2, CAN bus or motion planning is a plus.\n\n"
+            "This role is hybrid in Austin, three days a week on site with the hardware."
+        ),
+    ),
+    SeedPosting(
+        key="helios_realtime",
+        company="helios",
+        provider="lever",
+        external_id="seed-lv-helios-realtime",
+        title="Real-Time Systems Engineer (C++)",
+        location="Remote — United States",
+        work_arrangement="remote",
+        employment_type="full_time",
+        salary_min=140_000,
+        salary_max=185_000,
+        posted_days_ago=5,
+        description=(
+            "Helios Avionics writes the flight software for uncrewed aircraft. We are "
+            "hiring a real-time systems engineer to work on the embedded flight stack: "
+            "C++17 on a hard real-time kernel, deterministic scheduling, and the estimation "
+            "pipeline that reads IMU, GPS and barometer at 400 Hz.\n\n"
+            "You will spend your time on worst-case execution analysis, lock-free queues "
+            "between tasks, and the bench rigs that replay recorded flights against a "
+            "candidate build. Everything is reviewed, everything is traced, and nothing "
+            "ships without a bench test.\n\n"
+            "We look for engineers who have shipped low-level software and can explain a "
+            "timing budget from first principles. This position is fully remote within the "
+            "United States, with two on-site weeks a year at the flight-test facility."
+        ),
+    ),
+    SeedPosting(
+        key="tesserae_cuda",
+        company="tesserae",
+        provider="ashby",
+        external_id="seed-ab-tesserae-cuda",
+        title="GPU Compute Engineer, CUDA Kernels",
+        location="Seattle, WA",
+        work_arrangement="hybrid",
+        employment_type="full_time",
+        salary_min=150_000,
+        salary_max=200_000,
+        posted_days_ago=9,
+        description=(
+            "Tesserae Compute builds the runtime that our customers' computer vision "
+            "models run on. This team owns the CUDA kernels underneath it: memory-bound "
+            "reductions, fused elementwise pipelines, and the occupancy work that turns a "
+            "40% utilised GPU into a 90% utilised one.\n\n"
+            "You will profile with Nsight, read PTX when the profiler is not enough, and "
+            "write the C++ host code that schedules the work. A lot of the job is "
+            "measurement: we do not accept a change to a model inference path without a "
+            "benchmark and a roofline argument for why it is faster.\n\n"
+            "Requirements: C++ and CUDA, a working mental model of the memory hierarchy, "
+            "and the patience to chase a 3% regression. Systems-programming depth matters "
+            "more to us than years of experience. Hybrid in Seattle, two days on site."
+        ),
+    ),
+    SeedPosting(
+        key="calder_payments",
+        company="calder",
+        provider="greenhouse",
+        external_id="seed-gh-calder-payments",
+        title="Backend Engineer, Payments Platform",
+        location="New York, NY",
+        work_arrangement="onsite",
+        employment_type="full_time",
+        salary_min=125_000,
+        salary_max=160_000,
+        posted_days_ago=14,
+        description=(
+            "Calder Payments Group settles card transactions for mid-market retailers. The "
+            "platform team is hiring a backend engineer to work on the ledger service: "
+            "Python and PostgreSQL, idempotent write paths, and the reconciliation jobs "
+            "that have to balance to the cent every night.\n\n"
+            "You will design schema changes that can be deployed without downtime, harden "
+            "the retry semantics on the settlement queue — which we are midway through "
+            "porting to Rust — and take part in an on-call rotation for a system that "
+            "moves real money.\n\n"
+            "We are looking for solid distributed-systems fundamentals and a healthy "
+            "respect for correctness over cleverness. This role is on site in Manhattan "
+            "five days a week."
+        ),
+    ),
+    SeedPosting(
+        key="calder_frontend",
+        company="calder",
+        provider="lever",
+        external_id="seed-lv-calder-frontend",
+        title="Senior Frontend Engineer, Merchant Dashboard",
+        location="Remote — United States",
+        work_arrangement="remote",
+        employment_type="full_time",
+        salary_min=95_000,
+        salary_max=120_000,
+        posted_days_ago=21,
+        description=(
+            "Own the merchant-facing dashboard: React, TypeScript and a design system we "
+            "are midway through migrating. You will lead the accessibility work, cut the "
+            "bundle down from its current size, and mentor two mid-level engineers.\n\n"
+            "We are looking for 8+ years of professional frontend experience and someone "
+            "who has run a migration of this shape before. Fully remote within the United "
+            "States. We are unable to provide visa sponsorship for this position."
+        ),
+    ),
+    SeedPosting(
+        key="brightloop_data",
+        company="brightloop",
+        provider="ashby",
+        external_id="seed-ab-brightloop-data",
+        title="Data Engineer, Audience Platform",
+        location="Remote — United States",
+        work_arrangement="remote",
+        employment_type="full_time",
+        salary_min=130_000,
+        salary_max=165_000,
+        posted_days_ago=11,
+        description=(
+            "Brightloop Media runs the audience-targeting platform behind our advertising "
+            "network. You will build the streaming pipelines that turn raw impression logs "
+            "into the segments our buyers bid against: Kafka, Spark, and a warehouse that "
+            "ingests a few billion rows a day.\n\n"
+            "The work is squarely data engineering — schema design, backfills, and the "
+            "freshness SLAs that the bidding system depends on. Fully remote within the "
+            "United States."
+        ),
+    ),
+)
+
+
+# --------------------------------------------------------------------------------------
 # Profile and preferences
 # --------------------------------------------------------------------------------------
 
@@ -1005,13 +1295,24 @@ def _split_entity_key(key: str) -> tuple[str, str]:
 # ======================================================================================
 
 
-async def seed(email: str = SEED_EMAIL, *, reset: bool = False) -> SeedReport:
-    """Create (or top up) the seed account and its knowledge graph.
+async def seed(
+    email: str = SEED_EMAIL,
+    *,
+    reset: bool = False,
+    postings: bool = True,
+) -> SeedReport:
+    """Create (or top up) the seed account, its knowledge graph and a scored feed.
 
     Args:
         email: Address of the account to seed.
         reset: Delete the account first, cascading through every owned row, then re-seed.
             Off by default — the normal call must be safe to repeat.
+        postings: Also create :data:`SEED_COMPANIES` / :data:`SEED_POSTINGS` and score them.
+            On by default, because an install with no postings has nothing for the pipeline
+            to act on. Turn it off when the caller wants only the account and its knowledge:
+            postings and companies are **not** user-owned, so unlike everything else here
+            they outlive a ``DELETE`` of the seeded user, and a caller that intends to clean
+            up after itself must not create rows it cannot then remove.
 
     Returns:
         A :class:`SeedReport` describing exactly what was written.
@@ -1064,6 +1365,11 @@ async def seed(email: str = SEED_EMAIL, *, reset: bool = False) -> SeedReport:
         await _ensure_edges(session, user, entities, report)
         facts = await _ensure_facts(session, user, documents, entities, report)
         await _ensure_memories(session, user, report)
+
+        if postings:
+            employers = await _ensure_companies(session, report)
+            feed = await _ensure_postings(session, employers, report)
+            await _score_postings(session, settings, user, feed, report)
 
         report.embedded, report.embedding_note = await _maybe_embed(
             settings, facts, list(entities.values())
@@ -1451,6 +1757,190 @@ async def _ensure_memories(session: AsyncSession, user: User, report: SeedReport
     await session.flush()
 
 
+async def _ensure_companies(session: AsyncSession, report: SeedReport) -> dict[str, Company]:
+    """Create the employers behind the seeded postings, keyed by their seed handle.
+
+    Companies are *not* user-owned — one row per employer is shared by every profile — so
+    they are looked up by ``normalized_name``, which is the column the schema makes unique
+    and the same key ``app.jobs.dedupe.normalize_company`` produces.
+
+    Args:
+        session: The open session.
+        report: Report to count rows against.
+
+    Returns:
+        ``{seed key: Company}``.
+    """
+    from sqlalchemy import select
+
+    from app.models.company import Company
+
+    resolved: dict[str, Company] = {}
+    for spec in SEED_COMPANIES:
+        normalized = Company.normalize(spec.name)
+        found = await session.scalar(
+            select(Company).where(Company.normalized_name == normalized)
+        )
+        if found is None:
+            found = Company(
+                name=spec.name,
+                domain=spec.domain,
+                industry=spec.industry,
+                size_bucket=spec.size_bucket,
+                is_startup=spec.is_startup,
+                metadata_json={"seeded": True},
+            )
+            session.add(found)
+            await session.flush()
+            report.record("companies", was_created=True)
+        else:
+            report.record("companies", was_created=False)
+        resolved[spec.key] = found
+    return resolved
+
+
+async def _ensure_postings(
+    session: AsyncSession,
+    companies: dict[str, Company],
+    report: SeedReport,
+) -> list[JobPosting]:
+    """Create the synthetic feed, deduplicated on ``(provider, external_id)``.
+
+    That pair is the table's own unique constraint and the natural key a re-poll would hit,
+    so this is idempotent for exactly the reason real ingestion is.
+
+    ``dedupe_key`` is left ``NULL`` on purpose: the column's contract is "NULL until
+    ``app.jobs.dedupe`` has run", and these rows did not come through ingestion. Inventing a
+    key here would put a value in the cross-provider identity column that the real algorithm
+    could never produce.
+
+    Args:
+        session: The open session.
+        companies: Output of :func:`_ensure_companies`.
+        report: Report to count rows against.
+
+    Returns:
+        Every seeded posting, existing rows included, so the caller can score the whole set.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.database.types import utcnow
+    from app.models.enums import ATSProviderName, EmploymentType, PostingStatus, WorkArrangement
+    from app.models.posting import JobPosting
+
+    now = utcnow()
+    resolved: list[JobPosting] = []
+    for spec in SEED_POSTINGS:
+        provider = ATSProviderName(spec.provider)
+        found = await session.scalar(
+            select(JobPosting).where(
+                JobPosting.provider == provider,
+                JobPosting.external_id == spec.external_id,
+            )
+        )
+        if found is None:
+            employer = companies[spec.company]
+            url = f"https://careers.{_company_domain(employer)}/jobs/{spec.external_id}"
+            found = JobPosting(
+                company_id=employer.id,
+                provider=provider,
+                external_id=spec.external_id,
+                url=url,
+                apply_url=f"{url}/apply",
+                title=spec.title,
+                description=spec.description,
+                location=spec.location,
+                work_arrangement=WorkArrangement(spec.work_arrangement),
+                employment_type=EmploymentType(spec.employment_type),
+                salary_min=spec.salary_min,
+                salary_max=spec.salary_max,
+                salary_currency="USD" if spec.salary_min is not None else None,
+                posted_at=now - timedelta(days=spec.posted_days_ago),
+                raw_json={"seeded": True, "seed_key": spec.key},
+                content_hash=_digest(f"{spec.title}\n{spec.description}"),
+                status=PostingStatus.DISCOVERED,
+            )
+            session.add(found)
+            await session.flush()
+            report.record("postings", was_created=True)
+        else:
+            report.record("postings", was_created=False)
+        resolved.append(found)
+    return resolved
+
+
+def _company_domain(employer: Company) -> str:
+    """Return the host to build a seeded posting URL on.
+
+    Args:
+        employer: The company row the posting belongs to.
+
+    Returns:
+        The company's domain, or a slug derived from its normalised name when the row
+        pre-dated this script and has no domain.
+    """
+    domain = (employer.domain or "").strip()
+    if domain:
+        return domain
+    return f"{employer.normalized_name.replace(' ', '-')}.invalid"
+
+
+async def _score_postings(
+    session: AsyncSession,
+    settings: Any,
+    user: User,
+    postings: list[JobPosting],
+    report: SeedReport,
+) -> None:
+    """Score the seeded feed with the real engine, never with hand-written numbers.
+
+    Runs :meth:`~app.services.discovery_service.DiscoveryService.score_new`, which is the
+    same call the discovery pipeline makes: the packaged rule pack, the user's preferences,
+    one upserted :class:`~app.models.score.JobScore` per posting, and the posting routed to
+    ``scored`` or ``skipped`` by its own verdict. A seed that wrote the numbers itself would
+    show a dashboard the engine cannot reproduce.
+
+    ``use_llm=False`` for the same reason :func:`_maybe_embed` refuses a paid embedder: the
+    optional ±10 LLM adjustment costs the user money they did not ask to spend on six
+    synthetic postings, and without it the seeded scores are fully deterministic.
+
+    Args:
+        session: The open session.
+        settings: The process settings.
+        user: Whose preferences to score against.
+        postings: Output of :func:`_ensure_postings`.
+        report: Report to count rows against.
+    """
+    from sqlalchemy import select
+
+    from app.models.score import JobScore
+    from app.services.discovery_service import DiscoveryService
+
+    if not postings:
+        return
+
+    identifiers = [posting.id for posting in postings]
+    existing = set(
+        (
+            await session.scalars(
+                select(JobScore.posting_id).where(
+                    JobScore.user_id == user.id,
+                    JobScore.posting_id.in_(identifiers),
+                )
+            )
+        ).all()
+    )
+
+    service = DiscoveryService(session, settings, use_llm=False)
+    await service.score_new(user.id, identifiers)
+    await session.flush()
+
+    for posting_id in identifiers:
+        report.record("scores", was_created=posting_id not in existing)
+
+
 async def _maybe_embed(settings: Any, facts: list[Any], entities: list[Any]) -> tuple[int, str]:
     """Embed the seeded rows, but only when doing so costs nothing.
 
@@ -1520,11 +2010,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="delete the account and everything it owns, then re-seed",
     )
+    parser.add_argument(
+        "--no-postings",
+        dest="postings",
+        action="store_false",
+        help="seed only the account and its knowledge; create no companies or job postings",
+    )
     parser.add_argument("--quiet", action="store_true", help="print nothing; exit code only")
     args = parser.parse_args(argv)
 
     try:
-        report = asyncio.run(seed(args.email, reset=args.reset))
+        report = asyncio.run(seed(args.email, reset=args.reset, postings=args.postings))
     except RuntimeError as exc:
         print(f"seed: {exc}", file=sys.stderr)
         return EXIT_NO_SCHEMA

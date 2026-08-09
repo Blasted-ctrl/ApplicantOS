@@ -429,7 +429,7 @@ WORKDAY: Final[SelectorPack] = SelectorPack(
     ),
     next_step="[data-automation-id='bottom-navigation-next-button']",
     cookie_banner=_COMMON_COOKIE_BANNER + ", [data-automation-id='legalNoticeAcceptButton']",
-    captcha_markers=_COMMON_CAPTCHA_MARKERS + ("[data-automation-id='captcha']",),
+    captcha_markers=(*_COMMON_CAPTCHA_MARKERS, "[data-automation-id='captcha']"),
     supports_auto_apply=False,
 )
 

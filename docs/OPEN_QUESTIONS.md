@@ -1346,6 +1346,14 @@ checkpoints with zero readers, `resume_run` that cannot resume a crash), and the
   dropped. `MemoryStore.reinforce()` likewise has zero callers.
 - `ApplicationVerifier` — no caller outside its own module. Better designed than anything in
   the researched repo; the gap is wiring, not design.
+  **Resolved 2026-08-09 — `app/browser/apply.py`.** `run_apply` is the apply driver
+  `app.jobs._apply.run_browser_apply` resolves by name, and it calls
+  `ApplicationVerifier.verify` after every real submit click. The mapping is asymmetric:
+  `confirmed` → `CONFIRMED` with the confirmation id, text and evidence screenshot; an error
+  marker → `FAILED` quoting the page; `inconclusive` → `NEEDS_REVIEW` /
+  `VERIFICATION_FAILED`. Keyed off `AutoFiller.submit_clicked` rather than the return value,
+  so a dry run verifies nothing and takes no evidence capture. Covered by
+  `tests/test_apply_driver.py`.
 - `CheckpointService` — spec'd in CONTRACTS §13, never written.
 
 ### H. Wiring memory into prompts is unsafe without a PII screen first
@@ -1370,3 +1378,236 @@ driver that wires the browser layer to `Pipeline.submit` must reconcile file fie
 `discover_fields()` output itself and route an `UploadFailedError` to
 `ReviewReason.FILE_UPLOAD_FAILED`. Iterating only `needs_review` would submit an application
 with no resume attached.
+
+**Handled 2026-08-09 — `app/browser/apply.py::plan_documents`.** The driver reads the file
+fields off `discover_fields()` itself and assigns a document to each: cover-letter slots
+first, then resume/CV slots, then a single unlabelled slot (which on a job application is the
+resume — but only once, so a second unlabelled slot is not given the resume again). A
+*required* slot with no document, a document whose path no longer exists, and an
+`UploadFailedError` all become `FILE_UPLOAD_FAILED` with the offending field in
+`unanswered_fields`; an *optional* one is left empty. `fill()` itself is unchanged, because
+the confidence machinery has nothing to say about a file input.
+
+---
+
+## Phase 7 — Untrusted text (`app/ai/untrusted.py`) and the memory PII screen
+
+`docs/CONTRACTS.md` §10b implemented, plus the screen `RESEARCH_EVOLVEAGENT.md` gap #2 makes a
+prerequisite for wiring memory into prompts. Measured on the corpus in `tests/test_untrusted.py`
+(25 genuine job descriptions, 12 real-shaped injections): **block precision 1.00, block recall
+1.00, genuine-posting flag rate 0.00.**
+
+### 55. §10b's signature can be ignored by a call site, so a raising form was added
+
+§10b specifies `sanitize_external_text(...) -> tuple[str, InjectionVerdict]` returning `""` at
+`HIGH`. Implemented exactly as written — but an empty string is *silently ignorable*, and the same
+section says the caller "routes to `NEEDS_REVIEW` with `ReviewReason.POLICY_BLOCK`, never
+sanitize-and-hope". A contract whose safety property depends on every call site remembering to
+check a second return value will eventually be violated by a call site that forgets.
+
+So `sanitize_or_raise()` and `UntrustedContentError` sit beside it, and the exception carries
+`review_reason = ReviewReason.POLICY_BLOCK` as a class attribute. All prompt-building call sites
+use the raising form; `sanitize_external_text` remains public and is what `FieldAnswerer` uses,
+because that one genuinely cannot raise (below). **Additive: no contract name changed.**
+
+### 56. `InjectionRisk` is a `StrEnum`, not `(str, Enum)`
+
+§10b writes `class InjectionRisk(str, Enum)`. Every enum in `app/models/enums.py` is a `StrEnum`,
+which is the same thing with a better `__str__`, and `ruff` flags the two-base form (`UP042`).
+Followed the codebase, not the letter.
+
+### 57. `FieldAnswerer.answer` refuses with a plan, not an exception
+
+The other three call sites abandon one document when they refuse. A form has twenty fields, and
+raising out of `answer()` would abandon the other nineteen mid-fill — the browser would leave a
+half-populated form behind, which is worse than either finishing or not starting.
+
+So a `HIGH` field returns `AnswerPlan(value="", confidence=0.0, source=SOURCE_BLOCKED)`, and
+`AutoFiller.fill` promotes that to the new `BLOCKER_UNSAFE_CONTENT`, which
+`review_reason_for` maps to `ReviewReason.POLICY_BLOCK` **ahead of captcha** — a page carrying an
+injection is not a page this system finishes on its own. The contract's outcome is unchanged; only
+the mechanism differs, and it reaches the same enum value.
+
+### 58. Options are screened for *risk* but never rewritten for *submission*
+
+`FieldAnswerer.coerce_to_options` compares against `field.options` byte for byte and the browser
+must click the real option. So the screen reads the options to score them, and `_prompt` renders
+the screened text, but `field.options` itself is never mutated. A `MEDIUM` option therefore reaches
+the model with its offending span removed and coerces back to the original by fuzzy match — or
+fails to, and the field goes to a human, which is the safe direction.
+
+### 59. `ResumeEngine.prefilter` screens *before* its own early returns
+
+§10b names `prefilter` and `tailor` as call sites. The screen is placed ahead of the `user_id is
+None` and empty-posting guards rather than after them: with the original ordering, a request whose
+profile had no `user_id` returned `[]` and `tailor` degraded to `fallback_tailor` **without ever
+screening the posting**. Nothing reached a model on that path, so it was not exploitable — but the
+safety property was resting on an ordering that looked like an optimisation, and the next edit to
+those guards would have silently broken it.
+
+### 60. `KnowledgeExtractor.extract` needed a `source_kind` it was never given
+
+§10b screens the extractor "when the source kind is `personal_website` or `portfolio_page`", but
+`extract()` receives only `organization`, `role` and `source_uri`. Added `source_kind` as a
+recognised `context` key (ignored when absent, like every other key) and passed it from
+`WebsiteAnalyzer`. Local sources — a résumé, a LinkedIn export, a project folder — are deliberately
+**not** screened: that is material the user handed over, and an adversary who can write to the
+user's own disk has already won.
+
+### 61. The PII screen is not in `CONTRACTS.md`, and reports rather than redacts
+
+`contains_pii(text, *, allow=…) -> PiiVerdict` lives in `app/ai/untrusted.py` because it shares
+the normalisation pipeline. It is not in any contract section; record it here.
+
+It never rewrites. Redacting a memory leaves a lesson that no longer parses — "Preferred wording:
+`***`" teaches nothing — so the two honest outcomes are "use it" and "leave it out", and only the
+reader knows which. `MemoryStore._record` therefore *stamps* `context["pii"]` and logs
+`memory.pii_detected`; the agent that wires `as_prompt_context` into a prompt is expected to skip
+any entry carrying that stamp.
+
+Two consequences worth stating:
+
+* `MemoryStore` gained an `__init__` (it previously inherited `KnowledgeStore`'s) to hold a
+  per-user contact allow-list cache. One small query per user per store instance resolves
+  `User.email` and `UserProfile.phone`; a read failure yields an empty allow-list, which only makes
+  the screen *more* cautious.
+* Allow-listing applies to `EMAIL` and `PHONE` only. There is no configuration under which a
+  Social Security number belongs in a prompt, so `_ALLOWLISTABLE` excludes every other category.
+
+### 62. A bare calendar date is treated as a possible date of birth
+
+A `MemoryEntry` body is `"Rejected wording: … / Preferred wording: …"`; the field label the human
+was answering lives in `context`, not in the text that would be pasted into a prompt. So a
+reviewer's typed date of birth arrives as a bare `1987-04-12` with nothing to identify it.
+
+`DATE_OF_BIRTH` therefore fires on a *complete* day-month-year date whose year implies an age
+between 16 and 120, as well as on any labelled form. "Graduated May 2018" has no day and never
+matches; "shipped 2024-11-03" is too recent. This is a deliberate over-reach in the safe
+direction — the cost of a false positive is one excluded memory, and the cost of a false negative
+is a date of birth in a prompt.
+
+### 63. Signals that could plausibly fire on a real posting are worth less than `MEDIUM`
+
+The calibration rule behind `INJECTION_SIGNALS`, stated because it is what keeps the
+false-positive rate at zero and it is invisible from the weights alone:
+
+* a signal that *can* fire on a genuine posting scores below `MEDIUM_RISK_SCORE` alone, so it can
+  never block anything by itself (`instruction_density`, `hidden_markup`, `encoded_blob`,
+  `task_directive`, `output_directive`);
+* a signal that *cannot* — a chat-template delimiter, a bidi control character, an explicit
+  instruction override, a request to email "this prompt" somewhere — reaches `HIGH_RISK_SCORE`
+  alone, because waiting for corroboration means shipping a known injection.
+
+The corpus exists to keep this honest, and it deliberately contains the cases that break naive
+detectors: an AI-engineering role that talks about designing system prompts and evaluating model
+outputs, an SRE role whose bullets say "respond to incidents", "the ideal candidate has", "please
+do not include a cover letter", a security role that mentions base64 and hex, and a posting written
+in fullwidth punctuation. **Any new signal must be added with a corresponding genuine posting that
+it must not flag.**
+
+---
+
+## Phase 8 — Memory in the prompt (`app/ai/memory_prompt.py` and its four call sites)
+
+Closes the first bullet of finding **G** and gap **#2** of `docs/RESEARCH_EVOLVEAGENT.md`:
+`MemoryStore.as_prompt_context` and `MemoryStore.reinforce` had zero callers, so everything the
+system learned from the user was recorded, embedded, ranked, attached to `RetrievalResult` — and
+dropped. Both now have callers, behind the PII screen gap #2 makes a prerequisite.
+
+Wiring, in the order the research doc asks for it:
+
+* `FieldAnswerer._llm_answer` injects into the **system** prompt (`field_answer.system.md`,
+  `$memories`). The safer first target, because a memory here is "last time you told me my notice
+  period is four weeks" and that is exactly what should decide a free-text answer.
+* `ResumeEngine._complete` injects into the **system** prompt (`resume_tailor.system.md`,
+  `$memories`) as style constraints only, never into `$facts`.
+* `Pipeline.prepare` reinforces on the `ready` branch; `FieldAnswerer.answer` reinforces a field
+  whose plan cleared `settings.min_answer_confidence`.
+* `ReviewService.dismiss` records a `feedback` memory (finding **C**).
+
+### 64. A memory counts as supporting material for `numbers_in` — in `field_answer` only
+
+`FieldAnswerer._llm_answer` rejects any number the supporting material does not contain, and the
+memory block is now part of that material. Without this the feature does not work at all: the
+user's correction says "four weeks", the model answers "4 weeks", the guard reads `4` as invented,
+and the system re-asks — forever — the one question the user has already answered by hand.
+
+The justification is narrow and does not generalise. Every memory in the block is *something the
+user themselves typed*, recorded by `ReviewService._remember` when a human resolved this exact
+kind of question. Quoting it back is quotation, not invention. **The résumé path does not do
+this**: there, `numbers_in` is checked against the source *fact*, a memory is not in the fact
+list, and golden rule #7 is unchanged.
+
+### 65. Reinforcement is asymmetric on purpose: reward on clean, nothing on escalation
+
+`reinforce_used` is only ever called with a positive delta. A field escalates for a hundred
+reasons — a model outage, an option that matched nothing, a question nobody could answer — and
+docking a memory for all of them would drive good corrections to `MIN_MEMORY_WEIGHT` and silence
+the loop this product runs on. "Earns nothing" is the whole penalty.
+
+`REINFORCE_CLEAN_DELTA` is 0.25, half of `REPEAT_REINFORCEMENT`: a user repeating an edit by hand
+is much stronger evidence than one application not needing them.
+
+### 66. The reward is placed where the outcome is known, which is two different places
+
+The résumé path reports its injected ids out of `ResumeEngine.tailor` on `TailorResult.memory_ids`
+and `Pipeline.prepare` spends them **after** the `ready` transition — every earlier return from
+that method is an escalation or a failure. The field-answering path settles inside
+`FieldAnswerer.answer`, after `coerce_to_options`, because that is the first moment the plan is
+final; the browser layer holds no session and could not reach a `MemoryStore` if it wanted to.
+
+**Consequence worth stating:** `app/browser/apply.py` builds its resolver with
+`FieldResolver.for_user(ctx.user, ctx.answers, llm=llm)` and passes no `knowledge=`, because
+`ApplyContext` deliberately carries DTOs and no session (§12). Until that argument is supplied,
+the *field-answering* memory path — and the fact-grounding path beside it, which has the same
+gap and predates this work — is exercised only by callers that construct a `FieldAnswerer`
+themselves. Giving the browser layer a session is a §12 decision, not a wiring fix, so it was not
+taken here.
+
+### 67. Which memories were injected is derived by counting rendered lines
+
+`as_prompt_context` truncates at the first entry that would breach its 600-token budget, and
+returns only a string. `MemoryBlock.memory_ids` therefore takes the surviving prefix by counting
+lines (`header + one per memory`) rather than by re-deriving `MEMORY_PROMPT_BULLET`. A duplicated
+format that drifted would credit the wrong memories; a line count that drifted credits none, which
+is the safe direction.
+
+Crediting an entry the budget dropped would be worse than not crediting it at all: the model never
+saw it, so the outcome says nothing about it.
+
+### 68. The screen honours the recorded stamp *and* re-screens the body
+
+Item 61 says the reader is expected to skip any entry carrying `context["pii"]`. `_screen` does
+that **and** calls `contains_pii` again with the caller's allow-list, because the stamp did not
+exist for memories written before Phase 7 and because a repeat write merges contexts. Either test
+excludes.
+
+The cost is a memory that was stamped under an empty allow-list (a failed profile read at record
+time) stays excluded even once the allow-list resolves. One quiet memory versus a value that
+should never have been in a prompt; taken deliberately in the cautious direction.
+
+### 69. `ResumeEngine._cache_key` gained a component and an argument
+
+The rendered memory block is now in the key (golden rule #9): a correction the user made this
+morning must not be answered from a résumé generated before they made it, and that staleness would
+look exactly like the system ignoring them. The block is keyed by its **text**, not by its ids — an
+id set that survives a reinforcement is the same prompt, and an entry the budget dropped never
+reached the model.
+
+`_cache_key` is private with one production call site, so the third parameter is required rather
+than defaulted; `tests/test_golden_cache.py` passes `MemoryBlock()` and now parametrises the new
+component, so the golden test proves it participates.
+
+### 70. `Pipeline._generate_documents` reports the ids in its summary, not as a second return value
+
+`MEMORY_IDS_SUMMARY_KEY` rides in the summary dictionary, so the `ready` event records which
+lessons shaped the document — provenance a user asking *why does it word things this way* needs —
+and so the method's signature stays the one `tests/test_golden_no_fabrication.py` monkeypatches.
+
+### 71. `ReviewService.dismiss` writes its memory before the transition, like `resolve` does
+
+`MemoryStore` flushes and never commits, and `ApplicationService.transition` is what commits. So
+the memory has to be recorded *before* the transition or it is never persisted. That is the same
+ordering `resolve` uses and the same exposure the `Application.notes` mutation directly above it
+already has: a transition that raises leaves an uncommitted memory in a session the caller is
+about to roll back.

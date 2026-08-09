@@ -38,8 +38,7 @@ from functools import lru_cache
 from typing import Any, Final
 
 from sqlalchemy import CHAR, JSON, DateTime, Text
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.types import TypeDecorator, TypeEngine
 
@@ -177,7 +176,7 @@ class GUID(TypeDecorator[uuid.UUID]):
             A native ``UUID`` descriptor on PostgreSQL, otherwise ``CHAR(36)``.
         """
         if _is_postgres(dialect):
-            return dialect.type_descriptor(PostgresUUID(as_uuid=True))
+            return dialect.type_descriptor(postgresql.UUID(as_uuid=True))
         return dialect.type_descriptor(CHAR(UUID_STRING_LENGTH))
 
     def process_bind_param(self, value: Any, dialect: Dialect) -> Any:
@@ -243,7 +242,7 @@ class JSONType(TypeDecorator[Any]):
             The dialect-appropriate JSON type descriptor.
         """
         if _is_postgres(dialect):
-            return dialect.type_descriptor(JSONB(astext_type=Text()))
+            return dialect.type_descriptor(postgresql.JSONB(astext_type=Text()))
         return dialect.type_descriptor(JSON())
 
 

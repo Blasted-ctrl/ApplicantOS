@@ -125,10 +125,17 @@ BLOCKER_CLOUDFLARE: Final[str] = "cloudflare"
 #: look" is not "all clear", so it is a blocker like any other.
 BLOCKER_UNKNOWN: Final[str] = "unknown"
 
+#: Raised by :meth:`AutoFiller.fill` when the resolver refused a field because the form's own
+#: label, helper text or options are a prompt injection (``docs/CONTRACTS.md`` §10b). A page
+#: that carries an injection is not a page this system finishes on its own, so it joins the
+#: blocker vocabulary rather than being counted as one more unanswered field.
+BLOCKER_UNSAFE_CONTENT: Final[str] = "unsafe_content"
+
 #: Blocker → review reason, in priority order. A Cloudflare interstitial is a bot challenge by
 #: another name, so it maps to the same reason a reCAPTCHA does: a human opens the page and
 #: finishes the application by hand.
 _BLOCKER_REASONS: Final[tuple[tuple[str, ReviewReason], ...]] = (
+    (BLOCKER_UNSAFE_CONTENT, ReviewReason.POLICY_BLOCK),
     (BLOCKER_CAPTCHA, ReviewReason.CAPTCHA),
     (BLOCKER_CLOUDFLARE, ReviewReason.CAPTCHA),
     (BLOCKER_MFA, ReviewReason.MFA),
@@ -1099,7 +1106,10 @@ class AutoFiller:
            means the page is not the application form, and every field goes to review.
         3. **Per-field confidence.** Below ``min_confidence`` the field is *not filled* and is
            returned for a human — required or not, because an optional question answered
-           wrongly is still an answer submitted under the user's name.
+           wrongly is still an answer submitted under the user's name. A field the resolver
+           refused under ``docs/CONTRACTS.md`` §10b — its label, helper text or options are a
+           prompt injection — additionally raises :data:`BLOCKER_UNSAFE_CONTENT`, so the whole
+           form is reported with :attr:`~app.models.enums.ReviewReason.POLICY_BLOCK`.
 
         File inputs are skipped: they are handled by :meth:`upload`, which can verify that the
         document actually attached.
@@ -1129,6 +1139,10 @@ class AutoFiller:
             logger.warning("autofill.blocked", blockers=sorted(blockers), fields=len(pending))
             return [], pending
 
+        # Imported here rather than at module scope for the same reason `FieldResolver` does
+        # it: the browser layer must import without the AI package having been touched.
+        from app.ai.field_answer import SOURCE_BLOCKED as _SOURCE_BLOCKED
+
         filled: list[AnswerPlan] = []
         review: list[FormField] = []
 
@@ -1138,6 +1152,21 @@ class AutoFiller:
                 continue
 
             plan = await self.resolver.resolve(field)
+            if plan.source == _SOURCE_BLOCKED:
+                # §10b: the field's own text was refused, so the page is compromised rather
+                # than merely hard. Recorded as a blocker so `review_reason_for` reports
+                # POLICY_BLOCK instead of "unknown field", which would send the human looking
+                # for a missing profile value that does not exist.
+                logger.warning(
+                    "autofill.unsafe_field",
+                    label=field.label,
+                    selector=field.selector,
+                    reasoning=plan.reasoning,
+                )
+                self.blockers.add(BLOCKER_UNSAFE_CONTENT)
+                review.append(field)
+                continue
+
             if not plan.is_confident(self._min_confidence):
                 logger.info(
                     "autofill.low_confidence",
@@ -1745,10 +1774,7 @@ class AutoFiller:
     @staticmethod
     def _controls_from(payload: Any) -> list[dict[str, Any]]:
         """Normalise whatever :data:`DISCOVERY_SCRIPT` returned into a list of descriptors."""
-        if isinstance(payload, Mapping):
-            controls = payload.get("controls")
-        else:
-            controls = payload
+        controls = payload.get("controls") if isinstance(payload, Mapping) else payload
         if not isinstance(controls, (list, tuple)):
             return []
         return [dict(item) for item in controls if isinstance(item, Mapping)]

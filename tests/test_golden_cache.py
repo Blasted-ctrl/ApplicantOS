@@ -15,7 +15,7 @@ logged. The resume simply comes out belonging to someone else.
 So the tests below are about **key separation**, not about hit rates:
 
 * changing any single input component changes the key (user, posting, preferences, fact set,
-  template, variant, budget, model);
+  injected memories, template, variant, budget, model);
 * two different users never collide, even when every other input is byte-identical, which is
   exactly the shape of two people applying to the same job;
 * keys are stable across processes, because a key derived from a salted ``hash()`` would
@@ -50,11 +50,12 @@ def _key(**over: Any) -> str:
     Args:
         **over: Field overrides applied to the default request. Recognised keys are
             ``user_id``, ``title``, ``company``, ``description``, ``min_score``, ``fact_ids``,
-            ``template``, ``variant_label``, ``max_bullets`` and ``model``.
+            ``memories``, ``template``, ``variant_label``, ``max_bullets`` and ``model``.
 
     Returns:
         The content-addressed cache key.
     """
+    from app.ai.memory_prompt import MemoryBlock
     from app.ai.resume_engine import ResumeEngine, TailorRequest
     from app.jobs.base import JobPostingDTO, UserProfileDTO
     from app.models.enums import ATSProviderName
@@ -82,10 +83,11 @@ def _key(**over: Any) -> str:
         variant_label=over.get("variant_label"),
     )
     facts = [_FakeFact(fid) for fid in over.get("fact_ids", ["fact-a", "fact-b"])]
+    memories = MemoryBlock(text=over.get("memories", ""))
 
     engine = ResumeEngine.__new__(ResumeEngine)  # no collaborators needed to build a key
     engine.llm = _FakeModel(over.get("model", "claude-sonnet-4-5"))  # type: ignore[attr-defined]
-    return engine._cache_key(request, facts)  # accessing the real key fn on purpose
+    return engine._cache_key(request, facts, memories)  # the real key fn, on purpose
 
 
 class _FakeFact:
@@ -140,6 +142,10 @@ def test_missing_user_id_does_not_alias_two_anonymous_callers() -> None:
         ("description", "CUDA kernels and TensorRT."),
         ("min_score", 85),
         ("fact_ids", ["fact-a", "fact-c"]),
+        # The memory block is part of the prompt, so it is part of the key. Without it, a
+        # correction the user made this morning would be answered from a résumé generated
+        # before they made it — a stale hit that looks exactly like the system ignoring them.
+        ("memories", "- [correction] Rejected wording: X / Preferred wording: Y"),
         ("template", "classic"),
         ("variant_label", "robotics"),
         ("max_bullets", 24),

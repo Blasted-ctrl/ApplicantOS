@@ -782,7 +782,7 @@ def _annualize(value: float, period: str) -> int:
     Returns:
         The annualised amount, rounded to the nearest whole unit.
     """
-    return int(round(value * _PERIOD_MULTIPLIERS.get(period, 1)))
+    return round(value * _PERIOD_MULTIPLIERS.get(period, 1))
 
 
 def _plausible(amount: int) -> bool:

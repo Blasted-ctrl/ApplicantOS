@@ -14,8 +14,14 @@ cannot resolve returns confidence ``0.0``, the autofiller routes the application
 a person answers it in ten seconds. That is the cheap failure. A confident wrong answer is
 submitted under the user's name and cannot be taken back.
 
-**Resolution order**, per §10:
+**Resolution order**, per §10 — with §10b's screen ahead of all of it:
 
+0. **The untrusted-text screen.** A form's labels, helper text and option values are served by
+   the employer's ATS and are attacker-controlled in exactly the way a job description is.
+   :func:`~app.ai.untrusted.sanitize_external_text` scores them first, and a field that reaches
+   :attr:`~app.ai.untrusted.InjectionRisk.HIGH` is refused outright at :data:`SOURCE_BLOCKED`.
+   This module is the most exposed of §10b's four call sites, because unlike the résumé path
+   there is no fact-id validator downstream: whatever it returns is typed into a form.
 1. **The explicit answers dictionary** — anything the user or a previous manual review already
    settled. Confidence ``1.0``; nothing overrides it.
 2. **:data:`KNOWN_FIELDS`** — a curated map of normalised label fragments to resolvers over
@@ -30,6 +36,14 @@ submitted under the user's name and cannot be taken back.
    self-reported confidence is capped at :data:`MAX_LLM_CONFIDENCE`, because a model's opinion
    of its own reliability is not evidence.
 5. **Give up**, at confidence ``0.0``.
+
+**The model path carries the user's memory.** A free-text question is exactly where "last time
+you told me my notice period is four weeks" should decide the answer, so
+:mod:`app.ai.memory_prompt` retrieves the relevant memories, screens every one of them for
+personal data, and injects what survives into the **system** prompt. A memory that carried an
+SSN or a date of birth is excluded whole rather than redacted, and only its category is logged.
+When the resulting answer clears ``settings.min_answer_confidence`` — that is, when the field
+was filled rather than handed to a human — the memories behind it are reinforced.
 
 **Options are binding.** For a ``select`` or ``radio`` field the submitted value must be one of
 ``field.options``, byte for byte: a browser silently ignores an option that does not exist, the
@@ -55,13 +69,18 @@ from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 
+from app.ai.memory_prompt import MEMORY_PROMPT_K, MemoryBlock, build_memory_block, reinforce_used
 from app.ai.prompts import load_prompt
 from app.ai.resume_engine import numbers_in
+from app.ai.untrusted import InjectionRisk, contact_allowlist, sanitize_external_text
 from app.models.enums import FieldKind, WorkAuthStatus
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    import uuid
+
     from app.ai.llm import ModelPlugin
     from app.jobs.base import FormField, UserProfileDTO
+    from app.knowledge.memory import MemoryStore
     from app.knowledge.retrieval import KnowledgeRetriever
 
 __all__ = [
@@ -72,8 +91,10 @@ __all__ = [
     "KNOWN_CONFIDENCE",
     "KNOWN_FIELDS",
     "MAX_LLM_CONFIDENCE",
+    "MEMORY_PURPOSE",
     "MIN_OPTION_SIMILARITY",
     "NO_ANSWER",
+    "SOURCE_BLOCKED",
     "SOURCE_DECLINED",
     "SOURCE_EEO",
     "SOURCE_EXPLICIT",
@@ -122,6 +143,13 @@ SOURCE_EEO: Final[str] = "eeo_profile"
 SOURCE_DECLINED: Final[str] = "eeo_declined"
 SOURCE_LLM: Final[str] = "llm"
 SOURCE_NONE: Final[str] = "unanswered"
+
+#: Source recorded when the field's own text was refused by the §10b screen. Distinct from
+#: :data:`SOURCE_NONE` because "we could not answer this" and "we refused to read this" send a
+#: human to two different places, and because
+#: :meth:`app.browser.autofill.AutoFiller.fill` promotes it to
+#: :attr:`~app.models.enums.ReviewReason.POLICY_BLOCK`.
+SOURCE_BLOCKED: Final[str] = "policy_block"
 
 # -- option matching ---------------------------------------------------------------------------
 
@@ -180,6 +208,9 @@ LLM_MIN_QUESTION_WORDS: Final[int] = 4
 
 #: Facts retrieved to ground one free-text answer, when a retriever was supplied.
 LLM_KNOWLEDGE_FACTS: Final[int] = 12
+
+#: Label this module's memory injections carry in the logs (:mod:`app.ai.memory_prompt`).
+MEMORY_PURPOSE: Final[str] = "field_answer"
 
 #: Characters of each retrieved fact rendered into the prompt.
 MAX_FACT_CHARS: Final[int] = 300
@@ -706,7 +737,8 @@ class FieldAnswerer:
                 path entirely, which is a supported configuration: everything else still
                 works and essays simply go to a human.
             knowledge: Retriever used to ground a free-text answer in the applicant's own
-                facts. ``None`` means the model sees only the profile and the question.
+                facts, **and** the source of the memories injected into the model prompt.
+                ``None`` means the model sees only the profile and the question.
         """
         self.user = user
         self.answers = dict(answers or {})
@@ -717,6 +749,13 @@ class FieldAnswerer:
             for key, value in self.answers.items()
             if isinstance(key, str)
         }
+        #: The applicant's own contact details, exempted from the memory PII screen. Their
+        #: email address and phone number belong on their own résumé, and treating them as a
+        #: leak would exclude nearly every memory worth injecting.
+        self._memory_allow: tuple[str, ...] = contact_allowlist(user.email, user.phone)
+        #: Every memory this answerer has put in front of the model, in first-injection order.
+        #: Exposed so a caller can audit one form's answers without re-running retrieval.
+        self.injected_memory_ids: list[uuid.UUID] = []
 
     # ----------------------------------------------------------------------------------
     # Entry point
@@ -740,8 +779,14 @@ class FieldAnswerer:
 
         Returns:
             The plan. Confidence ``0.0`` means "ask a human", which is a correct outcome and
-            not an error.
+            not an error. A field whose own text was refused by the §10b screen comes back at
+            confidence ``0.0`` with source :data:`SOURCE_BLOCKED` — never as an exception,
+            because one poisoned field must not abandon the other twenty on the form.
         """
+        blocked = self._screen(field)
+        if blocked is not None:
+            return blocked
+
         label = normalize_label(field.label)
 
         explicit = self._explicit(field, label)
@@ -759,9 +804,16 @@ class FieldAnswerer:
             return self.coerce_to_options(self._eeo(field, eeo_attribute))
 
         if self._is_free_text(field, label):
-            generated = await self._llm_answer(field)
-            if generated is not None:
-                return self.coerce_to_options(generated)
+            memories = await self._memories_for(field)
+            generated = await self._llm_answer(field, memories)
+            plan = self.coerce_to_options(generated) if generated is not None else None
+            # The outcome is known here and nowhere earlier: the model may have declined, the
+            # answer may have invented a number, and option coercion may have dropped it. Only
+            # a plan that survives all three is going to be typed rather than handed to a
+            # human, and only that plan credits the memories that shaped it.
+            await self._settle_memories(memories, plan)
+            if plan is not None:
+                return plan
 
         logger.info(
             "field_answer.unanswered",
@@ -795,6 +847,88 @@ class FieldAnswerer:
             return self.coerce_to_options(self._eeo(field, eeo_attribute))
         known = self._known(field, label)
         return self.coerce_to_options(known) if known is not None else None
+
+    # ----------------------------------------------------------------------------------
+    # The untrusted-text screen
+    # ----------------------------------------------------------------------------------
+
+    def _screen(self, field: FormField) -> AnswerPlan | None:
+        """Refuse a field whose own text is a prompt injection (``docs/CONTRACTS.md`` §10b).
+
+        A form's labels, helper text and option values are served by the employer's ATS and
+        are attacker-controlled in exactly the way a job description is. This is the most
+        exposed of the four §10b call sites, because unlike the résumé path there is **no
+        fact-id validator downstream**: whatever this class returns is typed into a form and
+        submitted under the user's name.
+
+        The refusal is a plan, not an exception. A form has twenty fields and one of them
+        being poisoned is a reason to hand that form to a human, not a reason to abandon the
+        other nineteen mid-fill.
+
+        Args:
+            field: The discovered input.
+
+        Returns:
+            A refusing plan at confidence :data:`NO_ANSWER` with source
+            :data:`SOURCE_BLOCKED`, or ``None`` when the field is safe to resolve.
+        """
+        for part, value in self._untrusted_parts(field):
+            _safe, verdict = sanitize_external_text(value, source=f"form_field:{part}")
+            if verdict.risk is not InjectionRisk.HIGH:
+                continue
+            logger.warning(
+                "field_answer.policy_block",
+                label=field.label,
+                selector=field.selector,
+                part=part,
+                score=verdict.score,
+                signals=verdict.signals,
+            )
+            return AnswerPlan(
+                field=field,
+                value="",
+                confidence=NO_ANSWER,
+                source=SOURCE_BLOCKED,
+                reasoning=(
+                    f"the form's {part} scored {verdict.score:.2f} for prompt injection "
+                    f"({', '.join(verdict.signals)}); it was not read"
+                ),
+            )
+        return None
+
+    @staticmethod
+    def _untrusted_parts(field: FormField) -> list[tuple[str, str]]:
+        """Return the field's externally-supplied strings, each with a name for the log.
+
+        Args:
+            field: The discovered input.
+
+        Returns:
+            ``(part_name, value)`` pairs for the label, the helper text and every option.
+        """
+        parts: list[tuple[str, str]] = [("label", field.label or "")]
+        if field.hint:
+            parts.append(("hint", field.hint))
+        parts.extend((f"option[{index}]", option) for index, option in enumerate(field.options))
+        return [(name, value) for name, value in parts if value.strip()]
+
+    @staticmethod
+    def _safe_for_prompt(value: str, *, part: str) -> str:
+        """Return one field string in the form that may be rendered into a prompt.
+
+        Only ever called after :meth:`_screen` has cleared the field, so the risk here is at
+        most :attr:`~app.ai.untrusted.InjectionRisk.MEDIUM` and the result is the text with
+        the offending spans removed.
+
+        Args:
+            value: The raw label, hint or option.
+            part: Which one, for the log line.
+
+        Returns:
+            The screened text.
+        """
+        safe, _verdict = sanitize_external_text(value, source=f"form_field:{part}")
+        return safe
 
     # ----------------------------------------------------------------------------------
     # Resolution paths
@@ -941,7 +1075,9 @@ class FieldAnswerer:
             value="",
             confidence=NO_ANSWER,
             source=SOURCE_NONE,
-            reasoning="Demographic questions are never inferred, and no decline option was offered.",
+            reasoning=(
+                "Demographic questions are never inferred, and no decline option was offered."
+            ),
         )
 
     @staticmethod
@@ -989,7 +1125,7 @@ class FieldAnswerer:
             return False
         return field.label.strip().endswith("?") or len(label.split()) >= LLM_MIN_QUESTION_WORDS
 
-    async def _llm_answer(self, field: FormField) -> AnswerPlan | None:
+    async def _llm_answer(self, field: FormField, memories: MemoryBlock) -> AnswerPlan | None:
         """Ask the model to write a free-text answer, grounded in the applicant's facts.
 
         The model's self-reported confidence is capped at :data:`MAX_LLM_CONFIDENCE`, and an
@@ -998,6 +1134,9 @@ class FieldAnswerer:
 
         Args:
             field: The discovered input.
+            memories: The screened memory block, injected into the **system** prompt. It is
+                the applicant's own prior corrections, and the prompt tells the model to prefer
+                them over its own guesses while never reading them as facts about the employer.
 
         Returns:
             The plan, or ``None`` when there is no model, the call failed, the model declined,
@@ -1010,7 +1149,7 @@ class FieldAnswerer:
         try:
             grounding = await self._grounding(field)
             payload = await self.llm.complete_json(
-                system=load_prompt("field_answer.system"),
+                system=load_prompt("field_answer.system", memories=memories.for_prompt()),
                 prompt=self._prompt(field, grounding),
                 schema=FIELD_ANSWER_SCHEMA,
                 temperature=ANSWER_TEMPERATURE,
@@ -1036,8 +1175,25 @@ class FieldAnswerer:
         # material does not contain was invented, and "I have 7 years of Kubernetes
         # experience" is exactly the sentence this system must never submit. Unlike a résumé
         # bullet there is no original wording to revert to, so the field goes to a human.
+        #
+        # The memory block counts as supporting material, and only here. Every memory in it is
+        # something *the user themselves typed* — a correction recorded when a human resolved
+        # this exact question before — so "four weeks" echoed back from "last time you told me
+        # my notice period is four weeks" is quotation, not invention. Excluding it would make
+        # the feedback loop useless: the system would re-ask the one question the user has
+        # already answered, every single time. Nothing else changes; the memory block still
+        # cannot introduce an employer, a date or a credential, because the prompt forbids it
+        # and the confidence gate still decides whether anything is submitted at all.
         supported = numbers_in(
-            " ".join([field.label, field.hint or "", *grounding, *self._profile_lines()])
+            " ".join(
+                [
+                    field.label,
+                    field.hint or "",
+                    memories.text,
+                    *grounding,
+                    *self._profile_lines(),
+                ]
+            )
         )
         invented = numbers_in(answer) - supported
         if invented:
@@ -1107,6 +1263,103 @@ class FieldAnswerer:
             if (fact.text or "").strip()
         ]
 
+    # ----------------------------------------------------------------------------------
+    # Memory
+    # ----------------------------------------------------------------------------------
+
+    def _memory_store(self) -> MemoryStore | None:
+        """Return the memory store behind the retriever, if there is one.
+
+        Args:
+            None.
+
+        Returns:
+            The store, or ``None`` when no retriever was supplied, when the retriever does not
+            expose one (a test double, a future retriever), or when the profile carries no
+            ``user_id``. Every one of those is a supported configuration in which the model
+            simply answers without the user's memory.
+        """
+        if self.knowledge is None or getattr(self.user, "user_id", None) is None:
+            return None
+        return getattr(self.knowledge, "memory", None)
+
+    async def _memories_for(self, field: FormField) -> MemoryBlock:
+        """Retrieve, screen and render the memories relevant to one question.
+
+        The retrieval query is the question itself, which is what makes "last time you told me
+        my notice period is four weeks" surface on a notice-period field and stay out of the
+        way everywhere else. Screening happens inside
+        :func:`app.ai.memory_prompt.build_memory_block`; a memory carrying personal data is
+        excluded whole, and only the category is logged.
+
+        Args:
+            field: The discovered input, already cleared by :meth:`_screen`.
+
+        Returns:
+            The block, empty when there is no store, no ``user_id``, no memory, or nothing that
+            survived the screen.
+        """
+        store = self._memory_store()
+        user_id = getattr(self.user, "user_id", None)
+        if store is None or user_id is None:
+            return MemoryBlock()
+
+        query = f"{field.label} {field.hint or ''}".strip()
+        block = await build_memory_block(
+            store,
+            user_id,
+            query,
+            allow=self._memory_allow,
+            purpose=MEMORY_PURPOSE,
+            k=MEMORY_PROMPT_K,
+        )
+        for memory_id in block.memory_ids:
+            if memory_id not in self.injected_memory_ids:
+                self.injected_memory_ids.append(memory_id)
+        return block
+
+    async def _settle_memories(self, memories: MemoryBlock, plan: AnswerPlan | None) -> int:
+        """Credit the injected memories when the field was answered rather than escalated.
+
+        The supervised half of the loop, and the reason it lives here rather than beside the
+        injection: at injection time nobody knows whether the answer will be submitted. A field
+        whose plan clears ``settings.min_answer_confidence`` is typed into the form; anything
+        below it goes to a human (golden rule #2). So "did not come back to review" is exactly
+        "cleared the threshold", and it is known only once :meth:`coerce_to_options` has had its
+        say.
+
+        There is no penalty on the other branch. A field escalates for a hundred reasons — a
+        model outage, an unanswerable question, an option that matched nothing — and docking a
+        memory for all of them would eventually silence the corrections this product runs on.
+
+        Args:
+            memories: The block that was injected.
+            plan: The final plan, or ``None`` when the model produced nothing usable.
+
+        Returns:
+            How many memories were reinforced.
+        """
+        if not memories.memory_ids:
+            return 0
+
+        from app.config.settings import get_settings
+
+        threshold = float(get_settings().min_answer_confidence)
+        if plan is None or not plan.is_confident(threshold):
+            logger.debug(
+                "memory.not_reinforced",
+                purpose=MEMORY_PURPOSE,
+                memories=len(memories.memory_ids),
+                confidence=plan.confidence if plan is not None else None,
+                threshold=threshold,
+            )
+            return 0
+
+        store = self._memory_store()
+        if store is None:  # pragma: no cover - the block came from that store
+            return 0
+        return await reinforce_used(store, memories.memory_ids, purpose=MEMORY_PURPOSE)
+
     def _prompt(self, field: FormField, grounding: Sequence[str]) -> str:
         """Render the user message for one free-text question.
 
@@ -1116,7 +1369,10 @@ class FieldAnswerer:
 
         Returns:
             The prompt: the question, its constraints, the profile facts that are safe to
-            state, and an explicit reminder that declining is allowed.
+            state, and an explicit reminder that declining is allowed. Every string that came
+            from the form has been through the §10b screen first — the field itself was
+            cleared by :meth:`_screen`, so what survives here is at most a mid-risk string
+            with its offending spans already removed.
         """
         limit = field.max_length or DEFAULT_ANSWER_CHARS
         lines = [
@@ -1124,13 +1380,13 @@ class FieldAnswerer:
             "",
             "## The question",
             "",
-            f"- Label: {field.label}",
+            f"- Label: {self._safe_for_prompt(field.label, part='label')}",
             f"- Input type: {field.kind.value}",
             f"- Required: {'yes' if field.required else 'no'}",
             f"- Character limit: {limit}",
         ]
         if field.hint:
-            lines.append(f"- Helper text: {field.hint}")
+            lines.append(f"- Helper text: {self._safe_for_prompt(field.hint, part='hint')}")
         if field.options:
             lines.extend(
                 [
@@ -1139,7 +1395,10 @@ class FieldAnswerer:
                     "",
                     "The answer must be exactly one of these, copied verbatim:",
                     "",
-                    *(f"- {option}" for option in field.options),
+                    *(
+                        f"- {self._safe_for_prompt(option, part=f'option[{index}]')}"
+                        for index, option in enumerate(field.options)
+                    ),
                 ]
             )
 

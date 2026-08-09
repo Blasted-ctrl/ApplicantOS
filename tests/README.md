@@ -70,6 +70,7 @@ inside a docstring, a commented-out import, and the plugin loader's own
 | `test_tracking.py` | The classifier corpus, relay-domain matching, idempotent re-sync, the read-only privacy invariants |
 | `test_api.py` | Health/ready/metrics, pagination, filters, 404s, the review resolve flow, and that `GET /settings` returns no credential |
 | `test_models.py` | Every unique constraint raises; enum wire format; the RESTRICT that protects rule #1 |
+| `test_apply_driver.py` | One whole application attempt on a recording session: the verification verdict mapped onto `CONFIRMED` / `FAILED` / `VERIFICATION_FAILED`, file-input reconciliation, and that a dry run neither clicks nor verifies |
 
 ---
 
@@ -80,6 +81,13 @@ Everything lives in `tests/fakes.py`. Three principles:
 **Doubles record, they do not merely answer.** `FakePage` keeps an ordered `actions` log with
 views over it — `clicks`, `fills`, `checks`, `uploads`, `lookups`, `writes`. Safety assertions
 are made against that log.
+
+**And the page moves.** `PageTransition` is what the page becomes on the first click, which is
+what lets one test tell a confirmation from an error from silence: `AutoFiller.submit` reads the
+page to see whether a marker appeared and `ApplicationVerifier.verify` reads it again to decide
+whether the employer really has the application, so a frozen page could not distinguish them.
+`form_control` / `discovery_payload` build the raw descriptors `DISCOVERY_SCRIPT` emits, which is
+faithful because the script does DOM access only — every policy decision is made in Python.
 
 **No network, no browser, no external process.** `FakePage` and `FakeSession` are duck-typed
 against the surface `docs/CONTRACTS.md` §12 defines, so `app/browser/autofill.py` — which never

@@ -147,7 +147,9 @@ class InsightItem(Schema):
     sample_size: int = Field(
         default=0,
         ge=0,
-        description="Observations behind the finding; below MIN_INSIGHT_SAMPLE_SIZE it is provisional.",
+        description=(
+            "Observations behind the finding; below MIN_INSIGHT_SAMPLE_SIZE it is provisional."
+        ),
     )
     context: dict[str, Any] = Field(
         default_factory=dict,

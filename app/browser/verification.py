@@ -193,6 +193,11 @@ class VerificationResult:
             :data:`MAX_CONFIRMATION_TEXT_CHARS`. Shown to the user as proof.
         evidence_screenshot: The proof capture, if one could be taken.
         method: How the verdict was reached — one of the ``METHOD_*`` constants.
+        marker: The success or error marker that decided it — a CSS selector or the literal
+            copy that matched — when a marker was what decided. ``None`` for a confirmation
+            id, a URL change and an inconclusive verdict, none of which have one. The caller
+            puts it in the review item so a human is told what the page actually showed
+            rather than only that something went wrong.
     """
 
     confirmed: bool
@@ -200,6 +205,7 @@ class VerificationResult:
     confirmation_text: str | None = None
     evidence_screenshot: Path | None = None
     method: str = METHOD_INCONCLUSIVE
+    marker: str | None = None
 
     @property
     def is_inconclusive(self) -> bool:
@@ -374,6 +380,7 @@ class ApplicationVerifier:
                 confirmation_text=_snippet(text, error),
                 evidence_screenshot=evidence,
                 method=METHOD_ERROR_MARKER,
+                marker=error,
             )
 
         method: str | None = None
@@ -422,6 +429,7 @@ class ApplicationVerifier:
             confirmation_text=_snippet(text, matched),
             evidence_screenshot=evidence,
             method=method,
+            marker=matched,
         )
 
     # ----------------------------------------------------------------------------------

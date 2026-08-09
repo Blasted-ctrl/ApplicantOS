@@ -1,7 +1,8 @@
 """The pipeline — discovery to submission, with the safety envelope wrapped around it (§13).
 
 ```
-discover → ingest → score → prepare (retrieve · tailor · render) → submit (guard · apply · verify) → cleanup
+discover → ingest → score → prepare (retrieve · tailor · render)
+    → submit (guard · apply · verify) → cleanup
 ```
 
 Every module below this one does one job well and knows nothing about the others. This file
@@ -27,6 +28,12 @@ It runs in a fixed order, and every rung returns without touching a browser:
    **this is the rung a fresh install stops on**, having done all the useful work first.
 
 Only past all five does a provider see an :class:`~app.jobs.base.ApplyContext`.
+
+:meth:`Pipeline.prepare` has a sixth refusal of its own, one rung earlier: a posting body that
+:func:`app.ai.untrusted.sanitize_external_text` scores as a prompt injection
+(``docs/CONTRACTS.md`` §10b) never reaches a model at all, and the application goes to
+``needs_review`` with :attr:`~app.models.enums.ReviewReason.POLICY_BLOCK` rather than to
+``failed`` — a failure would be retried, and retrying an injection only replays it.
 
 **Documents are disposable; knowledge is not.** ``ResumeVersion.content_json`` is written
 once and kept forever, and :meth:`Pipeline.cleanup_application` deletes the rendered PDF from
@@ -57,6 +64,7 @@ import structlog
 from sqlalchemy import func, select
 
 from app.ai.scoring import VERDICT_SKIP
+from app.ai.untrusted import UntrustedContentError
 from app.jobs.base import (
     ApplyContext,
     ApplyResult,
@@ -89,6 +97,7 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 __all__ = [
     "FALLBACK_RENDER_FORMAT",
     "FALLBACK_TEMPLATE",
+    "MEMORY_IDS_SUMMARY_KEY",
     "PREPARABLE_STATES",
     "RENDER_DIR_NAME",
     "VERDICT_ALREADY_APPLIED",
@@ -163,6 +172,13 @@ PREPARABLE_STATES: Final[frozenset[ApplicationStatus]] = frozenset(
         ApplicationStatus.FAILED,
     }
 )
+
+#: Key under which :meth:`Pipeline._generate_documents` reports the
+#: :class:`~app.models.knowledge.MemoryEntry` ids the résumé engine injected. It travels in the
+#: summary rather than as a second return value so the ``ready`` event carries the provenance
+#: too — "these are the lessons that shaped this document" is exactly what a user asking *why
+#: does it word things this way* needs to see.
+MEMORY_IDS_SUMMARY_KEY: Final[str] = "memory_ids"
 
 #: Statuses an :class:`~app.jobs.base.ApplyResult` may legitimately ask for. Anything else
 #: coming back from a provider is a provider bug, and the safe reading of a provider bug is
@@ -524,8 +540,38 @@ class Pipeline:
                 message="Documents ready.",
                 payload=summary,
             )
+            # The outcome is known only here. Every earlier return from this method is an
+            # escalation to a human or a failure, and a memory that preceded one of those has
+            # earned nothing. Reaching `ready` is the clean branch, so the memories that shaped
+            # the résumé get their weight — the supervised half of the loop.
+            await self._reinforce_memories(summary.get(MEMORY_IDS_SUMMARY_KEY) or [])
         except asyncio.CancelledError:
             raise
+        except UntrustedContentError as exc:
+            # `docs/CONTRACTS.md` §10b. The posting body is attacker-controlled text and it
+            # scored HIGH, so the résumé engine and the letter writer both refused to read it.
+            # This is a policy decision, not a failure: `failed` would put the application in
+            # the retry population, and retrying an injection just replays it.
+            log.warning(
+                "pipeline.prepare_blocked",
+                score=exc.verdict.score,
+                signals=exc.verdict.signals,
+                duration_seconds=round(time.monotonic() - started, 3),
+            )
+            await self._applications.mark_needs_review(
+                application,
+                exc.review_reason,
+                payload={
+                    "untrusted": exc.verdict.as_dict(),
+                    "source": exc.source,
+                    "hint": (
+                        "This job description contains text that tries to give instructions "
+                        "to the AI writing your application. Nothing was generated from it. "
+                        "Read the posting yourself and decide whether to apply by hand."
+                    ),
+                },
+            )
+            return application
         except Exception as exc:
             await self._fail(application, exc, stage=_STAGE_PREPARE)
             log.warning(
@@ -559,7 +605,11 @@ class Pipeline:
         Returns:
             A JSON-ready summary of what was produced, recorded on the ``ready`` event:
             bullet and fact counts, the sections generated, whether the LLM path degraded,
-            and whether a cover letter was written.
+            whether a cover letter was written, and — under
+            :data:`MEMORY_IDS_SUMMARY_KEY` — which of the user's own recorded lessons shaped
+            the résumé. That last one is both the audit trail behind "why does it word things
+            this way" and the input :meth:`_reinforce_memories` reads once the outcome is
+            known.
         """
         from app.ai.cover_letter import CoverLetterRequest, CoverLetterWriter
         from app.ai.resume_engine import ResumeEngine, TailorRequest
@@ -613,6 +663,7 @@ class Pipeline:
             "degraded": tailored.degraded,
             "cached": tailored.cached,
             "cover_letter": False,
+            MEMORY_IDS_SUMMARY_KEY: list(tailored.memory_ids),
         }
 
         score = await self._score_for(posting.id, user.id)
@@ -637,6 +688,41 @@ class Pipeline:
 
         await self._session.flush()
         return summary
+
+    async def _reinforce_memories(self, memory_ids: Sequence[str]) -> int:
+        """Credit the memories that shaped a résumé which did not need a human.
+
+        Best-effort in the strongest sense: the application is already ``ready`` and committed
+        when this runs, so a memory store that is unavailable costs a slightly worse ranking
+        next week and nothing else. It must never turn a successful preparation into a failure.
+
+        Args:
+            memory_ids: The ids :meth:`_generate_documents` returned.
+
+        Returns:
+            How many memories were reinforced.
+        """
+        if not memory_ids:
+            return 0
+
+        from app.ai.memory_prompt import reinforce_used
+        from app.ai.resume_engine import MEMORY_PURPOSE
+        from app.knowledge.memory import MemoryStore
+
+        try:
+            return await reinforce_used(
+                MemoryStore(self._session), memory_ids, purpose=MEMORY_PURPOSE
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "pipeline.memory_reinforcement_failed",
+                memories=len(memory_ids),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return 0
 
     async def _persist_resume_version(
         self,
@@ -1397,9 +1483,9 @@ class Pipeline:
         in-flight and never reach the review queue, which is the failure golden rule #8 exists
         to prevent — and in the worst case the user would not know they had applied at all.
 
-        So the row is parked in review with :attr:`~app.models.enums.ReviewReason.VERIFICATION_FAILED`,
-        which is precisely the situation: the outcome is unknown. A human confirms it from their
-        inbox in seconds.
+        So the row is parked in review with
+        :attr:`~app.models.enums.ReviewReason.VERIFICATION_FAILED`, which is precisely the
+        situation: the outcome is unknown. A human confirms it from their inbox in seconds.
 
         Every step is best-effort and never raises. The caller is already unwinding a
         cancellation; failing to tidy up must not replace that with a different exception.

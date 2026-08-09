@@ -2052,7 +2052,7 @@ def _clamp_adjustment(value: Any) -> int:
     if isinstance(value, bool) or value is None:
         return 0
     try:
-        adjustment = int(round(float(value)))
+        adjustment = round(float(value))
     except (TypeError, ValueError):
         return 0
     return max(-MAX_LLM_ADJUSTMENT, min(MAX_LLM_ADJUSTMENT, adjustment))

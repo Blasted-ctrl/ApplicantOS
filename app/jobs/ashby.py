@@ -468,7 +468,7 @@ def _annualize(value: Any, multiplier: int) -> int | None:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    annual = int(round(float(value) * multiplier))
+    annual = round(float(value) * multiplier)
     if MIN_PLAUSIBLE_ANNUAL_SALARY <= annual <= MAX_PLAUSIBLE_ANNUAL_SALARY:
         return annual
     return None

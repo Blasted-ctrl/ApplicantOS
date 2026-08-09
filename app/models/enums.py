@@ -8,11 +8,12 @@ contract, and the desktop client simultaneously.
 
 Design notes:
 
-* Every enum derives from :class:`StrEnum`, a ``(str, Enum)`` mixin. Members compare equal
-  to their plain-string value (``ApplicationStatus.DRAFT == "draft"``), serialise as that
-  value through pydantic and :mod:`json`, and render as it under ``str()`` and f-strings —
-  the last of which requires the explicit ``__str__`` override below, because a bare
-  ``(str, Enum)`` renders as ``ClassName.MEMBER`` on Python 3.11+.
+* Every enum derives from :class:`StrEnum`, which extends :class:`enum.StrEnum`. Members
+  compare equal to their plain-string value (``ApplicationStatus.DRAFT == "draft"``),
+  serialise as that value through pydantic and :mod:`json`, and render as it under
+  ``str()`` and f-strings. The stdlib base is what guarantees that last property: a hand-
+  rolled ``(str, Enum)`` mixin renders as ``ClassName.MEMBER`` on Python 3.11+ unless it
+  overrides ``__str__`` itself.
 * :meth:`StrEnum._missing_` makes lookup forgiving of the shapes that arrive from ATS feeds
   and CSV exports: different case, hyphens instead of underscores, surrounding whitespace.
   Unknown values still raise ``ValueError`` — nothing is silently coerced to a default.
@@ -26,7 +27,7 @@ bottom of the dependency graph.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum as _StdlibStrEnum
 from typing import Final
 
 __all__ = [
@@ -66,24 +67,21 @@ __all__ = [
 ]
 
 
-class StrEnum(str, Enum):
+class StrEnum(_StdlibStrEnum):
     """Base class for every ApplicantOS enum: a string that is also an ``Enum``.
 
     Members are drop-in replacements for their string value in comparisons, dictionary
     keys, JSON payloads, and SQL binds, while retaining enum identity for exhaustive
     ``match`` statements and IDE completion.
+
+    Derived from :class:`enum.StrEnum` rather than mixing ``str`` and ``Enum`` by hand.
+    The two differ on exactly the thing this codebase depends on most: Python 3.11 changed
+    ``__str__``/``__format__`` on a hand-rolled mixin to render ``ClassName.MEMBER``, so
+    every f-string, log line and URL path built from a member would carry the wrong text
+    unless the class overrode them. ``enum.StrEnum`` renders the value natively.
     """
 
     __slots__ = ()
-
-    def __str__(self) -> str:
-        """Return the raw string value, not ``ClassName.MEMBER``.
-
-        Python 3.11 changed ``__format__`` on mixin enums to include the class name; this
-        override restores value-only rendering so f-strings, log lines, URL paths, and
-        template substitutions all produce the wire value.
-        """
-        return str(self.value)
 
     def __repr__(self) -> str:
         """Return a debugger-friendly ``ClassName.MEMBER`` representation."""
@@ -95,7 +93,7 @@ class StrEnum(str, Enum):
 
         Accepts differences in case, surrounding whitespace, and hyphen/space instead of
         underscore, and also accepts a member's Python name. Anything else returns
-        ``None``, which makes :class:`Enum` raise ``ValueError`` as usual.
+        ``None``, which makes :class:`enum.Enum` raise ``ValueError`` as usual.
 
         Args:
             value: The raw value that failed exact lookup.
@@ -117,8 +115,14 @@ class StrEnum(str, Enum):
 
         Useful for building SQLAlchemy ``Enum`` columns with ``values_callable``, for
         OpenAPI documentation, and for validating configuration.
+
+        Returns:
+            Plain strings, never members. ``values_callable`` receives this list straight
+            from SQLAlchemy and puts it in DDL, so handing back enum members — which are
+            strings, but strings that carry an ``__repr__`` of their own — invites a driver
+            to render the wrong text.
         """
-        return [member.value for member in cls]
+        return [str(member.value) for member in cls]
 
     @classmethod
     def has_value(cls, value: object) -> bool:
@@ -130,6 +134,12 @@ class StrEnum(str, Enum):
         Returns:
             ``True`` when :meth:`_missing_`-style lookup would succeed.
         """
+        # Non-strings can never resolve: exact lookup fails on the value map and
+        # :meth:`_missing_` returns ``None`` for anything that is not a string. Rejecting
+        # them here says that outright instead of routing an integer through a
+        # ``ValueError``.
+        if not isinstance(value, str):
+            return False
         try:
             cls(value)
         except ValueError:
@@ -147,7 +157,8 @@ class StrEnum(str, Enum):
         Returns:
             The resolved member, or *default*.
         """
-        if value is None:
+        if not isinstance(value, str):
+            # Covers ``None`` and every other non-string: see :meth:`has_value`.
             return default
         try:
             return cls(value)

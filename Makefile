@@ -184,7 +184,7 @@ revision: ## Autogenerate a migration: make revision m="what changed"
 	@echo "==> verify the migration round-trips before committing it:"
 	@echo "    make migrate && $(PYTHON) -m alembic downgrade -1 && make migrate"
 
-seed: ## Seed a user, preferences, a profile and a realistic knowledge graph (idempotent)
+seed: ## Seed a user, a knowledge graph and a scored feed of postings (idempotent)
 	@$(RUNTIME_ENV) "$(PYTHON)" -m scripts.seed
 
 

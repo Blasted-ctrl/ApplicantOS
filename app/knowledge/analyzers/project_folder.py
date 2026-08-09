@@ -574,8 +574,8 @@ class _IgnoreRule:
         match = self.pattern.match(relative_path)
         if match is None:
             return False
-        if self.directory_only and not is_dir and match.group("tail") is None:
-            return False
+        if self.directory_only and not is_dir:
+            return match.group("tail") is not None
         return True
 
 

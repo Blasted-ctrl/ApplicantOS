@@ -1,0 +1,27 @@
+# Grafana datasource provisioning.
+#
+# Provisioned rather than clicked: `grafanadata` is a named volume, so a `docker compose down
+# -v` would otherwise take the datasource with it and leave every dashboard panel reporting
+# "Datasource not found" against a UID it can no longer resolve.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # The UID is pinned because `docker/grafana/dashboards/applicantos.json` references it by
+    # UID in every panel target. A generated UID would change on each provision and silently
+    # detach the dashboard from its data.
+    uid: applicantos-prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    # Provisioned datasources are read-only in the UI by default; allowing edits here means a
+    # change made while debugging survives until the next restart, then silently reverts.
+    editable: false
+    jsonData:
+      # Must match `scrape_interval` in docker/prometheus/prometheus.yml. Grafana uses it as
+      # the floor for `$__rate_interval`, and a value below the real scrape interval produces
+      # rate() windows with too few samples — which renders as gaps, not as an error.
+      timeInterval: 15s
+      httpMethod: POST

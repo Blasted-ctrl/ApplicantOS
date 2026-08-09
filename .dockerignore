@@ -1,0 +1,100 @@
+# Build-context exclusions for `docker/api.Dockerfile` and `docker/worker.Dockerfile`.
+#
+# Both images install the project **editable** (`pip install -e .`), so the source tree is
+# copied into the image rather than compiled into a wheel. That is not a shortcut: the
+# `[tool.setuptools.package-data]` block in `pyproject.toml` declares only
+# `app/config/*.yaml`, so a wheel would silently omit `app/ai/prompts/*.md` and
+# `app/documents/templates/*.j2` — the prompts and the resume templates. The image would
+# build, start, and then fail at the first tailoring pass with a missing-prompt error.
+#
+# Because the whole tree is copied, this file is what keeps the context small and keeps
+# host state out of the image. Two categories matter most:
+#
+#   * secrets — `.env` carries real API keys, and a copied-in `.env` would override every
+#     value compose sets, silently, with whatever the developer had locally;
+#   * host-specific build output — `desktop/src-tauri/target/` and `node_modules/` are
+#     gigabytes of artefacts compiled for the host, useless to a Linux container.
+
+# ── Version control and CI ─────────────────────────────────────────────────────────────
+.git/
+.github/
+.gitignore
+.gitattributes
+
+# ── Secrets and local environment ──────────────────────────────────────────────────────
+# `.env.example` is deliberately NOT excluded: it is the documented template and carries no
+# credential. Every real `.env*` is.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+.credentials/
+
+# ── Python build / test / tool state ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+sdist/
+wheels/
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# ── Runtime state (recreated inside the container under DATA_DIR) ──────────────────────
+var/
+/storage/
+/cache/
+screenshots/
+traces/
+browser-profile/
+*.har
+*.trace.zip
+.applicantos/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+logs/
+*.log
+
+# ── The desktop app ────────────────────────────────────────────────────────────────────
+# A Tauri application is not containerised (see docs/PACKAGING.md). None of it is needed by
+# the API or the worker, and `src-tauri/target` alone is several gigabytes.
+desktop/
+
+# ── Docker's own files ─────────────────────────────────────────────────────────────────
+# The Dockerfiles are passed with `-f`; nothing inside the image reads them, and excluding
+# them keeps an edit to a compose file from invalidating the source layer.
+docker-compose.yml
+docker-compose.override.yml
+docker-compose.*.yml
+docker/grafana/
+docker/prometheus/
+
+# ── Editor and OS noise ────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+.claude/

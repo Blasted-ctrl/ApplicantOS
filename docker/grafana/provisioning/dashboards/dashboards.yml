@@ -1,0 +1,24 @@
+# Grafana dashboard provisioning.
+#
+# Points Grafana at the read-only bind mount `docker-compose.yml` places at
+# /var/lib/grafana/dashboards. Every `*.json` there is loaded at startup and re-read on the
+# interval below, so editing `docker/grafana/dashboards/applicantos.json` on the host shows
+# up without restarting the container.
+
+apiVersion: 1
+
+providers:
+  - name: applicantos
+    orgId: 1
+    folder: ApplicantOS
+    type: file
+    # Deleting the JSON file removes the dashboard. The alternative silently keeps orphaned
+    # dashboards that no longer correspond to anything in the repository.
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      # Without this, every dashboard lands in the General folder regardless of the `folder`
+      # key above.
+      foldersFromFilesStructure: false

@@ -499,9 +499,8 @@ class Pipeline:
             # their sources finished indexing, and the result is a PDF containing only a
             # contact header. Not applying is strictly better than applying with that.
             if summary.get("bullets", 0) <= 0 or summary.get("facts", 0) <= 0:
-                self._log.warning(
+                log.warning(
                     "pipeline.prepare_empty_resume",
-                    application_id=str(application.id),
                     bullets=summary.get("bullets", 0),
                     facts=summary.get("facts", 0),
                 )
@@ -1411,7 +1410,7 @@ class Pipeline:
             score: The posting's score, when it was computed.
             provider: Name of the ATS provider the attempt was routed to.
         """
-        log = self._log.bind(application_id=str(application.id), provider=provider)
+        log = logger.bind(application_id=str(application.id), provider=provider)
         try:
             # Shielded: this is cleanup running *during* a cancellation, so without the shield
             # the first await would be cancelled too and the row would stay stranded.

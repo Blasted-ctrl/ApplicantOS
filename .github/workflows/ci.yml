@@ -1,0 +1,352 @@
+# ApplicantOS — continuous integration.
+#
+# Five jobs, and the shape of them is the point:
+#
+#   lint / typecheck  cheap, no services, fail fast
+#   test              a Python matrix crossed with BOTH database backends, because
+#                     `docs/WORKING_AGREEMENT.md` §6 makes the zero-infrastructure SQLite
+#                     path a hard requirement, not a fallback. A suite that only ever runs
+#                     against PostgreSQL cannot prove it.
+#   smoke             starts a real backend and drives every route and cross-service flow.
+#                     **This is the job that justifies scripts/smoke_test.py existing.** A
+#                     smoke test that is written and never run in CI catches nothing: unit
+#                     tests already pass on a router that was never included, and the smoke
+#                     test only earns its keep by running on every push.
+#   desktop           typecheck, lint and build the Tauri renderer, so a change to
+#                     `app/models/enums.py` that was not mirrored in
+#                     `desktop/src/lib/api/types.ts` fails here rather than in someone's app.
+#
+# `concurrency` cancels superseded runs on the same ref: a five-job matrix on every push to
+# an active branch otherwise queues behind itself.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Never write .pyc into the runner's cache, and never buffer output — a job killed by a
+  # timeout should still have printed everything up to the moment it hung.
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  FORCE_COLOR: "1"
+
+jobs:
+
+  # ====================================================================================
+  # Lint
+  # ====================================================================================
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ruff needs no project dependencies: it parses, it does not import. Installing the
+      # backend here would triple the job for nothing.
+      #
+      # The version is PINNED. An unpinned linter means upstream's release schedule decides
+      # when this repository's CI breaks: ruff adds rules continuously, and `select = ["E",
+      # "F", "I", "N", "UP", "B", "SIM", "RUF"]` opts into every future member of eight
+      # families. Bump this deliberately, in its own commit, with the fixes it demands.
+      - name: Install ruff
+        run: python -m pip install "ruff==0.16.2"
+
+      # `ruff check`, not `ruff format --check`. The repository's stated gate is the linter
+      # (CLAUDE.md, "Before you finish"), and the formatter currently disagrees with 19 files
+      # whose hand-aligned constant tables and comment banners read better than the machine
+      # output. Adding the formatter to CI would either fail every build or force a
+      # whole-tree reformat commit that buries the next real diff.
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+  # ====================================================================================
+  # Type check
+  # ====================================================================================
+  typecheck:
+    name: typecheck (mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # NON-BLOCKING, and honestly so. `mypy app` currently reports 66 errors across 33 modules
+    # — mostly SQLAlchemy `Mapped[]` narrowing, `Literal` arguments built from `str`, and
+    # `**kwargs` splats into typed constructors. None of them is a runtime defect and none is
+    # in the code this workflow was added alongside, so making the gate blocking today would
+    # paint CI red on a tree that works, which teaches everyone to ignore it.
+    #
+    # The rule going forward: the count must not grow. When it reaches zero, delete this line
+    # and the job becomes a real gate. Until then the annotations are still produced and
+    # still visible on every pull request.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # mypy resolves imports, so the real dependency set has to be present. `ignore_missing_
+      # imports = true` in pyproject.toml keeps a missing optional stub from failing the job,
+      # but a missing *first-party* import would silently reduce coverage to nothing.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r docker/requirements-runtime.txt
+          python -m pip install -e ".[sqlite,postgres,redis,orjson]"
+          python -m pip install mypy
+
+      - name: mypy app
+        run: mypy app
+
+  # ====================================================================================
+  # Tests — Python matrix x both database backends
+  # ====================================================================================
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    services:
+      # The same image docker-compose.yml runs, so the `vector` extension the initial
+      # migration creates is actually available. On plain `postgres:16` that CREATE EXTENSION
+      # is skipped, every embedding column silently becomes JSON, and the PostgreSQL half of
+      # this job would stop testing the thing it exists to test.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: applicantos
+          POSTGRES_PASSWORD: applicantos
+          POSTGRES_DB: applicantos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U applicantos -d applicantos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://applicantos:applicantos@localhost:5432/applicantos_test
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r docker/requirements-runtime.txt
+          python -m pip install -e ".[sqlite,postgres,redis,orjson,pgvector]"
+          python -m pip install pytest pytest-asyncio pytest-cov
+
+      # ---- Pass 1: the zero-infrastructure path ----------------------------------------
+      # tests/conftest.py pins SQLITE_MODE and an in-memory database into os.environ before
+      # `app` is imported — it has to, because app.config.settings builds its singleton at
+      # import time — so this pass needs no configuration at all. It is first because it is
+      # the one a contributor with nothing installed will run, and a failure here is a failure
+      # of the project's central promise.
+      - name: pytest — SQLite (zero dependencies)
+        run: python -m pytest -q --cov=app --cov-report=term-missing:skip-covered
+
+      # ---- Pass 2: the PostgreSQL path -------------------------------------------------
+      #
+      # **Not a second pytest run, and deliberately not.** `tests/conftest.py` writes
+      # DATABASE_URL=sqlite+aiosqlite:///:memory: into os.environ *unconditionally* at import
+      # time, so re-running pytest with TEST_DATABASE_URL set would silently execute against
+      # SQLite again and report a green "PostgreSQL pass" that tested nothing. A CI step that
+      # lies about what it covers is worse than no step.
+      #
+      # So this pass exercises PostgreSQL through the paths that actually differ, using the
+      # real server: the migrations, the portable column types (GUID → native uuid, JSONType →
+      # JSONB, EmbeddingType → vector(n)), the `use_alter` foreign-key cycle that SQLite
+      # silently omits (docs/OPEN_QUESTIONS.md #12), and a full round of ORM writes.
+      #
+      # To make it a real second pytest run instead, conftest.py needs one line —
+      # `"DATABASE_URL": os.environ.get("TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")`
+      # — plus an `engine` fixture that honours it. Add the line, then swap these steps for
+      # `python -m pytest -q`.
+      - name: Migrate the PostgreSQL test database
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          SQLITE_MODE: "false"
+        run: python -m alembic upgrade head
+
+      # Real ORM writes against PostgreSQL: 70 rows across seven tables, every JSON column,
+      # every GUID primary key, every enum, and — with CACHE_BACKEND=redis — the Redis cache
+      # round trip that `embed_texts` performs while embedding them.
+      - name: Seed against PostgreSQL + Redis
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          SQLITE_MODE: "false"
+          CACHE_BACKEND: redis
+          VECTOR_STORE: pgvector
+          LLM_PROVIDER: "null"
+          EMBEDDING_PROVIDER: hashing
+        run: |
+          python -m scripts.seed
+          python -m scripts.seed --quiet   # second run must write nothing
+
+      # The ORM and the migrations must not drift. An autogenerated revision against a
+      # migrated database has to be empty; anything else means a model changed without a
+      # migration, which is the class of failure that is silent until production.
+      - name: Migrations reproduce Base.metadata exactly
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          SQLITE_MODE: "false"
+        run: |
+          python -m alembic revision --autogenerate -m "ci drift check" > /dev/null
+          generated=$(ls -t alembic/versions/*.py | head -1)
+          if grep -qE 'op\.(create_table|drop_table|add_column|drop_column|alter_column|create_index|drop_index|create_foreign_key|drop_constraint|create_unique_constraint)' "$generated"; then
+            echo "::error::the ORM and the migrations have drifted - autogenerate produced operations"
+            cat "$generated"
+            rm -f "$generated"
+            exit 1
+          fi
+          rm -f "$generated"
+          echo "no drift"
+
+      # ---- The migration must round-trip ----------------------------------------------
+      # A downgrade that does not reverse its upgrade is discovered months later, by someone
+      # rolling back a release at 3am. It costs seconds to prove here.
+      - name: Migration round-trips (upgrade -> downgrade -> upgrade)
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          SQLITE_MODE: "false"
+        run: |
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+
+  # ====================================================================================
+  # Smoke — a real backend, every route, every cross-service flow
+  # ====================================================================================
+  smoke:
+    name: smoke (end to end)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint]
+
+    # Deliberately no service containers. The smoke test runs the stack exactly the way a
+    # contributor with no credentials and no Docker runs it: SQLite, the null model, the
+    # hashing embedder, the in-memory vector store. If it needs Postgres to pass, the
+    # zero-dependency promise is already broken.
+    env:
+      SQLITE_MODE: "true"
+      LLM_PROVIDER: "null"
+      EMBEDDING_PROVIDER: hashing
+      VECTOR_STORE: memory
+      # The kill switch, stated rather than inherited. A smoke test that submitted a real
+      # application would be a catastrophe, and this is the line that makes it impossible.
+      AUTO_APPLY_ENABLED: "false"
+      DRY_RUN: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r docker/requirements-runtime.txt
+          python -m pip install -e ".[sqlite,orjson]"
+
+      - name: Migrate
+        run: python -m alembic upgrade head
+
+      # A smoke run against an empty database exercises the routes but not the pipeline:
+      # scoring has nothing to score against and retrieval has nothing to retrieve. Seeding
+      # first is what makes the flow half of the script meaningful, and it doubles as proof
+      # that `scripts/seed.py` itself still works.
+      - name: Seed
+        run: python -m scripts.seed
+
+      - name: Seed is idempotent
+        run: python -m scripts.seed --quiet
+
+      # `--start` boots uvicorn, waits for /health, runs the endpoint table and the flows,
+      # then stops it. Running it that way rather than as a background step means a backend
+      # that fails to start is reported as a smoke failure instead of hanging the job.
+      - name: Smoke test
+        run: python -m scripts.smoke_test --start --port 8123
+
+  # ====================================================================================
+  # Desktop
+  # ====================================================================================
+  desktop:
+    name: desktop (renderer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # package.json requires >=20.19; 22 is the current LTS and is what the Tauri
+          # toolchain is tested against.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      # `npm ci`, never `npm install`: it installs exactly the lockfile and fails when
+      # package.json and the lockfile disagree, which is the drift worth catching.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # `npm run build` runs typecheck again and then vite build. Kept as its own step so a
+      # bundler failure is distinguishable from a type failure in the job summary.
+      - name: Build
+        run: npm run build
+
+      # The Rust shell is not compiled here. `cargo check` in src-tauri runs build.rs, which
+      # copies `bundle.externalBin` and treats a missing sidecar as an error — so it would
+      # require a full PyInstaller freeze first (see docs/PACKAGING.md). That belongs in a
+      # release workflow with a per-OS matrix, not on every pull request.

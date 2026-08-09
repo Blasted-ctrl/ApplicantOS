@@ -1,0 +1,52 @@
+# Prometheus scrape configuration for the ApplicantOS stack.
+#
+# There is exactly one application target: the API's `GET /metrics`, which renders
+# `app.observability.metrics.registry` — every series in docs/CONTRACTS.md §16.
+#
+# **The workers are not scraped, and that is not an oversight.** Celery prefork workers are
+# short-lived child processes with no HTTP surface; a per-worker exporter would need a
+# multiprocess collector directory and would still miss the counters recorded in a child that
+# exited between scrapes. Instead the worker-side recorders (`track_task`, `observe_apply`,
+# `record_application`) write to the same Redis-backed application state the API reads, and
+# the API is the single exposition point. The consequence to know: a metric incremented in a
+# worker appears at the API's next scrape, not instantly.
+#
+# Note that `/metrics` answers **404** when METRICS_ENABLED=false, rather than an empty 200.
+# That is deliberate (see `app/api/routes/health.py`): a scrape failure is visible in
+# `up{job="applicantos-api"}` and in Prometheus's own error rate, whereas an empty document
+# graphs as a flat zero that looks like a working, idle system.
+
+global:
+  # 15s matches the resolution the Grafana dashboard's rate() windows assume. Raising it
+  # without also widening those windows produces gaps in every rate panel.
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    stack: applicantos
+
+scrape_configs:
+
+  # ------------------------------------------------------------------------------------
+  # The application
+  # ------------------------------------------------------------------------------------
+  - job_name: applicantos-api
+    metrics_path: /metrics
+    # Compose's embedded DNS resolves the service name on the `applicantos` network.
+    static_configs:
+      - targets:
+          - api:8000
+        labels:
+          component: api
+
+  # ------------------------------------------------------------------------------------
+  # Prometheus itself
+  # ------------------------------------------------------------------------------------
+  # Cheap, and it is what tells you whether a missing ApplicantOS series means "the app
+  # stopped recording" or "the scraper stopped scraping".
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+        labels:
+          component: prometheus

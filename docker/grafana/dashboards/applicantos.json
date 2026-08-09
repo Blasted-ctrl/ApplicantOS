@@ -1,0 +1,677 @@
+{
+  "uid": "applicantos-overview",
+  "title": "ApplicantOS — pipeline overview",
+  "description": "Every panel is backed by a collector declared in app/observability/metrics.py (docs/CONTRACTS.md §16). Series names are frozen there; if a panel is empty, check that the recorder is being called before assuming the dashboard is wrong.",
+  "tags": ["applicantos", "pipeline"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["10s", "30s", "1m", "5m", "15m", "1h"]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "provider",
+        "label": "ATS provider",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "applicantos-prometheus"
+        },
+        "definition": "label_values(applicantos_postings_discovered_total, provider)",
+        "query": {
+          "query": "label_values(applicantos_postings_discovered_total, provider)",
+          "refId": "provider"
+        },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "At a glance",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Review queue",
+      "description": "applicantos_review_queue_size — applications parked awaiting a human decision. This is the cost of golden rule #2: every one of these is a place the system refused to guess. A number that only climbs means the escalation paths are firing faster than anyone is working them.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "applicantos_review_queue_size",
+          "legendFormat": "awaiting review",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 25 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Sessions running",
+      "description": "applicantos_session_active — automation runs currently executing. Expected to be 0 or 1 on a desktop install; a stuck value with no apply activity means the session watchdog has work to do.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "applicantos_session_active",
+          "legendFormat": "running",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Submitted (24h)",
+      "description": "increase() over applicantos_applications_total{status=\"submitted\"}. Counts transitions into `submitted`, so it is the number of real submissions — a dry run never reaches this status.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum(increase(applicantos_applications_total{status=\"submitted\"}[24h]))",
+          "legendFormat": "submitted",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "green" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Task failure rate (5m)",
+      "description": "Share of background tasks whose outcome label is `failure`, over all tasks. Derived from applicantos_task_duration_seconds_count, which track_task() writes on every exit path — so the denominator is complete by construction.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum(rate(applicantos_task_duration_seconds_count{outcome=\"failure\"}[5m])) / clamp_min(sum(rate(applicantos_task_duration_seconds_count[5m])), 1e-9)",
+          "legendFormat": "failing",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.2 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "Pipeline throughput",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Applications by status",
+      "description": "Rate of transitions into each ApplicationStatus. This is a counter of transitions, not a census: an application that goes draft → preparing → ready → submitted appears in four series. `needs_review` climbing while `submitted` is flat is the signature of a provider whose form changed.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum by (status) (rate(applicantos_applications_total{provider=~\"$provider\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "calcs": ["sum"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" },
+            "axisLabel": "transitions/min"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "needs_review" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "failed" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "submitted" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Discovery rate by provider",
+      "description": "applicantos_postings_discovered_total is counted before deduplication; applicantos_postings_deduped_total (dashed) is what collapsed onto a posting already known. A discovery line that stays high while the dedupe line tracks it means a provider is returning the same board every poll — correct, and free, but it says the 30-minute schedule is faster than that board changes.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum by (provider) (rate(applicantos_postings_discovered_total{provider=~\"$provider\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{provider}} discovered"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum by (provider) (rate(applicantos_postings_deduped_total{provider=~\"$provider\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{provider}} deduped"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "axisLabel": "postings/min"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*deduped.*" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [8, 6] } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Scoring verdicts",
+      "description": "sum by (verdict) over applicantos_scores_total. The ratio between `apply`, `review` and `skip` is the clearest single read on whether the rule pack in app/config/scoring_rules.yaml matches what the user actually wants — a near-total `skip` means the score floor is above what the boards are offering.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum by (verdict) (rate(applicantos_scores_total[$__rate_interval])) * 60",
+          "legendFormat": "{{verdict}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" },
+            "axisLabel": "scored/min"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Apply duration — p95 / p50",
+      "description": "histogram_quantile over applicantos_apply_duration_seconds_bucket. A real submission is tens of seconds of page loads, field discovery, uploads and verification; a p95 under a second means the runs being measured are dry runs, which never open a browser. A p95 approaching the 45-minute soft time limit in celery_app.py means apply tasks are about to start being killed mid-form.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(applicantos_apply_duration_seconds_bucket{provider=~\"$provider\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{provider}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "histogram_quantile(0.50, sum by (le, provider) (rate(applicantos_apply_duration_seconds_bucket{provider=~\"$provider\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{provider}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "axisLabel": "seconds"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "^p50.*" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [6, 6] } },
+              { "id": "custom.lineWidth", "value": 1 }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Review queue depth",
+      "description": "The gauge over time, next to the panels that feed it. Unlike the counters either side of it this one goes down — when a human works the queue.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "applicantos_review_queue_size",
+          "legendFormat": "awaiting review"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "axisLabel": "applications"
+          },
+          "color": { "mode": "fixed", "fixedColor": "orange" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 102,
+      "type": "row",
+      "title": "Cost and reliability",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "LLM token spend",
+      "description": "applicantos_llm_tokens_total split by model and by input/output. The budget line is LLM_DAILY_TOKEN_BUDGET expressed as a sustained per-minute rate (2,000,000 / 1440); a spend line above it will exhaust the day's budget before the day ends, and TokenBudgetExceeded will start routing work to review.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 25 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum by (model, kind) (rate(applicantos_llm_tokens_total[$__rate_interval])) * 60",
+          "legendFormat": "{{model}} · {{kind}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "2000000 / 1440",
+          "legendFormat": "daily budget, sustained"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "axisLabel": "tokens/min"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "daily budget, sustained" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 6] } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Background task failure rate by task",
+      "description": "Per-task share of applicantos_task_duration_seconds_count whose outcome is `failure`. Read it with docs/CONTRACTS.md §15 open: apply.run_one failing is an application that did not go out, while cleanup.temp_documents failing is disk that did not get reclaimed. clamp_min keeps a task with no traffic from producing a divide-by-zero spike.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 25 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum by (task) (rate(applicantos_task_duration_seconds_count{outcome=\"failure\"}[$__rate_interval])) / clamp_min(sum by (task) (rate(applicantos_task_duration_seconds_count[$__rate_interval])), 1e-9)",
+          "legendFormat": "{{task}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "calcs": ["max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "axisLabel": "failing share",
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "transparent", "value": null },
+              { "color": "red", "value": 0.2 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Document renders",
+      "description": "applicantos_documents_rendered_total by engine and outcome. A failure here is a resume that did not become a PDF, which stalls an application before it ever opens a browser — the usual cause in a container is a missing `tectonic` (PDF_ENGINE=latex) rather than anything in the template.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 34 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum by (engine, outcome) (rate(applicantos_documents_rendered_total[$__rate_interval])) * 60",
+          "legendFormat": "{{engine}} · {{outcome}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" },
+            "axisLabel": "renders/min"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*failure.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Cache hit ratio by namespace",
+      "description": "hits / (hits + misses) from applicantos_cache_events_total. Golden rule #9 is 'cache aggressively, invalidate precisely'; the `llm` and `embedding` namespaces are where a low ratio costs real money rather than just latency.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 34 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "sum by (namespace) (rate(applicantos_cache_events_total{event=\"hit\"}[$__rate_interval])) / clamp_min(sum by (namespace) (rate(applicantos_cache_events_total{event=~\"hit|miss\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "axisLabel": "hit ratio"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "API latency — p95 by route",
+      "description": "histogram_quantile over applicantos_http_request_duration_seconds_bucket. docs/CONTRACTS.md §18 budgets 50ms for an interaction and 100ms for a route change, and the bucket ladder is dense there for exactly this panel. The `route` label is the matched template, never the raw path, so it stays bounded in cardinality.",
+      "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 34 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "applicantos-prometheus" },
+          "expr": "topk(8, histogram_quantile(0.95, sum by (le, route) (rate(applicantos_http_request_duration_seconds_bucket[$__rate_interval]))))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "axisLabel": "p95 seconds",
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "transparent", "value": null },
+              { "color": "orange", "value": 0.1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

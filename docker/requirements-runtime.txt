@@ -1,0 +1,54 @@
+# Serving stack for the container images — the packages `pyproject.toml` deliberately does
+# not declare.
+#
+# `[project].dependencies` lists only what `import app` itself needs: SQLAlchemy, pydantic,
+# pydantic-settings, structlog, alembic. Everything below is imported **lazily**, inside the
+# function that uses it (CLAUDE.md, "all third-party imports are lazy"), which is what lets a
+# contributor install `applicantos[sqlite]` and still import the whole package. A container,
+# though, has to actually *serve*, so the lazy imports have to resolve.
+#
+# Pins are floors, not ceilings, and each one is the version that first carried something
+# this codebase relies on. Database drivers and the accelerators are NOT here — they are real
+# extras (`postgres`, `redis`, `orjson`, `pgvector`) and are installed from `pyproject.toml`
+# so there is exactly one declaration of each.
+#
+# Worker-only packages (browser automation, document rendering) live in
+# `requirements-worker.txt`, which installs on top of this file.
+
+# ── HTTP surface ───────────────────────────────────────────────────────────────────────
+# starlette arrives with fastapi; app/api/events.py imports it directly for the WebSocket
+# bus, so it is not pinned separately.
+fastapi>=0.115
+# `[standard]` is what supplies uvloop, httptools and the websockets implementation the
+# event bus needs. Plain `uvicorn` serves HTTP and drops every WebSocket connection.
+uvicorn[standard]>=0.30
+
+# ── Task queue ─────────────────────────────────────────────────────────────────────────
+# The API imports Celery too (app/api/tasks.py) to dispatch work; it just never runs a
+# worker. `[redis]` pulls the kombu redis transport that CELERY_BROKER_URL names.
+celery[redis]>=5.4
+
+# ── Outbound HTTP ──────────────────────────────────────────────────────────────────────
+# Every ATS provider, the GitHub analyzer, the website crawler and both LLM clients go
+# through httpx.
+httpx>=0.27
+
+# ── Configuration and rendering ────────────────────────────────────────────────────────
+# app/config/scoring_rules.yaml is loaded with PyYAML; the document templates are Jinja2.
+PyYAML>=6.0
+jinja2>=3.1
+
+# ── Model clients ──────────────────────────────────────────────────────────────────────
+# `Settings.llm_provider` defaults to `anthropic` and `embedding_provider` to `openai`, so
+# an image without these two would fail the moment an operator used the shipped defaults
+# instead of the zero-key posture compose sets (LLM_PROVIDER=null). Both are pure-Python
+# SDKs and cost a few hundred kilobytes. Neither is imported unless its provider is
+# selected — `app/ai/models/*.py` imports inside the call.
+anthropic>=0.39
+openai>=1.50
+
+# ── Observability ──────────────────────────────────────────────────────────────────────
+# app/observability/metrics.py carries a working fallback and runs without this package,
+# but the fallback exists for the desktop install. A container that Prometheus scrapes gets
+# the real client, so histograms and exemplars behave exactly as documented.
+prometheus-client>=0.20

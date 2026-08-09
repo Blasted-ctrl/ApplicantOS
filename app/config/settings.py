@@ -326,7 +326,13 @@ class Settings(BaseSettings):
         ``sqlite_vec`` and the cache to disk, because neither PostgreSQL/pgvector nor
         Redis is available in this deployment shape.
         """
-        database_file = _resolve_dir(self.data_dir) / SQLITE_DATABASE_FILENAME
+        # ``_ensure_dir`` rather than ``_resolve_dir``: SQLite will not create a missing
+        # parent directory, it just reports "unable to open database file". On a fresh
+        # clone ``./var`` does not exist yet, so the very first documented command --
+        # ``alembic upgrade head`` -- died with an error that names neither the path nor
+        # the cause. Creating the directory here fixes every entry point at once, because
+        # they all resolve the URL through this method.
+        database_file = _ensure_dir(self.data_dir) / SQLITE_DATABASE_FILENAME
         # ``as_posix`` keeps the URL valid on Windows ("C:/…") and yields the required
         # four-slash form for absolute POSIX paths ("////home/…").
         self.database_url = f"{SQLITE_ASYNC_DRIVER}:///{database_file.as_posix()}"

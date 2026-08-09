@@ -1,0 +1,31 @@
+# Worker-only packages: browser automation and document rendering.
+#
+# Installed on top of `requirements-runtime.txt` by `docker/worker.Dockerfile` and by nothing
+# else. The API container is deliberately without them — it dispatches Celery tasks and never
+# opens a browser or typesets a PDF, so carrying Chromium's dependency tree in the API image
+# would roughly triple it for code that never runs there.
+
+-r requirements-runtime.txt
+
+# ── Browser automation ─────────────────────────────────────────────────────────────────
+# The Python package only provides the driver. The browser itself is fetched separately by
+# `playwright install --with-deps chromium` in the Dockerfile, which is also what installs
+# the ~40 shared libraries headless Chromium needs on Debian.
+playwright>=1.47
+
+# ── Document parsing (knowledge sources) ───────────────────────────────────────────────
+# app/knowledge/ parses the user's existing resumes and exports.
+pypdf>=4.3
+python-docx>=1.1
+
+# ── Document rendering ─────────────────────────────────────────────────────────────────
+# PDF_ENGINE=latex (the default) shells out to the `tectonic` binary, installed from
+# upstream by `docker/install-tectonic.sh` — it is not a Python package and not on PyPI.
+# reportlab backs the pure-Python fallback renderer, which is what keeps a resume
+# obtainable when a template fails to typeset.
+reportlab>=4.2
+
+# ── HTML parsing ───────────────────────────────────────────────────────────────────────
+# The website analyzer's parser. Rust-backed and ~50x faster than the stdlib parser on the
+# multi-page crawls the knowledge indexer runs.
+selectolax>=0.3.21

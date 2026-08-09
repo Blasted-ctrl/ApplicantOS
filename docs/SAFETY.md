@@ -40,9 +40,12 @@ if dry_run or not settings.auto_apply_enabled:
 asserted on the **recorded clicks** rather than the return value — a function can return `False`
 and still have clicked something.
 
-> **Honest status:** the hooks are in place; the committed test that asserts on them is not.
-> This behaviour has been verified manually, not in CI. There is currently no `tests/` directory —
-> it lands in the test phase, and this note gets deleted then, not before.
+This is covered by `tests/test_golden_kill_switch.py`, which drives `AutoFiller.submit` against a
+page double that records every interaction, across all four combinations of the two switches plus
+the caller's own `dry_run` argument. The assertions are `fake_page.clicks == []` and
+`fake_page.lookups == []` — the second being the stronger claim, that the DOM was never even
+*queried* for a submit control. One test in that file asserts the opposite: with both switches
+open, a control **is** clicked, so the suite cannot be satisfied by a `submit` that never works.
 
 ---
 
@@ -150,8 +153,10 @@ docstring. Adding a provider means making that call honestly.
   password / token / api_key / secret / authorization / cookie / ssn / dob — through nested dicts
   and lists. Traceback rendering runs with `show_locals=False`, because frame locals otherwise dump
   your API key into the log while the same key is correctly redacted two fields over. That bug
-  shipped once here and was fixed; the fix has been verified manually (a secret in a frame local
-  no longer reaches the log) but is not yet covered by a committed regression test.
+  shipped once here and was fixed, and the fix now carries a committed regression test:
+  `tests/test_golden_redaction.py` raises an exception from a function holding a credential in a
+  frame local, logs it through the configured pipeline, and asserts the secret appears nowhere in
+  the bytes that reach the stream.
 - **Email access is read-only.** The status-sync feature requests read-only scopes and contains no
   send, delete, move, or flag call anywhere — grep-verifiable. It queries a bounded window scoped
   to companies you actually applied to, never a full mailbox sweep, and persists only a message id,

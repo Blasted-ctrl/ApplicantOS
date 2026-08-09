@@ -1,0 +1,425 @@
+# ApplicantOS — the full server-side stack.
+#
+#     docker compose up -d
+#
+# brings up PostgreSQL 16 with pgvector, Redis 7, the API, four Celery workers, the beat
+# scheduler, Prometheus and Grafana. The desktop app is **not** here: a Tauri application is
+# a signed native binary, not a container. See docs/PACKAGING.md.
+#
+# ── Environment variable names are a contract ─────────────────────────────────────────────
+# Every key below is the UPPER_SNAKE form of a field on `Settings` in `app/config/settings.py`
+# (docs/CONTRACTS.md §1). `Settings` is configured with `extra="ignore"`, which means a typo
+# here does **not** raise — it is silently dropped and the field keeps its code default. A
+# misspelled `DATABSE_URL` would leave every container pointing at `localhost:5432` and
+# failing to connect, with nothing in the logs naming the cause. Check any new key against
+# `settings.py` before adding it.
+#
+# ── The safety posture ────────────────────────────────────────────────────────────────────
+# AUTO_APPLY_ENABLED and DRY_RUN are set explicitly, at their safe positions, rather than
+# left to fall through to their (identical) code defaults. Golden rule #3 makes submission
+# require both switches to be deliberately flipped, and a stack whose posture is *stated* is
+# one an operator can audit by reading one file.
+#
+# ── Zero-key by default ───────────────────────────────────────────────────────────────────
+# LLM_PROVIDER defaults to `null` and EMBEDDING_PROVIDER to `hashing`, so this stack runs the
+# whole pipeline end to end with no API keys at all. Export ANTHROPIC_API_KEY and set
+# LLM_PROVIDER=anthropic (in your shell or in a root `.env`) to use a real model.
+#
+# ── Overrides ─────────────────────────────────────────────────────────────────────────────
+# `docker-compose.override.yml` is read automatically and turns this into a development
+# stack: bind-mounted source, `--reload`, and a headed browser. Suppress it for a
+# production-shaped run with:
+#
+#     docker compose -f docker-compose.yml up -d
+
+name: applicantos
+
+
+# ==========================================================================================
+# Shared fragments
+# ==========================================================================================
+
+# Every backend container reads the same configuration. Declared once so the API and the four
+# workers cannot drift — a worker that disagrees with the API about DATA_DIR writes resumes
+# the API cannot serve.
+x-backend-env: &backend-env
+  # -- application ------------------------------------------------------------------------
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  DEBUG: ${DEBUG:-false}
+  SECRET_KEY: ${SECRET_KEY:-change-me}
+  DATA_DIR: /app/var
+
+  # -- persistence ------------------------------------------------------------------------
+  # SYNC_DATABASE_URL is deliberately unset: `Settings._apply_derived_defaults` derives it
+  # from DATABASE_URL by swapping asyncpg for psycopg. Setting it here would create a second
+  # place for the credentials to go stale.
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-applicantos}:${POSTGRES_PASSWORD:-applicantos}@postgres:5432/${POSTGRES_DB:-applicantos}
+  SQLITE_MODE: "false"
+  REDIS_URL: redis://redis:6379/0
+
+  # -- cache ------------------------------------------------------------------------------
+  CACHE_BACKEND: redis
+  CACHE_DIR: /app/var/cache
+
+  # -- AI ---------------------------------------------------------------------------------
+  LLM_PROVIDER: ${LLM_PROVIDER:-null}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  LLM_DAILY_TOKEN_BUDGET: ${LLM_DAILY_TOKEN_BUDGET:-2000000}
+
+  # -- embeddings / vector store ----------------------------------------------------------
+  # `pgvector` is the point of using the pgvector/pgvector image; EMBEDDING_DIM must match
+  # the width the migration created the `vector(n)` columns at (docs/OPEN_QUESTIONS.md #28),
+  # so changing it needs a new migration and a re-index, not just a restart.
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hashing}
+  EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+  VECTOR_STORE: pgvector
+
+  # -- knowledge engine -------------------------------------------------------------------
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+
+  # -- storage ----------------------------------------------------------------------------
+  STORAGE_BACKEND: local
+  STORAGE_LOCAL_ROOT: /app/var/storage
+
+  # -- browser ----------------------------------------------------------------------------
+  PLAYWRIGHT_HEADLESS: ${PLAYWRIGHT_HEADLESS:-true}
+  BROWSER_USER_DATA_DIR: /app/var/browser
+  SCREENSHOT_DIR: /app/var/screenshots
+
+  # -- policy / safety --------------------------------------------------------------------
+  # THE KILL SWITCH. Submission requires AUTO_APPLY_ENABLED=true AND DRY_RUN=false.
+  AUTO_APPLY_ENABLED: ${AUTO_APPLY_ENABLED:-false}
+  DRY_RUN: ${DRY_RUN:-true}
+
+  # -- documents --------------------------------------------------------------------------
+  # `tectonic` is installed in the worker image only. The API never renders, so the value is
+  # shared harmlessly and stays true wherever rendering actually happens.
+  PDF_ENGINE: ${PDF_ENGINE:-latex}
+  LATEX_BINARY: tectonic
+
+  # -- api / desktop ----------------------------------------------------------------------
+  # 0.0.0.0 because a loopback bind inside a container is reachable by nothing. CORS_ORIGINS
+  # is a `list[str]`, and pydantic-settings parses complex types as JSON — the value must be
+  # a JSON array, not a comma-separated string.
+  API_HOST: 0.0.0.0
+  API_PORT: 8000
+  CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173","app://applicantos"]'
+
+  # -- observability ----------------------------------------------------------------------
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_JSON: "true"
+  METRICS_ENABLED: "true"
+  SENTRY_DSN: ${SENTRY_DSN:-}
+
+# Neither the API nor a worker can do anything useful before the schema exists, and both
+# would otherwise crash-loop against an empty database until the migration happened to land.
+x-backend-depends: &backend-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
+
+# The four worker containers differ by exactly one thing: the queue they consume. Everything
+# else is this anchor.
+x-worker: &worker
+  build:
+    context: .
+    dockerfile: docker/worker.Dockerfile
+  image: applicantos-worker:local
+  restart: unless-stopped
+  environment: *backend-env
+  depends_on: *backend-depends
+  volumes:
+    - appdata:/app/var
+  networks:
+    - applicantos
+  # Celery's prefork parent reaps its own children, but a browser that outlives its task
+  # would otherwise be reparented to PID 1 inside the container and never collected.
+  init: true
+
+
+# ==========================================================================================
+# Services
+# ==========================================================================================
+
+services:
+
+  # ------------------------------------------------------------------------------------
+  # Infrastructure
+  # ------------------------------------------------------------------------------------
+
+  postgres:
+    # The pgvector image is stock PostgreSQL 16 with the `vector` extension available. The
+    # extension is CREATEd by `alembic/versions/0001_initial_schema.py`, but only when the
+    # server offers it — on a plain `postgres:16` the migration succeeds and every embedding
+    # column silently becomes JSON, which works and is ~100x slower to search.
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-applicantos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-applicantos}
+      POSTGRES_DB: ${POSTGRES_DB:-applicantos}
+      # Without this, initdb picks the C locale and text comparison stops being
+      # case-insensitive in the way the company-name deduplication assumes.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `-d` as well as `-U`: pg_isready answers "accepting connections" during initdb's
+      # own bootstrap phase, before the application database exists, and a migration started
+      # then fails with "database does not exist".
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-applicantos} -d ${POSTGRES_DB:-applicantos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks:
+      - applicantos
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # `appendonly` because this Redis is a Celery broker as well as a cache. Losing the cache
+    # costs a re-computation; losing an acknowledged-but-unrun apply task loses an
+    # application. `noeviction` is the matching half: a full broker must refuse writes rather
+    # than silently drop queued work to make room for a cached embedding.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - applicantos
+
+  # ------------------------------------------------------------------------------------
+  # Schema
+  # ------------------------------------------------------------------------------------
+
+  migrate:
+    # A one-shot job, not a long-running service: it runs `alembic upgrade head`, exits 0,
+    # and every other backend container waits on `service_completed_successfully`. Running
+    # migrations from the API's entrypoint instead would race four workers against it.
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: applicantos-api:local
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    volumes:
+      - appdata:/app/var
+    networks:
+      - applicantos
+
+  # ------------------------------------------------------------------------------------
+  # API
+  # ------------------------------------------------------------------------------------
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: applicantos-api:local
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on: *backend-depends
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - appdata:/app/var
+    networks:
+      - applicantos
+    init: true
+    # HEALTHCHECK is inherited from the image (GET /health, dependency-free by design).
+
+  # ------------------------------------------------------------------------------------
+  # Workers — one container per queue (docs/CONTRACTS.md §15)
+  # ------------------------------------------------------------------------------------
+
+  worker-discovery:
+    <<: *worker
+    # `-n` gives each container a distinct node name. Without it every worker registers as
+    # `celery@<hostname>` and `celery inspect` cannot tell them apart — and neither can the
+    # `--workers` healthcheck.
+    command:
+      - celery
+      - --app
+      - app.workers.celery_app
+      - worker
+      - --queues
+      - discovery
+      - --hostname
+      - discovery@%h
+      - --concurrency
+      - "2"
+      - --loglevel
+      - INFO
+
+  worker-ai:
+    <<: *worker
+    # Concurrency 2: these tasks are I/O-bound on the model API, and the real ceiling is
+    # LLM_DAILY_TOKEN_BUDGET rather than CPU.
+    command:
+      - celery
+      - --app
+      - app.workers.celery_app
+      - worker
+      - --queues
+      - ai
+      - --hostname
+      - ai@%h
+      - --concurrency
+      - "2"
+      - --loglevel
+      - INFO
+
+  worker-apply:
+    <<: *worker
+    # Concurrency 1, deliberately. Each apply task drives a full Chromium instance through a
+    # multi-page form; two at once in one container means two browsers sharing
+    # BROWSER_USER_DATA_DIR, and Chromium takes an exclusive lock on its profile directory.
+    command:
+      - celery
+      - --app
+      - app.workers.celery_app
+      - worker
+      - --queues
+      - apply
+      - --hostname
+      - apply@%h
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+    # A browser needs more than the 64MB default /dev/shm; below ~256MB Chromium crashes
+    # renderer processes on image-heavy application forms.
+    shm_size: ${APPLY_SHM_SIZE:-512mb}
+
+  worker-knowledge:
+    <<: *worker
+    # This container also consumes `maintenance`, which is `task_default_queue` and the
+    # target of five of the seven beat entries. Leaving it unconsumed would mean the cleanup
+    # sweeps, the session watchdog and the mailbox poll queued forever with nothing to notice.
+    # Pairing it here is right because both queues are low-frequency background work that
+    # must never compete with an in-flight application.
+    command:
+      - celery
+      - --app
+      - app.workers.celery_app
+      - worker
+      - --queues
+      - knowledge,maintenance
+      - --hostname
+      - knowledge@%h
+      - --concurrency
+      - "2"
+      - --loglevel
+      - INFO
+
+  beat:
+    <<: *worker
+    # Exactly one beat process, ever. Two schedulers on one broker double every periodic
+    # task, which for `jobs.poll_all` means double the provider traffic and, for the cleanup
+    # sweeps, two concurrent deletes over the same files.
+    command:
+      - celery
+      - --app
+      - app.workers.celery_app
+      - beat
+      - --schedule
+      - /app/var/celerybeat-schedule
+      - --loglevel
+      - INFO
+    # Beat neither consumes a queue nor answers a control ping, so the image's worker
+    # healthcheck would report it permanently unhealthy. It has no probe of its own: a dead
+    # scheduler surfaces as queues that stop receiving periodic work.
+    healthcheck:
+      disable: true
+
+  # ------------------------------------------------------------------------------------
+  # Observability
+  # ------------------------------------------------------------------------------------
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - applicantos
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      # This Grafana serves one local stack and has no plugins to fetch, no analytics to
+      # send, and no reason to reach the internet at all.
+      GF_INSTALL_PLUGINS: ""
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks:
+      - applicantos
+
+
+# ==========================================================================================
+# Volumes and network
+# ==========================================================================================
+
+volumes:
+  # Database and broker state.
+  pgdata:
+  redisdata:
+  # DATA_DIR — generated resumes, cover letters, submission screenshots, the disk cache and
+  # the browser profile. Shared by the API and every worker: a worker renders the PDF and the
+  # API serves it, so they must see one filesystem.
+  appdata:
+  prometheusdata:
+  grafanadata:
+
+networks:
+  applicantos:
+    driver: bridge

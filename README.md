@@ -38,6 +38,7 @@ facts:
 A resume is then a **query** against that graph. Microsoft Embedded pulls firmware, RTOS and C++ to
 the top. NVIDIA pulls CUDA, computer vision and OpenCV. Roblox pulls Luau, networking and
 performance work. Same facts, different views.
+([Worked examples for all three.](docs/AI_PIPELINE.md#7-worked-examples))
 
 This has a useful side effect: because every bullet on a generated resume carries the ID of the
 fact it came from, the model **can't invent things**. If it returns a bullet that doesn't trace
@@ -50,43 +51,98 @@ And when you push a commit or add a class project, the next resume already knows
 
 ## Status
 
-Being built in the open, phase by phase. Honest state:
+Every planned phase has landed. Honest state, checked against the tree:
 
 | | |
 |---|---|
-| Foundation — config, database, 22-table schema, migrations, cache, plugin system | ✅ |
+| Foundation — config, database, 24-table schema, migrations, cache, plugin system | ✅ |
 | Knowledge engine — 6 analyzers, indexer, hybrid retrieval, entity graph, AI memory | ✅ |
 | Job discovery — 5 ATS providers, deduplication | ✅ |
 | Scoring — deterministic rule engine + optional LLM adjustment | ✅ |
 | Document generation — LaTeX / DOCX / HTML / Markdown, one-page enforcement | ✅ |
-| Resume tailoring engine + cover letters | 🟡 in progress |
-| Browser automation + submission | ⬜ next |
-| REST API + WebSocket events + background workers | ⬜ |
-| Automatic status sync (reads your email for rejections/interviews) | ⬜ spec'd |
-| Desktop app (Tauri) | ⬜ |
+| Resume tailoring engine + cover letters | ✅ |
+| Browser automation + submission | ✅ built, 🟡 not yet proven against a live ATS form |
+| REST API + WebSocket events + background workers | ✅ |
+| Automatic status sync (reads your email for rejections/interviews) | ✅ built, 🟡 OAuth flows untested end-to-end |
+| Desktop app (Tauri v2 + React 19) | ✅ |
+| Prompt-injection defence for job-description text | ⬜ **specified, not built** |
+| Signed installers for macOS and Linux | ⬜ Windows sidecar only |
 
-~69,000 lines across 104 modules so far. **Not usable end-to-end yet** — there's no UI and no
-submission path until those phases land.
+**~147,000 lines across 314 source files** — 170 Python modules, 113 TypeScript/React files, 7 Rust
+modules, 19 test modules. `pytest` runs **475 tests in 64 seconds** with no API keys and no
+Postgres.
+
+Two quality gates are amber and worth naming rather than hiding: `ruff check .` reports 31
+cosmetic findings, and `mypy app` reports 66 errors across 33 of 170 files. Neither affects
+runtime. The desktop app's `typecheck` and `lint` are clean.
+
+The two ⬜ rows matter. [`docs/ROADMAP.md`](docs/ROADMAP.md) says exactly what is missing and what
+it would take.
 
 ---
 
-## Try the parts that work
+## Quickstart
 
-Everything runs with **no API keys and no Postgres**. There's a deterministic stub model, a real
-hashing embedder, a pure-Python vector store, and SQLite mode — so you can exercise the whole
-knowledge pipeline offline.
+### One command
 
 ```bash
 git clone https://github.com/Blasted-ctrl/ApplicantOS.git
 cd ApplicantOS
+
+./scripts/bootstrap.sh          # macOS / Linux
+.\scripts\bootstrap.ps1         # Windows
+```
+
+That installs, migrates and seeds a working backend with **no API keys, no Postgres, no Redis and
+no Docker**. It never flips a safety switch — `AUTO_APPLY_ENABLED` and `DRY_RUN` keep the values
+`.env.example` ships, which are the safe ones.
+
+### The desktop app
+
+```bash
+cd desktop
+npm install
+npm run app                     # Tauri shell + React renderer + Python sidecar
+```
+
+The Rust shell picks a free port, launches the backend on `127.0.0.1`, waits for `/health`, and
+only then shows the window — so there's no white flash and no cold-start skeleton screen.
+
+Renderer only, against a backend you're already running:
+
+```bash
+cd desktop && npm run dev
+```
+
+### By hand
+
+```bash
 python -m venv .venv && .venv/Scripts/activate     # or source .venv/bin/activate
 pip install -e ".[dev]"
+cp .env.example .env
 
 export SQLITE_MODE=true LLM_PROVIDER=null EMBEDDING_PROVIDER=hashing VECTOR_STORE=memory
 alembic upgrade head
+python -m scripts.seed
+
+uvicorn app.main:app --reload
 ```
 
-Point it at a folder of your own code and see what it learns:
+With Postgres, Redis and background workers:
+
+```bash
+docker compose up -d postgres redis
+alembic upgrade head
+
+uvicorn app.main:app --reload
+celery -A app.workers.celery_app worker -Q discovery,ai,apply,knowledge,maintenance
+celery -A app.workers.celery_app beat
+```
+
+Add real API keys to `.env` and it uses Claude or GPT instead of the offline stub. Nothing else
+changes.
+
+### Point it at your own code
 
 ```python
 from app.knowledge import KnowledgeIndexer, KnowledgeRetriever
@@ -100,8 +156,25 @@ print(await indexer.index_source(src.id))
 print(await retriever.retrieve(user.id, "embedded systems firmware C++"))
 ```
 
-With real keys, add them to `.env` and it uses Claude or GPT instead of the stub. Nothing else
-changes.
+---
+
+## Screenshots
+
+> **Coming soon.** The desktop app is built and runs; the screenshots below are placeholders until
+> a signed build exists on all three platforms.
+
+| | |
+|---|---|
+| **Dashboard** — live session, funnel, today's activity | `docs/images/dashboard.png` |
+| **Postings** — scored list with the full breakdown panel | `docs/images/postings.png` |
+| **Score breakdown** — every rule that fired, and every one that didn't | `docs/images/score-breakdown.png` |
+| **Knowledge graph** — entities, edges, and which facts back each one | `docs/images/knowledge.png` |
+| **Review queue** — what it refused to guess, and why | `docs/images/reviews.png` |
+| **Application detail** — timeline, generated resume, confirmation screenshot | `docs/images/application.png` |
+
+The design system it's built against is [`docs/UI.md`](docs/UI.md), including a testable
+performance budget: route changes in one frame, cold start to real data in 800ms, 60fps on a
+5,000-row table.
 
 ---
 
@@ -121,7 +194,8 @@ LinkedIn data export you download yourself, or a public RSS feed, and surface th
 to apply to manually. That's a deliberate limitation, not a missing feature — and if it ever looks
 like a bug worth "fixing", it isn't.
 
-Adding a new ATS is a single file plus an entry point. Nothing in the core changes.
+Adding a new ATS is a single file plus an entry point. Nothing in the core changes — there's a
+[complete worked tutorial](docs/ADDING_A_PROVIDER.md) that builds one end to end.
 
 ---
 
@@ -148,6 +222,11 @@ Beyond that:
   from what you entered or default to "decline to self-identify". The model never sees them.
 - **Every submission is photographed.** Before and after. If a company later says they never got
   it, you have the screenshot and the timestamp.
+- **Your data stays local by default.** Local filesystem storage, local vector store, optional
+  local LLM. Mailbox credentials live in your OS keychain and never touch the database.
+
+Nine of the ten golden rules have a dedicated test file named after the rule they defend
+(`tests/test_golden_*.py`). A rule with no test is a comment.
 
 ---
 
@@ -157,19 +236,20 @@ Beyond that:
 app/
   knowledge/     the knowledge graph — analyzers, extraction, vector search, retrieval
   jobs/          ATS providers + deduplication
-  ai/            model plugins, embeddings, scoring, resume engine
+  ai/            model plugins, embeddings, scoring, resume engine, cover letters
   documents/     resume rendering — LaTeX, DOCX, HTML, Markdown
   browser/       Playwright automation
-  services/      orchestration
+  tracking/      reads your email to learn application outcomes
+  services/      orchestration — the pipeline and its guard ladder
   api/           FastAPI + WebSocket events
-  workers/       Celery tasks
-desktop/         Tauri shell + React app
-docs/            architecture, contracts, design system
+  workers/       Celery tasks across five queues
+desktop/         Tauri v2 shell + React 19 app
+docs/            architecture, contracts, design system, runbook
 ```
 
-Providers, AI models, resume templates, parsers and knowledge analyzers are all plugins behind one
-registry. Nothing imports a concrete implementation directly, which is what keeps adding a job
-board from touching the pipeline.
+Providers, AI models, resume templates, parsers, knowledge analyzers and status trackers are all
+plugins behind one registry. Nothing imports a concrete implementation directly, which is what
+keeps adding a job board from touching the pipeline.
 
 ---
 
@@ -177,8 +257,18 @@ board from touching the pipeline.
 
 | | |
 |---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | The layers, the request and task lifecycles, the ERD, and why the plugin and DTO boundaries exist |
+| [`docs/PIPELINE.md`](docs/PIPELINE.md) | Every stage from scheduler to cleanup — inputs, outputs, failure modes, how it resumes |
+| [`docs/AI_PIPELINE.md`](docs/AI_PIPELINE.md) | The knowledge graph, the four hallucination guards, the one-page budget, worked examples |
+| [`docs/SCORING.md`](docs/SCORING.md) | Rule format, the default pack, preference gates, the +40/+30/+25/… = 70 example |
+| [`docs/ADDING_A_PROVIDER.md`](docs/ADDING_A_PROVIDER.md) | A complete tutorial building a new ATS integration |
+| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | All 87 settings — what each does and when to change it |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Healthchecks, metrics, draining workers, replaying a failure, backup/restore |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Honest status of the twelve completeness items, then what's next |
 | [`docs/CONTRACTS.md`](docs/CONTRACTS.md) | Every module boundary — the spec the whole thing is built against |
 | [`docs/UI.md`](docs/UI.md) | Design system for the desktop app, including the performance budget |
+| [`docs/SAFETY.md`](docs/SAFETY.md) | The safety envelope, in one place |
+| [`docs/PACKAGING.md`](docs/PACKAGING.md) | Freezing the sidecar, bundling, signing, shipping |
 | [`docs/WORKING_AGREEMENT.md`](docs/WORKING_AGREEMENT.md) | How the build is run |
 | [`CLAUDE.md`](CLAUDE.md) | Orientation for anyone (or anything) writing code here |
 

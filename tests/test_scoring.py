@@ -376,3 +376,55 @@ def test_normalized_score_is_clamped(scorer) -> None:
 def test_verdict_thresholds(total, expected) -> None:
     """The routing decision the pipeline reads."""
     assert Scorer(prefs=UserPreferences(min_score=70)).verdict_for(total) == expected
+
+
+def test_score_read_derives_components_from_a_stored_breakdown() -> None:
+    """``ScoreRead`` reconstructs the arithmetic from the JSON column it was built from.
+
+    ``Score`` has a ``breakdown`` column and no ``components`` attribute, so every
+    ``ScoreRead.model_validate(row)`` in the API used to return an empty component list and
+    the desktop score panel reported "No rule contributed to this score" over a full
+    breakdown. Deriving it in the schema is what makes that unforgettable.
+    """
+    import uuid
+    from datetime import UTC, datetime
+
+    from app.schemas.scoring import ScoreRead
+
+    result = Scorer(prefs=UserPreferences(min_score=70)).score_rules(_posting())
+    now = datetime.now(UTC)
+    read = ScoreRead(
+        id=uuid.uuid4(),
+        posting_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        total=result.total,
+        normalized=result.normalized,
+        breakdown=result.to_breakdown(),
+        created_at=now,
+        updated_at=now,
+    )
+
+    assert [component.key for component in read.components] == [
+        component.rule for component in result.components
+    ]
+    assert sum(component.points for component in read.components) == result.total
+
+
+def test_score_read_survives_a_breakdown_it_cannot_parse() -> None:
+    """A malformed stored breakdown yields no components rather than a 500."""
+    import uuid
+    from datetime import UTC, datetime
+
+    from app.schemas.scoring import ScoreRead
+
+    now = datetime.now(UTC)
+    read = ScoreRead(
+        id=uuid.uuid4(),
+        posting_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        breakdown={"components": ["not a mapping", {"points": "not a number"}, {"key": "ok"}]},
+        created_at=now,
+        updated_at=now,
+    )
+
+    assert [component.key for component in read.components] == ["ok"]

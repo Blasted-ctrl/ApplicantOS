@@ -11,11 +11,16 @@ system rather than by importing a concrete module:
     ``null`` stub that lets the whole pipeline run with zero API keys.
 ``template``
     A resume/cover-letter renderer — LaTeX, DOCX, HTML, Markdown.
-``parser``
-    A document parser.
 ``analyzer``
     A knowledge source analyzer — GitHub, a personal website, a project folder, a resume,
     a LinkedIn export.
+``tracker``
+    A status-sync channel — a mailbox or an ATS portal polled for application outcomes.
+
+Document *reading* is deliberately not one of them: the PDF/DOCX/HTML readers in
+:mod:`app.knowledge.analyzers.document` are chosen by inspecting the bytes, which a
+registry keyed by ``(kind, name)`` cannot do. See
+:class:`~app.models.enums.PluginKind`.
 
 Golden rule #5 is what this buys: *never import a concrete provider, analyzer, model or
 template from outside its own package.* Adding a fifth ATS or a third resume template must

@@ -176,7 +176,8 @@ export function TrackingRoute() {
 
         <section>
           <SectionHeading>Connected mailboxes</SectionHeading>
-          {rows.length === 0 ? (
+          {/* §10.10 — never over a query that has not answered yet. */}
+          {accounts.isPending ? null : rows.length === 0 ? (
             <EmptyState
               icon={Mail}
               title="No mailbox connected"
@@ -249,7 +250,8 @@ export function TrackingRoute() {
 
         <section>
           <SectionHeading>Signals awaiting a decision</SectionHeading>
-          {pending.length === 0 ? (
+          {/* §10.10 — never over a query that has not answered yet. */}
+          {signals.isPending ? null : pending.length === 0 ? (
             <EmptyState
               title="Nothing ambiguous"
               description="Signals that match an application confidently are applied on their own. Only the ones that could not be matched appear here."

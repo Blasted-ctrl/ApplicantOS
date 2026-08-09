@@ -1,0 +1,121 @@
+# ApplicantOS — live provider integration tests.
+#
+# **A separate workflow on purpose, and it must never run on push.**
+#
+# Everything in `-m integration` talks to somebody else's production API over the public
+# internet: Greenhouse's board feed, Lever's postings API, Ashby's job board API, Workday's
+# CXS endpoints. Those go down, rate-limit, and change on their own schedule, and none of
+# that is a statement about the pull request in front of you. Wiring these into `ci.yml`
+# would mean a Greenhouse outage blocks an unrelated merge — after which everyone learns to
+# push through a red X, and the signal from *every* job is gone.
+#
+# So this runs nightly and on demand, and the only thing a failure here means is the thing
+# it should mean: a provider changed, or a shipped board token died. Both are real, both are
+# invisible to the hermetic suite (every provider unit test runs against a recorded payload),
+# and both silently return an empty feed to every user until somebody notices.
+#
+# `scripts/validate_boards.py` runs alongside the tests and is the broader of the two checks:
+# the tests prove the *feed shape* is unchanged against four boards, the script proves every
+# token in `app/jobs/seeds.py` is still alive. It exits non-zero when any token is dead,
+# which is exactly when a human should look at that file.
+#
+# `tests/integration/test_browser_live.py` runs here too, and needs Chromium — hence the
+# `playwright install` step. It is the same argument one layer up: the packs in
+# `app/browser/selectors.py` describe markup three ATSs redesign on their own schedule, every
+# unit test drives a fake, and a stale selector fails *silently* by escalating every
+# application to manual review. Nothing it does can submit anything: both switches are closed
+# below, the module re-asserts that at import time, and every test asserts the page recorded
+# zero clicks.
+
+name: Integration (live providers and live forms)
+
+on:
+  schedule:
+    # 04:30 UTC daily — outside US and European business hours, so a sweep of ~120 public
+    # board feeds lands when those services are quietest.
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+# Never on push, never on pull_request. See the header.
+
+concurrency:
+  group: integration-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  FORCE_COLOR: "1"
+
+jobs:
+  live-providers:
+    name: live providers and live forms
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # The zero-infrastructure configuration, same as the smoke job: these tests need a
+    # network and nothing else. No Postgres, no Redis, no API keys.
+    env:
+      SQLITE_MODE: "true"
+      LLM_PROVIDER: "null"
+      EMBEDDING_PROVIDER: hashing
+      VECTOR_STORE: memory
+      # Stated rather than inherited. Nothing in this workflow submits an application, and
+      # these are the two switches that make that structurally true (golden rule #3).
+      AUTO_APPLY_ENABLED: "false"
+      DRY_RUN: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r docker/requirements-runtime.txt
+          python -m pip install -e ".[sqlite,orjson]"
+          python -m pip install pytest pytest-asyncio playwright
+
+      # Without this, `test_browser_live.py` skips with "no browser available" and the nightly
+      # goes green having checked none of the selector packs — the exact silent failure the
+      # suite exists to prevent. `--with-deps` pulls the shared libraries headless Chromium
+      # needs on a bare runner.
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      # `-m integration` and nothing else. The hermetic suite already ran on the commit that
+      # produced this tree; re-running it here would only add ways for this job to be red for
+      # reasons that have nothing to do with a provider.
+      #
+      # `-rA` prints the short summary for passes too, which is what surfaces the per-provider
+      # discovered-field report that `test_browser_live.py` prints — the actual deliverable of
+      # that module is the list, not the green tick.
+      - name: pytest -m integration
+        run: python -m pytest -q -m integration --no-header -rA
+
+      # The seed-token sweep. Separate step so that "a feed changed shape" and "a board token
+      # died" are distinguishable in the job summary rather than being one red X.
+      #
+      # It exits 1 when any token is dead. That is a real finding and should be visible, but
+      # it must not mask a test failure that ran before it — hence its own step, last.
+      - name: Validate every shipped board token
+        run: python -m scripts.validate_boards --json board-validation.json
+
+      # Uploaded whether or not the sweep passed: the table is the artifact worth keeping,
+      # and it is most useful precisely on the runs that failed.
+      - name: Upload the validation table
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: board-validation
+          path: board-validation.json
+          if-no-files-found: warn
+          retention-days: 30

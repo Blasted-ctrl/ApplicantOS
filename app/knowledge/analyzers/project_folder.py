@@ -1143,7 +1143,11 @@ def _parse_pyproject(text: str, manifest: str) -> tuple[str | None, list[Depende
         return (None, [])
 
     dependencies: list[Dependency] = []
-    project = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+    # Each table is bound to a local *before* it is tested, so the narrowing carries: a second
+    # ``payload.get(...)`` call inside the conditional would be a fresh expression that the
+    # ``isinstance`` above says nothing about.
+    raw_project = payload.get("project")
+    project: dict[str, Any] = raw_project if isinstance(raw_project, dict) else {}
     for requirement in project.get("dependencies", []) or []:
         if not isinstance(requirement, str):
             continue
@@ -1164,26 +1168,27 @@ def _parse_pyproject(text: str, manifest: str) -> tuple[str | None, list[Depende
                         Dependency(name, _version_of(requirement, name), manifest, "dev")
                     )
 
-    poetry = (
-        payload.get("tool", {}).get("poetry", {}) if isinstance(payload.get("tool"), dict) else {}
-    )
-    if isinstance(poetry, dict):
-        for section, scope in (("dependencies", "runtime"), ("dev-dependencies", "dev")):
-            block = poetry.get(section)
-            if not isinstance(block, dict):
-                continue
-            for name, spec in block.items():
-                if isinstance(name, str) and name.strip().lower() != "python":
-                    dependencies.append(
-                        Dependency(
-                            name.strip(),
-                            spec if isinstance(spec, str) else None,
-                            manifest,
-                            scope,
-                        )
-                    )
+    raw_tool = payload.get("tool")
+    tool: dict[str, Any] = raw_tool if isinstance(raw_tool, dict) else {}
+    raw_poetry = tool.get("poetry")
+    poetry: dict[str, Any] = raw_poetry if isinstance(raw_poetry, dict) else {}
 
-    declared = project.get("name") or (poetry.get("name") if isinstance(poetry, dict) else None)
+    for section, scope in (("dependencies", "runtime"), ("dev-dependencies", "dev")):
+        block = poetry.get(section)
+        if not isinstance(block, dict):
+            continue
+        for name, spec in block.items():
+            if isinstance(name, str) and name.strip().lower() != "python":
+                dependencies.append(
+                    Dependency(
+                        name.strip(),
+                        spec if isinstance(spec, str) else None,
+                        manifest,
+                        scope,
+                    )
+                )
+
+    declared = project.get("name") or poetry.get("name")
     return (
         declared.strip() if isinstance(declared, str) and declared.strip() else None,
         dependencies,

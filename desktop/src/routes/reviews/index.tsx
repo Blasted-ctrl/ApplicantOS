@@ -183,7 +183,11 @@ export function ReviewsRoute() {
         </>
       }
     >
-      {items.length === 0 ? (
+      {/* §10.10 — the empty state is suppressed while the queue has never had data. "Nothing
+          needs you" is the one sentence in this app that must never be a guess: printing it
+          over a queue that is still loading tells the user the agent handled everything, on
+          the exact screen where that being wrong costs them an application. */}
+      {reviews.isPending ? null : items.length === 0 ? (
         <EmptyState
           icon={ShieldCheck}
           title="Nothing needs you"

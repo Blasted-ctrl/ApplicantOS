@@ -61,7 +61,7 @@ import time
 from array import array
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Any, ClassVar, Final, TypeVar
+from typing import Any, ClassVar, Final, Literal, TypeVar
 
 import structlog
 
@@ -126,8 +126,10 @@ BUSY_TIMEOUT_MS: Final[int] = 30_000
 DELETE_BATCH_SIZE: Final[int] = 500
 
 #: ``array("f")`` is IEEE-754 single precision, 4 bytes per component, which is the layout
-#: ``sqlite-vec`` expects for a ``float[n]`` BLOB.
-FLOAT32_TYPECODE: Final[str] = "f"
+#: ``sqlite-vec`` expects for a ``float[n]`` BLOB. Typed as the literal because
+#: :class:`array.array` is overloaded on its typecode: only ``"f"`` (or ``"d"``) yields an
+#: ``array`` of floats, and a plain ``str`` would resolve to the integer overload.
+FLOAT32_TYPECODE: Final[Literal["f"]] = "f"
 
 #: Whether this machine already stores ``float32`` little-endian. When it does not, buffers
 #: are byte-swapped on the way in and out so the file stays portable and readable by

@@ -710,7 +710,7 @@ class AshbyProvider(ATSProvider):
 
     # -- transport ----------------------------------------------------------------------
 
-    async def _board_jobs(self, board: str) -> list[dict[str, Any]]:
+    async def _board_jobs(self, board: str) -> list[Mapping[str, Any]]:
         """Return every listed posting on one board, compensation included.
 
         Reads through the shared cache under

@@ -41,7 +41,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import structlog
 from sqlalchemy import delete, func, or_, select, update
@@ -58,6 +58,7 @@ from app.models.knowledge import (
 from app.schemas.knowledge import GraphEdge, GraphNode, GraphView
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    from sqlalchemy.engine import CursorResult
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.ai.embeddings import Embedder
@@ -1366,7 +1367,9 @@ class KnowledgeGraph(KnowledgeStore):
             .execution_options(synchronize_session="fetch")
         )
         await self.session.flush()
-        removed = int(result.rowcount or 0)
+        # ``execute`` is annotated as returning the general ``Result``, but a DML statement
+        # always produces a ``CursorResult``, which is the class that carries ``rowcount``.
+        removed = int(cast("CursorResult[Any]", result).rowcount or 0)
         if removed:
             logger.info(
                 "graph.pruned",

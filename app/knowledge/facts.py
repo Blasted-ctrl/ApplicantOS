@@ -40,7 +40,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import structlog
 from sqlalchemy import JSON, ColumnElement, String, and_, func, or_, select, type_coerce
@@ -53,6 +53,7 @@ from app.models.enums import FactKind
 from app.models.knowledge import DEFAULT_CONFIDENCE, KnowledgeFact
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    from app.database.types import EmbeddingType
     from app.knowledge.analyzers.base import ExtractedFact
 
 __all__ = [
@@ -218,7 +219,9 @@ def _date_key(value: str | None) -> tuple[int, int] | None:
 
 def _is_present(value: str | None) -> bool:
     """Return whether *value* means "still ongoing"."""
-    return bool(value) and value.strip().casefold() in _PRESENT_MARKERS
+    if not value:
+        return False
+    return value.strip().casefold() in _PRESENT_MARKERS
 
 
 def _earliest_date(incumbent: str | None, incoming: str | None) -> str | None:
@@ -537,7 +540,11 @@ class FactStore(KnowledgeStore):
             ``True`` when a missing embedding is stored as JSON ``null``.
         """
         dialect = self.session.get_bind().dialect
-        implementation = KnowledgeFact.__table__.c.embedding.type.load_dialect_impl(dialect)
+        # ``Column.type`` is annotated as the base ``TypeEngine``; this column is declared
+        # with :class:`~app.database.types.EmbeddingType`, and ``load_dialect_impl`` is the
+        # ``TypeDecorator`` hook being asked which implementation the dialect resolved to.
+        column_type = cast("EmbeddingType", KnowledgeFact.__table__.c.embedding.type)
+        implementation = column_type.load_dialect_impl(dialect)
         return isinstance(implementation, JSON)
 
     def _embedding_absent(self) -> ColumnElement[bool]:

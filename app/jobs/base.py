@@ -49,7 +49,7 @@ import asyncio
 import random
 import re
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -1727,8 +1727,13 @@ class ATSProvider(BasePlugin, abc.ABC):
         limit: int | None = None,
         page_size: int = DEFAULT_PAGE_SIZE,
         max_pages: int = MAX_PAGES,
-    ) -> AsyncIterator[T]:
+    ) -> AsyncGenerator[T, None]:
         """Drive an offset- or cursor-paginated feed from a single callback.
+
+        Declared as an :class:`~collections.abc.AsyncGenerator` rather than the weaker
+        :class:`~collections.abc.AsyncIterator` because that is what it is, and callers that
+        stop early rely on it: :class:`contextlib.aclosing` needs ``aclose`` in the type to
+        release a suspended page deterministically.
 
         *fetch* is called as ``fetch(offset, cursor)`` and returns
         ``(items, next_cursor)``. The two pagination styles fall out of what it returns:

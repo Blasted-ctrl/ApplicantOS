@@ -1087,15 +1087,23 @@ def _rule_from_mapping(entry: Mapping[str, Any], *, index: int, source: Path) ->
             f"scoring rule {label_for_errors!r} in {source} is missing 'points'"
         )
 
+    # Bound through explicitly-``Any`` locals because that is what they are: unvalidated YAML,
+    # including the ``None`` a written-but-empty key produces. :meth:`ScoreRule.__post_init__`
+    # is the validator — it turns each of these into the ``list[str]`` the attribute declares,
+    # or raises — so the constructor genuinely accepts more than the attribute type says.
+    any_of: Any = entry.get("any_of")
+    all_of: Any = entry.get("all_of")
+    none_of: Any = entry.get("none_of")
+
     try:
         return ScoreRule(
             key=raw_key if isinstance(raw_key, str) else "",
             label=entry.get("label", "") if isinstance(entry.get("label", ""), str) else "",
             points=entry["points"],
             field=entry.get("field") or DEFAULT_RULE_FIELD,
-            any_of=entry.get("any_of"),
-            all_of=entry.get("all_of"),
-            none_of=entry.get("none_of"),
+            any_of=any_of,
+            all_of=all_of,
+            none_of=none_of,
             regex=entry.get("regex"),
         )
     except ScoringConfigError as exc:

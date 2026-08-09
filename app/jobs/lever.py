@@ -87,6 +87,7 @@ __all__ = [
     "API_ROOT",
     "APPLY_URL_TEMPLATE",
     "BOARD_PAGE_TTL_SECONDS",
+    "EVENT_BOARD_EMPTY",
     "HEALTHCHECK_COMPANY",
     "JOB_URL_TEMPLATE",
     "MAX_LOOKUP_COMPANIES",
@@ -116,6 +117,21 @@ APPLY_URL_TEMPLATE: Final[str] = "https://jobs.lever.co/{company}/{job_id}/apply
 
 #: Selector pack name handed to the browser layer by :meth:`LeverProvider.apply`.
 SELECTOR_PACK: Final[str] = "lever"
+
+#: Logged once per company board whose feed came back with **no postings at all**.
+#:
+#: This event exists because of a hole Lever's API leaves open. A company token that has no
+#: Lever board answers ``404``, which :meth:`~app.jobs.base.ATSProvider._request` turns into a
+#: :class:`~app.jobs.base.PostingUnavailableError` and the run logs — but a token that *is* a
+#: real Lever board with nothing published answers ``200`` with an empty JSON array, which is
+#: indistinguishable from "this employer has no openings today". Measured against the shipped
+#: seed list on 2026-08-09, both happen: 27 of 33 tokens answered 404 and one (``highspot``)
+#: answered ``200 []``.
+#:
+#: Either way the user discovers nothing, and without this line nothing in the logs says so —
+#: an empty board produces exactly the same output as a board that was never polled. Emitted
+#: at warning level, once per board, carrying the board URL so the message is actionable.
+EVENT_BOARD_EMPTY: Final[str] = "lever.board_empty"
 
 #: The company board probed by :meth:`LeverProvider.healthcheck`. Large and long-lived, and
 #: the probe asks for a single posting, so it costs a few kilobytes.
@@ -764,7 +780,7 @@ class LeverProvider(ATSProvider):
 
         return await cache.get_or_set(key, factory, ttl=ttl)
 
-    async def _page(self, company: str, skip: int, limit: int) -> list[dict[str, Any]]:
+    async def _page(self, company: str, skip: int, limit: int) -> list[Mapping[str, Any]]:
         """Return one page of a company's postings.
 
         Args:
@@ -929,6 +945,14 @@ class LeverProvider(ATSProvider):
         globally would mean draining every page of every board before yielding anything —
         defeating both ``q.limit`` and the lazy reassembly that makes this method cheap.
 
+        A board whose feed carried **no postings at all** is reported separately, at warning
+        level, under :data:`EVENT_BOARD_EMPTY` — see that constant for why an empty Lever
+        board is invisible without it. The distinction that matters is between "the feed was
+        empty" and "the feed had postings and the query rejected all of them": the first is a
+        board worth removing from ``app.jobs.seeds``, the second is a query doing its job, and
+        a single "yielded 0" counter cannot tell them apart. Both counts are therefore
+        tracked, and the run's closing line carries how many boards were empty.
+
         Args:
             q: What to look for. Every field is honoured client-side; the postings API offers
                 no server-side keyword, location or freshness filter.
@@ -946,11 +970,13 @@ class LeverProvider(ATSProvider):
         log.info("lever.search_started")
 
         yielded = 0
+        empty_boards = 0
         for company in companies:
             if yielded >= q.limit:
                 break
 
             from_company = 0
+            scanned = 0
             try:
                 # ``aclosing`` matters here: breaking out of the loop at ``q.limit`` leaves
                 # the pagination generator suspended, and closing it deterministically is
@@ -963,6 +989,7 @@ class LeverProvider(ATSProvider):
                     )
                 ) as pages:
                     async for job in pages:
+                        scanned += 1
                         if not self._accepts(job, q):
                             continue
                         raw = self._to_raw(job, company)
@@ -984,9 +1011,24 @@ class LeverProvider(ATSProvider):
                 )
                 continue
 
-            log.debug("lever.company_scanned", company=company, yielded=from_company)
+            if scanned == 0:
+                empty_boards += 1
+                log.warning(
+                    EVENT_BOARD_EMPTY,
+                    company=company,
+                    board_url=JOB_URL_TEMPLATE.format(company=company, job_id="").rstrip("/"),
+                    reason=(
+                        "the feed answered with no postings — the company token may not be a "
+                        "Lever board, or the board may have nothing published"
+                    ),
+                )
+                continue
 
-        log.info("lever.search_finished", yielded=yielded)
+            log.debug(
+                "lever.company_scanned", company=company, scanned=scanned, yielded=from_company
+            )
+
+        log.info("lever.search_finished", yielded=yielded, empty_boards=empty_boards)
 
     async def fetch_posting(self, id_or_url: str) -> RawPosting | None:
         """Fetch one posting by identifier or by URL.

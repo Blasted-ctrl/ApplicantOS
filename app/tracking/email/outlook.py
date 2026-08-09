@@ -406,9 +406,9 @@ class OutlookMailbox(OAuthMailbox):
 
         hydrated: list[dict[str, Any]] = []
         for message in matched:
-            payload = await self._fetch_body(message.message_id)
-            if payload is not None:
-                hydrated.append(payload)
+            body_payload = await self._fetch_body(message.message_id)
+            if body_payload is not None:
+                hydrated.append(body_payload)
 
         self.logger.info(
             "outlook.delta_two_phase",

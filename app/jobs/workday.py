@@ -52,6 +52,34 @@ discovery at the wrong employer. Resolutions are cached, positively and negative
 number of new tenants resolved per run is capped so a cold start cannot turn into a probe
 storm.
 
+**How resolution actually works, and why it is `robots.txt`.** Measured against the live
+service on 2026-08-09: the tenant *root* — ``https://{tenant}.wd{N}.myworkdayjobs.com/`` —
+answers **406 for every tenant, on every shard, with any User-Agent**, browser strings
+included. An earlier version of this module resolved by fetching that root and reading the
+career-site name out of the single-page app it used to bootstrap; since that page no longer
+exists, resolution failed for every tenant and Workday discovery returned nothing, silently,
+on every install. Three endpoints do still answer, and between them they give an exact
+answer instead of a guess:
+
+``GET {host}/robots.txt``
+    **200 only on the shard the tenant lives on**; every other shard answers 422, and a
+    migrated tenant answers 410 ``ERR_TENANT_MIGRATED``. So one ~200-byte request per
+    candidate shard identifies the shard. Better still, its ``Sitemap:`` and ``Allow:``
+    lines *name the career sites* — ``Allow: /NVIDIAExternalCareerSite/`` — which is the one
+    thing that cannot be guessed. Reading it is also the correct posture: it is the file the
+    employer publishes for exactly this audience, and a path it ``Disallow``\\ s is never
+    used here, even though the CXS API would serve it.
+``POST {host}/wday/cxs/{tenant}/{site}/jobs``
+    The confirmation. **404** means the shard is right and the site name is wrong, **422**
+    means the shard is wrong, and **200** with a posting envelope is a resolution.
+``GET {host}/wday/cxs/{tenant}/{site}/job/{path}``
+    The posting itself.
+
+Conventional site names (:data:`FALLBACK_SITE_NAMES`, plus the tenant-derived forms in
+:func:`site_name_candidates`) are still tried, but only *after* ``robots.txt`` has been
+asked and only on a shard already confirmed — they are a fallback for a tenant whose
+``robots.txt`` names nothing, not the primary mechanism.
+
 ``postedOn`` arrives as human phrasing — "Posted Today", "Posted 3 Days Ago",
 "Posted 30+ Days Ago". :func:`resolve_posted_on` turns that back into a real instant so the
 freshness filter, the scorer and the desktop app all see a date like every other provider's.
@@ -100,15 +128,21 @@ __all__ = [
     "CXS_PAGE_SIZE",
     "EXTERNAL_ID_SEPARATOR",
     "FALLBACK_SITE_NAMES",
+    "MAX_ROBOTS_CHARS",
+    "ROBOTS_PATH",
     "SHARD_CANDIDATES",
+    "SITE_NAME_TEMPLATES",
     "WORKDAY_HOSTS",
+    "WRONG_SHARD_STATUS",
     "BoardToken",
     "CareerSite",
     "JobRef",
     "WorkdayProvider",
+    "career_sites_from_robots",
     "normalize_external_path",
     "parse_board_token",
     "resolve_posted_on",
+    "site_name_candidates",
     "split_workday_url",
 ]
 
@@ -145,9 +179,10 @@ SHARD_CANDIDATES: Final[tuple[str, ...]] = (
     "wd105",
 )
 
-#: Career-site names tried when a tenant's landing page does not reveal its own. These are
+#: Tenant-independent career-site names, tried when ``robots.txt`` names none. These are
 #: *candidates*, never assumptions: each is confirmed against the live CXS jobs endpoint
-#: before it is used, and an unconfirmed name is discarded.
+#: before it is used, and an unconfirmed name is discarded. ``External`` leads because it is
+#: by far the most common (Intel and Dell both use it).
 FALLBACK_SITE_NAMES: Final[tuple[str, ...]] = (
     "External",
     "Careers",
@@ -155,6 +190,45 @@ FALLBACK_SITE_NAMES: Final[tuple[str, ...]] = (
     "External_Careers",
     "ExternalCareerSite",
     "External_Career_Site",
+)
+
+#: Career-site names built from the tenant token itself, as ``str.format`` templates taking
+#: ``tenant`` (the token), ``Tenant`` (capitalised) and ``TENANT`` (upper-cased). Every one
+#: was observed on a real board: ``NVIDIAExternalCareerSite``, ``targetcareers``,
+#: ``Cisco_Careers``, ``disneycareer``. Like :data:`FALLBACK_SITE_NAMES` these are only ever
+#: tried on a shard that has already answered, and only after ``robots.txt`` has been asked.
+SITE_NAME_TEMPLATES: Final[tuple[str, ...]] = (
+    "{TENANT}ExternalCareerSite",
+    "{Tenant}ExternalCareerSite",
+    "{tenant}ExternalCareerSite",
+    "{Tenant}Careers",
+    "{tenant}careers",
+    "{Tenant}_Careers",
+    "{tenant}career",
+)
+
+#: Path of the file consulted to find a tenant's shard and career sites. See the module
+#: docstring: on the right shard it answers 200 and names the sites; on every other shard it
+#: answers 422.
+ROBOTS_PATH: Final[str] = "/robots.txt"
+
+#: How much of a ``robots.txt`` is parsed. Workday's are a few hundred bytes; the cap exists
+#: so that a misconfigured host serving something enormous cannot cost a discovery run.
+MAX_ROBOTS_CHARS: Final[int] = 64_000
+
+#: ``Sitemap: https://host/<Site>/siteMap.xml`` — the strongest signal a Workday
+#: ``robots.txt`` carries, because a tenant lists exactly the boards it wants indexed.
+_ROBOTS_SITEMAP_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*Sitemap\s*:\s*https?://[^/\s]+/([A-Za-z0-9][A-Za-z0-9._-]*)/",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+#: ``Allow: /<Site>/`` — the same information stated as a crawl rule. ``Disallow`` lines are
+#: deliberately **not** read: a board the employer asked crawlers to stay out of is not one
+#: this provider will poll, even though the CXS API would serve it (golden rule #10).
+_ROBOTS_ALLOW_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*Allow\s*:\s*/([A-Za-z0-9][A-Za-z0-9._-]*)/",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 #: Path segments that can never be a career-site name, because Workday owns them.
@@ -190,23 +264,10 @@ _APPLY_SEGMENTS: Final[frozenset[str]] = frozenset(
     {"apply", "applymanually", "autofillwithresume", "login", "signin"}
 )
 
-#: The CXS path embedded in a career site's own JavaScript bootstrap, which names the site.
-_CXS_PATH_RE_TEMPLATE: Final[str] = r"/wday/cxs/{tenant}/([A-Za-z0-9][A-Za-z0-9._-]*)/"
-
-#: The career-site name as the SPA's configuration blob spells it.
-_CAREER_SITE_KEY_RE: Final[re.Pattern[str]] = re.compile(
-    r"\"careerSiteName\"\s*:\s*\"([A-Za-z0-9][A-Za-z0-9._-]*)\""
-)
-
-#: A localised deep link in the landing page's markup, which also names the site.
-_LOCALISED_LINK_RE: Final[re.Pattern[str]] = re.compile(
-    r"/[a-z]{2}(?:-[A-Za-z]{2,4})?/([A-Za-z0-9][A-Za-z0-9._-]*)/(?:job|details)/"
-)
-
-#: How much of a landing page is scanned for a career-site name. Workday's SPA shell is
-#: large and the configuration blob is near the top; scanning the whole document would cost
-#: megabytes of regex work per probe for nothing.
-_MAX_HTML_SCAN_CHARS: Final[int] = 250_000
+#: The status a Workday host returns for a tenant that does not live on that shard. It is
+#: what makes a one-request-per-shard probe possible: 422 means "wrong shard", while 404 on
+#: the CXS jobs endpoint means "right shard, wrong career site".
+WRONG_SHARD_STATUS: Final[int] = 422
 
 #: Separator between the tenant and the requisition id inside
 #: :attr:`~app.jobs.base.RawPosting.external_id`. The tenant is part of the identity because
@@ -669,41 +730,75 @@ def _domain_order(preferred_host: str) -> tuple[str, ...]:
     return WORKDAY_HOSTS
 
 
-def _career_site_candidates(final_url: str, body: str, tenant: str) -> list[str]:
-    """Extract the career-site names a tenant's landing page reveals about itself.
-
-    A Workday tenant root redirects to its default career site and bootstraps a single-page
-    application whose configuration names that site in several places. Reading the name is
-    how this provider avoids shipping a table of guessed site names.
+def _usable_site_names(names: Iterable[str]) -> list[str]:
+    """Filter and de-duplicate career-site name candidates, preserving order.
 
     Args:
-        final_url: The URL the landing-page request ended on, after redirects.
-        body: The landing page's markup, already truncated by the caller.
-        tenant: The tenant being resolved, used to anchor the CXS path pattern.
+        names: Raw candidates, from any source.
 
     Returns:
-        Candidate names in decreasing order of confidence, de-duplicated. Every candidate is
-        still verified against the live jobs endpoint before use.
+        The names that could plausibly be a career site: non-empty, not one of Workday's own
+        reserved path segments, and not a locale prefix such as ``en-US``.
     """
-    candidates: list[str] = []
-
-    def offer(value: str | None) -> None:
-        name = (value or "").strip().strip("/")
+    usable: list[str] = []
+    for candidate in names:
+        name = (candidate or "").strip().strip("/")
         if not name or name.lower() in _RESERVED_SEGMENTS or _LOCALE_RE.match(name):
-            return
-        if name not in candidates:
-            candidates.append(name)
+            continue
+        if name not in usable:
+            usable.append(name)
+    return usable
 
-    redirected = split_workday_url(final_url)
-    if redirected is not None:
-        offer(redirected[0].site)
 
-    cxs_pattern = re.compile(_CXS_PATH_RE_TEMPLATE.format(tenant=re.escape(tenant)), re.IGNORECASE)
-    for pattern in (cxs_pattern, _CAREER_SITE_KEY_RE, _LOCALISED_LINK_RE):
-        for found in pattern.finditer(body):
-            offer(found.group(1))
+def career_sites_from_robots(body: str) -> list[str]:
+    """Extract the career-site names a tenant's ``robots.txt`` publishes.
 
-    return candidates
+    This is the authoritative source, and the polite one. A Workday ``robots.txt`` names each
+    board it wants indexed twice — once as a ``Sitemap:`` URL and once as an ``Allow:`` rule
+    — which is the only public place a name like ``NVIDIAExternalCareerSite`` or
+    ``disneycareer`` can be read rather than guessed.
+
+    ``Disallow`` lines are ignored on purpose. Nike's file, for example, disallows ``/nke/``,
+    ``/nke2/`` and ``/nke4/`` and allows nothing; those are real board names and the CXS API
+    would serve them, but the employer has asked automated clients to stay away and this
+    provider honours that (golden rule #10). The tenant is then left unresolved, which is the
+    correct outcome.
+
+    Args:
+        body: The ``robots.txt`` body, already truncated by the caller.
+
+    Returns:
+        Site names, ``Sitemap:`` entries first, de-duplicated and in file order. Empty when
+        the file names none.
+    """
+    found = [match.group(1) for match in _ROBOTS_SITEMAP_RE.finditer(body)]
+    found.extend(match.group(1) for match in _ROBOTS_ALLOW_RE.finditer(body))
+    return _usable_site_names(found)
+
+
+def site_name_candidates(tenant: str, *, preferred: str = "") -> list[str]:
+    """Return the career-site names worth trying for *tenant*, most likely first.
+
+    Only used when ``robots.txt`` named nothing usable, and only on a shard that has already
+    answered — so this is a bounded guess-and-check over a confirmed host, never a way to
+    address an employer that was never found.
+
+    Args:
+        tenant: The Workday tenant token.
+        preferred: A name the caller already has reason to believe in; tried first.
+
+    Returns:
+        The tenant-derived names from :data:`SITE_NAME_TEMPLATES` interleaved with the
+        conventional ones in :data:`FALLBACK_SITE_NAMES`, de-duplicated. Every one is still
+        confirmed against the live CXS endpoint before use.
+    """
+    formatted = {
+        "tenant": tenant,
+        "Tenant": tenant[:1].upper() + tenant[1:],
+        "TENANT": tenant.upper(),
+    }
+    derived = [template.format(**formatted) for template in SITE_NAME_TEMPLATES]
+    return _usable_site_names([preferred, FALLBACK_SITE_NAMES[0], *derived, *FALLBACK_SITE_NAMES])
 
 
 # ======================================================================================
@@ -1282,11 +1377,17 @@ class WorkdayProvider(ATSProvider):
     ) -> CareerSite | None:
         """Find the shard a tenant lives on, and the career site it publishes.
 
-        The tenant root is requested on each candidate shard. A shard that answers is the
-        right one, and the page it answers with names the career site — in the URL it
-        redirected to, in the CXS path its bootstrap calls, or in its configuration blob.
-        Only when the page reveals nothing usable are the conventional names in
-        :data:`FALLBACK_SITE_NAMES` tried, and even then each is confirmed before use.
+        ``robots.txt`` is requested on each candidate host. It answers ``200`` only on the
+        shard the tenant actually lives on — every other shard answers ``422`` — so one small
+        request per shard settles the question that used to require fetching a quarter of a
+        megabyte of single-page-app shell. The file then *names* the tenant's boards in its
+        ``Sitemap:`` and ``Allow:`` lines, which is the only public place a name like
+        ``NVIDIAExternalCareerSite`` can be read rather than guessed.
+
+        Only when the file names nothing usable does the bounded convention list from
+        :func:`site_name_candidates` get tried, and only against the shard that already
+        answered. Every candidate, from either source, is confirmed by a real CXS response
+        before it is returned.
 
         The secondary Workday domain is only swept when the primary one produced no response
         at all, so the common case costs one request per candidate shard rather than two.
@@ -1298,61 +1399,71 @@ class WorkdayProvider(ATSProvider):
             preferred_host: A hostname the caller already knows, which fixes the domain.
 
         Returns:
-            The confirmed site, or ``None`` when no shard answers or no name confirms.
+            The confirmed site, or ``None`` when no shard answers, or when the shard answers
+            and no career-site name confirms.
         """
         shards = _ordered(SHARD_CANDIDATES, preferred_shard)
-        domains = _domain_order(preferred_host)
-        responsive: list[tuple[str, str]] = []
 
-        for domain in domains:
+        for domain in _domain_order(preferred_host):
             for shard in shards:
                 host = f"{tenant}.{shard}.{domain}"
-                landing = await self._probe_landing_page(host)
-                if landing is None:
+                robots = await self._fetch_robots(host)
+                if robots is None:
                     continue
-                responsive.append((host, shard))
 
-                final_url, body = landing
-                candidates = _career_site_candidates(final_url, body, tenant)
-                if preferred_site:
-                    candidates.insert(0, preferred_site)
-                for name in candidates:
+                published = career_sites_from_robots(robots)
+                for name in _usable_site_names([preferred_site, *published]):
                     site = CareerSite(tenant=tenant, shard=shard, site=name, host=host)
                     if await self._confirm(site):
+                        self.logger.debug(
+                            "workday.site_resolved_from_robots", tenant=tenant, site=site.token
+                        )
                         return site
-            if responsive:
-                break
 
-        for host, shard in responsive:
-            for name in FALLBACK_SITE_NAMES:
-                site = CareerSite(tenant=tenant, shard=shard, site=name, host=host)
-                if await self._confirm(site):
-                    self.logger.debug(
-                        "workday.site_resolved_by_convention", tenant=tenant, site=site.token
-                    )
-                    return site
+                for name in site_name_candidates(tenant, preferred=preferred_site):
+                    site = CareerSite(tenant=tenant, shard=shard, site=name, host=host)
+                    if await self._confirm(site):
+                        self.logger.debug(
+                            "workday.site_resolved_by_convention", tenant=tenant, site=site.token
+                        )
+                        return site
 
+                # The shard is right and no name confirmed. Sweeping the remaining shards
+                # cannot help — a tenant lives on exactly one — and every one of them would
+                # answer 422, so stopping here saves ten pointless requests.
+                self.logger.info(
+                    "workday.site_name_unresolved",
+                    tenant=tenant,
+                    host=host,
+                    published=published,
+                )
+                return None
+
+        self.logger.debug("workday.no_shard_found", tenant=tenant, shards=len(shards))
         return None
 
-    async def _probe_landing_page(self, host: str) -> tuple[str, str] | None:
-        """Request a tenant root and return what it answered with.
+    async def _fetch_robots(self, host: str) -> str | None:
+        """Fetch a candidate host's ``robots.txt``.
 
         Args:
             host: The candidate hostname.
 
         Returns:
-            ``(final_url, truncated_body)``, or ``None`` when the host does not serve a
-            career site. A single attempt only: probing is a guess-and-check loop, and
-            retrying a host that is simply the wrong shard would multiply the cost of
-            resolution by the retry budget for no benefit.
+            The truncated file body, or ``None`` when the host does not serve this tenant —
+            ``422`` for the wrong shard, ``410`` ``ERR_TENANT_MIGRATED`` for a tenant that has
+            moved, or a DNS failure for a shard that does not exist at all. A single attempt
+            only: probing is a guess-and-check loop, and retrying a host that is simply the
+            wrong shard would multiply the cost of resolution by the retry budget.
         """
-        url = f"https://{host}/"
+        url = f"https://{host}{ROBOTS_PATH}"
         try:
             response = await self._request("GET", url, max_attempts=1)
         except ProviderError as exc:
-            self.logger.debug("workday.shard_probe_miss", host=host, error=str(exc))
+            self.logger.debug(
+                "workday.shard_probe_miss", host=host, status_code=exc.status_code, error=str(exc)
+            )
             return None
-        return str(response.url), response.text[:_MAX_HTML_SCAN_CHARS]
+        return response.text[:MAX_ROBOTS_CHARS]
 
     async def _confirm(self, site: CareerSite) -> bool:
         """Verify that a candidate board really serves the Workday jobs API.
@@ -1361,15 +1472,23 @@ class WorkdayProvider(ATSProvider):
             site: The candidate.
 
         Returns:
-            ``True`` when the CXS jobs endpoint answers with a posting envelope. A single
-            attempt, for the same reason as :meth:`_probe_landing_page`.
+            ``True`` when the CXS jobs endpoint answers with a posting envelope. A ``404``
+            here means the shard is right and this particular career-site name is not, and a
+            :data:`WRONG_SHARD_STATUS` means the tenant is not on this shard at all; both are
+            logged with the status so a resolution failure is diagnosable from the log alone.
+            A single attempt, for the same reason as :meth:`_fetch_robots`.
         """
         payload = {"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""}
         try:
             response = await self._request("POST", site.jobs_url, json=payload, max_attempts=1)
             document = self._decode(response, site.jobs_url)
         except ProviderError as exc:
-            self.logger.debug("workday.site_probe_miss", site=site.token, error=str(exc))
+            self.logger.debug(
+                "workday.site_probe_miss",
+                site=site.token,
+                status_code=exc.status_code,
+                error=str(exc),
+            )
             return False
         return "jobPostings" in document or "total" in document
 

@@ -109,7 +109,7 @@ read-through), plus `make_key`/`hash_payload` for content-addressed keys. Never 
 salted per process, so a cached key would not survive a restart.
 
 ### `app/plugins/`
-One registry for all six plugin kinds. See §4.
+One registry for all five plugin kinds. See §4.
 
 ### `app/knowledge/`
 The knowledge engine — six analyzers, an extractor, three vector-store backends, the entity graph,
@@ -306,7 +306,7 @@ The rule exists because of what a violation costs, not because indirection is el
   point, and it only stays true if the core never names a provider.
 - **It makes a third-party plugin a first-class citizen.** `loader.py` imports built-ins and then
   entry points from `applicantos.providers`, `applicantos.models`, `applicantos.templates`,
-  `applicantos.parsers`, `applicantos.analyzers`. A pip-installed provider is indistinguishable
+  `applicantos.analyzers`, `applicantos.trackers`. A pip-installed provider is indistinguishable
   from a built-in one.
 
 Enforced by `tests/test_golden_plugin_isolation.py`, and greppable:

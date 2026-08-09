@@ -127,13 +127,18 @@ one first.
 Stated plainly, because a coverage number that quietly excludes the risky parts is worse than no
 number at all.
 
-- **No real browser.** `app/browser/playwright_runner.py` is exercised only through its
-  duck-typed double. Field *discovery* against real ATS markup, and the submit-verification
-  polling loop against a live page, are untested. `AutoFiller`'s policy logic — which label
-  wins, what counts as an essay, what may be clicked — is tested directly, because it was
-  deliberately written to be reachable without a browser.
-- **No real ATS.** Provider `search`/`fetch_posting` parsing is not tested against live
-  Greenhouse/Lever/Ashby responses. Their *auto-apply posture* is (`test_golden_tos.py`).
+- **No real browser — in the default run.** Here `app/browser/playwright_runner.py` is exercised
+  only through its duck-typed double, and `AutoFiller`'s policy logic — which label wins, what
+  counts as an essay, what may be clicked — is tested directly, because it was deliberately
+  written to be reachable without a browser. Field discovery, blocker detection, résumé upload
+  and the kill switch *against real Greenhouse, Lever and Ashby markup* live in
+  `tests/integration/test_browser_live.py` (`-m integration`, nightly). The submit-verification
+  polling loop after a real click remains untested and cannot honestly be tested: confirming it
+  would mean submitting an application to a real employer.
+- **No real ATS — in the default run.** Provider `search`/`fetch_posting` parsing runs against
+  recorded payloads here and against the live feeds in
+  `tests/integration/test_providers_live.py`. Their *auto-apply posture* is checked hermetically
+  (`test_golden_tos.py`).
 - **No PostgreSQL.** Everything runs on SQLite. Two consequences are real: the `use_alter`
   foreign keys between `applications` and the document tables are silently omitted on SQLite
   (`docs/OPEN_QUESTIONS.md` item 12), and `pgvector` behaviour is never exercised.
@@ -145,12 +150,25 @@ number at all.
   actually typeset, so page counting is not exercised end to end.
 - **No desktop app.** `desktop/` has no tests here.
 
-The `integration` marker is declared in `pyproject.toml` for exactly this purpose, and **no test
-currently uses it**: the suite was built so that every check runs with no database server, no
-broker, no browser and no network. That is deliberate — a suite that only runs on a fully
-provisioned machine is a suite that stops being run. Any test added later that genuinely needs
-one of those services should carry `@pytest.mark.integration`, so `pytest -m "not integration"`
-stays the command that works everywhere.
+The `integration` marker is declared in `pyproject.toml` for exactly this purpose, and
+`pyproject.toml` deselects it by default: the suite was built so that every check runs with no
+database server, no broker, no browser and no network. That is deliberate — a suite that only
+runs on a fully provisioned machine is a suite that stops being run. Any test that genuinely
+needs one of those services carries `@pytest.mark.integration`, so plain `pytest` stays the
+command that works everywhere.
+
+Two modules use it today, both under `tests/integration/` and both run nightly by
+`.github/workflows/integration.yml`:
+
+| Module | Needs | What it proves the hermetic suite cannot |
+|---|---|---|
+| `test_providers_live.py` | network | The four discovery feeds still have the shape the parsers expect |
+| `test_browser_live.py` | network + Chromium | The selector packs still match real Greenhouse, Lever and Ashby application forms — and the kill switch holds on one |
+
+Neither may change anything at anybody's end. `test_browser_live.py` in particular forces both
+safety switches at import time, re-asserts them against the live settings object, installs a
+capture-phase click recorder in every page before it navigates, and asserts that each session
+recorded **zero clicks of any kind**.
 
 Two behaviours are asserted **as they are** rather than as they ideally should be, so that a
 future change to them is a deliberate decision rather than a silent one. Both are labelled in

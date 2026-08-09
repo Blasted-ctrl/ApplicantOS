@@ -28,7 +28,7 @@ bottom of the dependency graph.
 from __future__ import annotations
 
 from enum import StrEnum as _StdlibStrEnum
-from typing import Final
+from typing import Final, Self
 
 __all__ = [
     "APPLICATION_ACTIVE_STATES",
@@ -147,8 +147,13 @@ class StrEnum(_StdlibStrEnum):
         return True
 
     @classmethod
-    def coerce(cls, value: object, default: StrEnum | None = None) -> StrEnum | None:
+    def coerce(cls, value: object, default: Self | None = None) -> Self | None:
         """Convert *value* to a member, falling back to *default* instead of raising.
+
+        Typed with :data:`~typing.Self` rather than ``StrEnum`` because the member returned
+        is always one of the *called* subclass: ``FactKind.coerce(...)`` yields a
+        ``FactKind``, never a bare ``StrEnum``, and callers assign it straight into fields
+        annotated with the concrete enum.
 
         Args:
             value: A candidate value from an untrusted source.
@@ -468,12 +473,20 @@ class PluginKind(StrEnum):
     ``tracker`` is the status-sync extension point (``docs/CONTRACTS.md`` §17): a
     :class:`~app.tracking.base.StatusTracker` polls one outcome channel — a mailbox, an ATS
     portal — and yields the signals that close the application loop.
+
+    There is deliberately no ``parser`` kind. Document reading is not an extension point:
+    it is one module, :mod:`app.knowledge.analyzers.document`, whose ``read_pdf_text`` /
+    ``read_docx_text`` / ``read_html_text`` are dispatched by *content* — the ``%PDF-`` and
+    ``PK\\x03\\x04`` magic numbers beat both the filename suffix and the server's
+    ``Content-Type`` — which is a decision a registry keyed by ``(kind, name)`` cannot
+    express. A source format that needs different *knowledge* out of a file is an
+    ``analyzer``; that is what :class:`~app.knowledge.analyzers.resume_parser.ResumeParser`
+    is. Removal recorded in ``docs/OPEN_QUESTIONS.md``.
     """
 
     PROVIDER = "provider"
     MODEL = "model"
     TEMPLATE = "template"
-    PARSER = "parser"
     ANALYZER = "analyzer"
     TRACKER = "tracker"
 

@@ -1,9 +1,9 @@
 """The plugin registry — one place that knows every pluggable component.
 
 Everything pluggable in ApplicantOS is resolved here (``docs/CONTRACTS.md`` §6, golden rule
-#5). A concrete ATS provider, LLM client, resume template, parser or knowledge analyzer is
-imported only by its own package; every other module asks the registry for it by kind and
-name::
+#5). A concrete ATS provider, LLM client, resume template, knowledge analyzer or status
+tracker is imported only by its own package; every other module asks the registry for it by
+kind and name::
 
     from app.plugins import PluginKind, registry
 

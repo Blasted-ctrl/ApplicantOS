@@ -65,12 +65,13 @@ secrets.json
 # ── ApplicantOS runtime state ───────────────────────────────────────────────
 var/
 !var/.gitkeep
-# Anchored to the repo root: unanchored `storage/` and `cache/` also matched the
-# `app/storage/` and `app/cache/` source packages, so new modules in either one were
-# silently ignored by `git add`. The runtime directories they are meant to catch all live
-# under `var/` (see `settings.storage_root` / `settings.cache_path`) and stay ignored.
+# Anchored to the repo root: unanchored `storage/`, `cache/` and `screenshots/` also matched
+# the `app/storage/` and `app/cache/` source packages and `docs/screenshots/` — the captures
+# README embeds — so new files in any of them were silently ignored by `git add`. The runtime
+# directories they are meant to catch all live under `var/` (see `settings.storage_root` /
+# `settings.cache_path` / `settings.screenshot_dir`) and stay ignored.
 /storage/
-screenshots/
+/screenshots/
 traces/
 browser-profile/
 *.har

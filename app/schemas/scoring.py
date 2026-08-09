@@ -26,7 +26,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from app.schemas.common import Schema
 
@@ -108,7 +108,7 @@ class ScoreRead(Schema):
     )
     components: list[ScoreComponentRead] = Field(
         default_factory=list,
-        description="`breakdown` parsed for rendering; populated by the service layer.",
+        description="`breakdown` parsed for rendering; derived from it when not supplied.",
     )
     verdict: ScoreVerdict | None = Field(
         default=None,
@@ -124,6 +124,42 @@ class ScoreRead(Schema):
     )
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def _derive_components(self) -> ScoreRead:
+        """Fill :attr:`components` from :attr:`breakdown` when the caller supplied none.
+
+        ``Score`` is a table with a ``breakdown`` JSON column and no ``components``
+        attribute, so ``ScoreRead.model_validate(row)`` — which is how every route builds
+        this object — always produced an empty list. The desktop score panel therefore said
+        *"No rule contributed to this score"* over a breakdown holding the whole
+        arithmetic, on every posting and every application. Deriving it here rather than in
+        each route is what makes that impossible to forget again, and
+        ``ScoreComponent.to_dict`` already writes exactly this shape.
+
+        A stored breakdown is unvalidated JSON that may predate any current schema, so a
+        component that will not parse is skipped rather than raised: a decision record
+        nobody can read is bad, and a 500 on the applications list because one old row is
+        odd is worse.
+
+        Returns:
+            This same instance.
+        """
+        if self.components:
+            return self
+        raw = self.breakdown.get("components")
+        if not isinstance(raw, list):
+            return self
+        parsed: list[ScoreComponentRead] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                parsed.append(ScoreComponentRead.model_validate(entry))
+            except ValidationError:
+                continue
+        self.components = parsed
+        return self
 
     @property
     def is_clamped(self) -> bool:

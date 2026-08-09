@@ -141,8 +141,12 @@ SCORE_MAX: Final[float] = 1.0
 #: by zero.
 ZERO_VECTOR_SCORE: Final[float] = 0.0
 
-#: Value types accepted as an ``IN`` filter.
-_SEQUENCE_FILTER_TYPES: Final[tuple[type, ...]] = (list, tuple, set, frozenset)
+#: Value types accepted as an ``IN`` filter. Spelled out one class at a time rather than as
+#: ``tuple[type, ...]`` so that an ``isinstance`` test against it narrows the value to
+#: "something iterable" instead of leaving it as ``object``.
+_SEQUENCE_FILTER_TYPES: Final[
+    tuple[type[list[Any]], type[tuple[Any, ...]], type[set[Any]], type[frozenset[Any]]]
+] = (list, tuple, set, frozenset)
 
 
 # --------------------------------------------------------------------------------------

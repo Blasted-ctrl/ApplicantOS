@@ -104,7 +104,7 @@ x-backend-env: &backend-env
   # a JSON array, not a comma-separated string.
   API_HOST: 0.0.0.0
   API_PORT: 8000
-  CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173","app://applicantos"]'
+  CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
 
   # -- observability ----------------------------------------------------------------------
   LOG_LEVEL: ${LOG_LEVEL:-INFO}

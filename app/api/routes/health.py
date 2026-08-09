@@ -30,7 +30,7 @@ the misconfiguration instead of silently graphing zeroes.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import structlog
 from fastapi import APIRouter, Response, status
@@ -41,6 +41,9 @@ from app.api.deps import SettingsDep
 from app.database.session import check_database
 from app.observability.metrics import render_metrics
 from app.schemas.common import Schema
+
+if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    from enum import Enum
 
 __all__ = ["MOUNT_AT_ROOT", "PREFIX", "TAGS", "DependencyStatus", "ReadinessReport", "router"]
 
@@ -62,7 +65,10 @@ REDIS_PROBE_TIMEOUT_SECONDS: Final[float] = 2.0
 #: Cache backend value that makes Redis a required dependency.
 _REDIS_BACKEND: Final[str] = "redis"
 
-router = APIRouter(tags=TAGS)
+# FastAPI declares ``tags`` as ``list[str | Enum]`` and only ever reads it, but ``list`` is
+# invariant, so the ``list[str]`` every route module exports cannot be passed as-is. Cast at
+# the one call site rather than widening the constant that thirteen sibling modules mirror.
+router = APIRouter(tags=cast("list[str | Enum]", TAGS))
 
 
 # ======================================================================================

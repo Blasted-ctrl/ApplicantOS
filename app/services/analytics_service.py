@@ -364,7 +364,7 @@ class AnalyticsService:
                 select(JobPosting.created_at).where(JobPosting.created_at >= start)
             )
         ).all():
-            point = buckets.get(_local_day(created_at))
+            point = _bucket_for(buckets, created_at)
             if point is not None:
                 point.discovered += 1
 
@@ -375,7 +375,7 @@ class AnalyticsService:
                 )
             )
         ).all():
-            point = buckets.get(_local_day(created_at))
+            point = _bucket_for(buckets, created_at)
             if point is not None:
                 point.scored += 1
 
@@ -396,11 +396,11 @@ class AnalyticsService:
         ).all()
 
         for created_at, submitted_at, updated_at, status in rows:
-            created_point = buckets.get(_local_day(created_at))
+            created_point = _bucket_for(buckets, created_at)
             if created_point is not None:
                 created_point.applications += 1
 
-            submitted_point = buckets.get(_local_day(submitted_at))
+            submitted_point = _bucket_for(buckets, submitted_at)
             if submitted_point is not None:
                 submitted_point.submitted += 1
 
@@ -412,7 +412,7 @@ class AnalyticsService:
             }.get(resolved)
             if attribute is None:
                 continue
-            outcome_point = buckets.get(_local_day(updated_at)) or created_point
+            outcome_point = _bucket_for(buckets, updated_at) or created_point
             if outcome_point is not None:
                 setattr(outcome_point, attribute, getattr(outcome_point, attribute) + 1)
 
@@ -1080,6 +1080,26 @@ def _local_day(value: dt.datetime | None) -> dt.date | None:
         return None
     moment = value if value.tzinfo is not None else value.replace(tzinfo=dt.UTC)
     return moment.astimezone().date()
+
+
+def _bucket_for(
+    buckets: Mapping[dt.date, TimeseriesPoint], value: dt.datetime | None
+) -> TimeseriesPoint | None:
+    """Return the timeseries point a timestamp belongs to.
+
+    Args:
+        buckets: The prepared window, keyed by local date.
+        value: A column value. Every timestamp read by the timeseries is nullable.
+
+    Returns:
+        The point for that local day, or ``None`` when the timestamp is absent or falls
+        outside the window — a row qualifies on *any* of its three timestamps, so the other
+        two routinely land before the window starts.
+    """
+    day = _local_day(value)
+    if day is None:
+        return None
+    return buckets.get(day)
 
 
 def _as_uuid(value: uuid.UUID | str, label: str) -> uuid.UUID:

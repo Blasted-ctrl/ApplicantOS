@@ -218,12 +218,16 @@ export const FIELD_KINDS = [
 ] as const;
 export type FieldKind = (typeof FIELD_KINDS)[number];
 
-/** The extension points of ApplicantOS. */
+/**
+ * The extension points of ApplicantOS.
+ *
+ * There is no `'parser'` kind: document reading is one module dispatching on content, not
+ * a registry extension point. See `PluginKind` in `app/models/enums.py`.
+ */
 export const PLUGIN_KINDS = [
   'provider',
   'model',
   'template',
-  'parser',
   'analyzer',
   'tracker',
 ] as const;
@@ -1708,6 +1712,14 @@ export interface DiscoveryReportPayload {
   skipped: number;
   errors: string[];
   by_provider: Record<string, number>;
+  /**
+   * Boards each provider was asked to poll. Pair it with `by_provider` to tell "nowhere to
+   * look" apart from "looked everywhere and found nothing" — a bare `0` reads the same in
+   * both cases.
+   */
+  boards_by_provider: Record<string, number>;
+  /** Providers that answered without error and produced nothing. */
+  empty_providers: string[];
   duration_seconds: number;
   provider?: string;
   user_id?: Uuid;

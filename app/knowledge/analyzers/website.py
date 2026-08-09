@@ -644,7 +644,10 @@ class WebsiteAnalyzer(Analyzer):
             text: The file's contents, or the empty string when it was not served.
         """
         if status in ROBOTS_DENY_STATUSES:
-            parser.disallow_all = True
+            # ``disallow_all`` is set in ``RobotFileParser.__init__`` and read by
+            # ``can_fetch``; typeshed's stub simply omits it, so the assignment is correct at
+            # runtime and unknown to the checker.
+            parser.disallow_all = True  # type: ignore[attr-defined]
             return
         parser.parse(text.splitlines() if status < 400 else [])
 

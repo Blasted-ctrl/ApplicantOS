@@ -45,7 +45,7 @@ These are invariants, not guidelines. Every one is enforced in code and checked 
 | `app/models/` | 22 SQLAlchemy 2.0 tables + every shared enum |
 | `app/schemas/` | Pydantic v2 request/response models — the API's public shape |
 | `app/cache/` | `Cache` protocol; memory / disk / redis backends + tiered read-through, `@cached` |
-| `app/plugins/` | One registry for all five plugin kinds: provider, model, template, parser, analyzer |
+| `app/plugins/` | One registry for all five plugin kinds: provider, model, template, analyzer, tracker |
 | `app/knowledge/` | **The knowledge engine** — analyzers, extractors, vector store, graph, facts, memory, indexer, retrieval |
 | `app/jobs/` | ATS provider plugins + dedupe |
 | `app/ai/` | Model plugins, embeddings, prompts, scoring, resume engine, cover letters, field answering |

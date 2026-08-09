@@ -149,7 +149,10 @@ class Settings(BaseSettings):
     # api / desktop
     api_host: str = "127.0.0.1"
     api_port: int = 8000
-    cors_origins: list[str] = ["http://localhost:5173", "app://applicantos"]
+    cors_origins: list[str] = [
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost",
+    ]
 
     # observability
     log_level: str = "INFO"
@@ -205,7 +208,7 @@ EmploymentType:   full_time part_time internship contract new_grad unknown
 WorkArrangement:  remote hybrid onsite unknown
 FieldKind:        text textarea select multiselect radio checkbox file date
                   number email phone url unknown
-PluginKind:       provider model template parser analyzer
+PluginKind:       provider model template analyzer tracker
 EntityKind:       person skill technology project organization role education award
                   certification course leadership publication interest goal language
 RelationKind:     used_in worked_at built studied_at earned led contributed_to
@@ -306,7 +309,12 @@ class UserPreferences(BaseModel):
 ## 6. Plugin system — `app/plugins/`
 
 **Everything pluggable goes through this.** Five kinds: `provider`, `model`, `template`,
-`parser`, `analyzer`.
+`analyzer`, `tracker`.
+
+There is no `parser` kind. Reading a document is not an extension point — it is one module
+(`app/knowledge/analyzers/document.py`) dispatching on the bytes, and a registry keyed by
+`(kind, name)` cannot dispatch on a magic number. A format that yields different
+*knowledge* is an `analyzer`. Removed 2026-08-09; recorded in `docs/OPEN_QUESTIONS.md` §72.
 
 ```python
 # base.py
@@ -340,8 +348,8 @@ def load_all() -> None      # idempotent; imports built-ins then entry points
 ENTRY_POINT_GROUPS = {PluginKind.PROVIDER: "applicantos.providers",
                       PluginKind.MODEL:    "applicantos.models",
                       PluginKind.TEMPLATE: "applicantos.templates",
-                      PluginKind.PARSER:   "applicantos.parsers",
-                      PluginKind.ANALYZER: "applicantos.analyzers"}
+                      PluginKind.ANALYZER: "applicantos.analyzers",
+                      PluginKind.TRACKER:  "applicantos.trackers"}
 ```
 
 Nothing outside `app/jobs/` may import a concrete provider module; nothing outside
@@ -730,6 +738,16 @@ class ArtifactRecorder:          # recorder.py — screenshots, html, json, mani
 3. Every apply attempt captures a screenshot before and after submit.
 4. Only a submit control located via the provider's `SelectorPack` or an exact accessible-name
    match may ever be clicked.
+5. `detect_blockers` reports `captcha` for a challenge that is **rendered on the page**, not for
+   a captcha vendor's script being loaded. Greenhouse, Lever and Ashby all run reCAPTCHA or
+   hCaptcha in invisible, score-based mode on every posting; counting those escalates 100% of
+   applications and is indistinguishable from having no automation. A challenge a human must
+   solve occupies space by definition, so rule 2 is unaffected — and an invisible widget that
+   silently rejects a submission still ends in review, because `submit` treats an unconfirmed
+   outcome as failure. Verified live in `tests/integration/test_browser_live.py`.
+6. `AutoFiller.discover_fields` returns `[]` when the pack's `form_root` matched nothing. The
+   page is then not the application form — several Greenhouse boards redirect to the employer's
+   own careers site — and describing whatever inputs it happens to carry is guessing.
 
 ---
 

@@ -197,8 +197,14 @@ exclude = ["alembic/versions", "desktop"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--strict-markers -q"
+# `-m "not integration"` is what keeps the default run hermetic and offline. Everything in
+# tests/integration/ talks to a real third-party API over the public internet, so it must
+# never run as a side effect of typing `pytest` — a contributor on a train would see failures
+# that say nothing about their change. `.github/workflows/integration.yml` opts back in with
+# `-m integration`, and because pytest's `-m` takes the last value given, a command-line
+# `-m ...` overrides this one with no extra flag.
+addopts = "--strict-markers -q -m 'not integration'"
 markers = [
-    "integration: requires a real database, broker, or browser",
+    "integration: talks to a real database, broker, browser, or third-party API",
     "slow: takes more than a second",
 ]

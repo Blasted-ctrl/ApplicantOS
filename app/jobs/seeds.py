@@ -23,6 +23,30 @@ never be an error — :meth:`~app.jobs.base.ATSProvider._request` raises
 and carries on with the rest. A stale token costs one wasted request per poll and nothing
 else.
 
+**Every token below was verified against its live API on 2026-08-09** by
+``python -m scripts.validate_boards``, and each one returned at least one posting on that
+date. Run that script before changing this file and again afterwards; it is the only thing
+that can tell a curated list from a plausible one.
+
+The sweep that produced the current lists replaced **11 of 40** Greenhouse tokens, **28 of
+33** Lever tokens, **7 of 34** Ashby tokens and **12 of 37** Workday tenants. Lever is the
+number worth staring at: five of the shipped tokens still worked, so discovery was not
+*visibly* broken — it just spent 28 of every 33 requests on employers that had left, and the
+feed a new user saw was a small fraction of what the list implied. Nothing anywhere reported
+that, which is what :data:`app.jobs.lever.EVENT_BOARD_EMPTY` and
+:attr:`app.services.discovery_service.DiscoveryReport.empty_providers` now exist for.
+
+Two properties of these APIs make staleness hard to see, and are why the check has to be a
+live one:
+
+* **An empty board is not an error.** Lever answers ``200`` with ``[]`` for a real board with
+  nothing published (``highspot``, ``plaid``), and Ashby does the same (``mercury``). Nothing
+  distinguishes that from an employer who simply is not hiring this week, so
+  :data:`app.jobs.lever.EVENT_BOARD_EMPTY` exists to at least make it *visible*.
+* **Lever tokens are case-sensitive.** ``api.lever.co/v0/postings/Osmind`` answers ``200``
+  and ``.../osmind`` answers ``404``. Tokens here are therefore written exactly as the
+  employer publishes them, and must not be "tidied" to lowercase.
+
 Workday is the odd one out. Its URLs are ``https://<tenant>.wd<N>.myworkdayjobs.com/<site>``,
 where the shard number and the career-site name vary per tenant and cannot be derived from
 the tenant token alone. :data:`DEFAULT_BOARDS` therefore carries plain tenant tokens, and the
@@ -58,126 +82,153 @@ logger = structlog.get_logger(__name__)
 #: Greenhouse board tokens. The public board lives at ``boards.greenhouse.io/<token>`` and
 #: the JSON feed at ``boards-api.greenhouse.io/v1/boards/<token>/jobs``. Greenhouse is the
 #: most widely used ATS among US technology employers, which is why this list is the longest.
+#:
+#: A board token is *not* the employer's name and cannot be derived from it: Anduril
+#: publishes as ``andurilindustries``, DoorDash as ``doordashusa``, Sourcegraph as
+#: ``sourcegraph91``. Every entry here was confirmed by request, never inferred.
 _GREENHOUSE_BOARDS: Final[tuple[str, ...]] = (
     "affirm",
     "airbnb",
     "airtable",
-    "anduril",
+    "amplitude",
+    "andurilindustries",
     "anthropic",
     "asana",
-    "benchling",
+    "betterment",
     "brex",
+    "carta",
     "checkr",
     "chime",
+    "clickhouse",
     "cloudflare",
+    "cockroachlabs",
     "coinbase",
-    "confluent",
     "databricks",
     "datadog",
     "discord",
-    "doordash",
+    "doordashusa",
     "dropbox",
     "duolingo",
+    "elastic",
+    "faire",
     "figma",
     "flexport",
+    "gemini",
     "gitlab",
-    "grammarly",
+    "grafanalabs",
     "gusto",
-    "hashicorp",
     "instacart",
     "lyft",
     "mongodb",
-    "notion",
-    "plaid",
+    "nuro",
+    "pinterest",
     "reddit",
     "robinhood",
+    "roblox",
     "samsara",
+    "scaleai",
     "sofi",
-    "sourcegraph",
+    "sourcegraph91",
     "squarespace",
     "stripe",
+    "temporaltechnologies",
     "twilio",
-    "wealthfront",
-    "zapier",
+    "vercel",
+    "waymo",
+    "webflow",
 )
 
 #: Lever company tokens. The public board lives at ``jobs.lever.co/<token>`` and the JSON
 #: feed at ``api.lever.co/v0/postings/<token>``.
+#:
+#: **Case matters.** ``Osmind`` and ``SimbeRobotics`` are spelled exactly as their employers
+#: publish them; the lowercase forms answer 404. See the module docstring.
+#:
+#: This is the shortest of the four lists and deliberately so. Lever's install base is much
+#: smaller than Greenhouse's and turns over faster — of the 33 tokens shipped before
+#: 2026-08-09, 27 had gone and one was empty. Nothing here is a guess; every token was
+#: confirmed by request, and the list is short because that is how many survived.
 _LEVER_COMPANIES: Final[tuple[str, ...]] = (
-    "attentive",
-    "brave",
-    "cointracker",
-    "coursera",
-    "cresta",
-    "earnin",
-    "eventbrite",
+    "360learning",
+    "aircall",
+    "aledade",
+    "anchorage",
+    "binance",
+    "contentsquare",
+    "disqo",
+    "duetti",
+    "equativ",
     "gopuff",
-    "highspot",
-    "hologram",
-    "kajabi",
-    "kickstarter",
+    "greenlight",
+    "hive",
+    "kpler",
     "ledger",
-    "lucidmotors",
-    "magicleap",
-    "matterport",
-    "mercari",
-    "netflix",
-    "nubank",
-    "outschool",
-    "patreon",
-    "podium",
-    "quora",
-    "rakuten",
-    "recroom",
-    "sardine",
+    "matchgroup",
+    "Osmind",
+    "palantir",
+    "pigment",
+    "qonto",
+    "scaleway",
     "shieldai",
+    "SimbeRobotics",
     "sonatype",
-    "teachable",
-    "upwork",
+    "spotify",
+    "spreetail",
+    "swissborg",
+    "sysdig",
     "veeva",
-    "verkada",
-    "zocdoc",
+    "xsolla",
+    "zopa",
 )
 
 #: Ashby organisation tokens. The public board lives at ``jobs.ashbyhq.com/<token>`` and the
 #: JSON feed at ``api.ashbyhq.com/posting-api/job-board/<token>``. Ashby skews heavily towards
 #: recently founded AI and developer-tools companies, which is exactly where a lot of current
 #: hiring is.
+#:
+#: As with Greenhouse, the token is the board's name and not the company's: Anysphere
+#: publishes as ``cursor`` and Zed Industries as ``zed``.
 _ASHBY_BOARDS: Final[tuple[str, ...]] = (
     "abridge",
-    "anysphere",
     "attio",
     "baseten",
     "browserbase",
-    "clay",
+    "cartesia",
+    "cerebras",
+    "character",
     "cognition",
     "cohere",
+    "crusoe",
+    "cursor",
     "decagon",
     "elevenlabs",
     "gamma",
-    "glean",
     "granola",
     "harvey",
     "hex",
     "langchain",
     "linear",
-    "loops",
-    "mercury",
+    "lovable",
+    "mistral.ai",
     "modal",
     "neon",
+    "notion",
+    "openai",
     "openevidence",
-    "perplexity.ai",
+    "pinecone",
     "posthog",
     "railway",
     "ramp",
     "replit",
     "runway",
+    "sesame",
     "sierra",
+    "suno",
     "supabase",
     "vanta",
     "warp",
     "writer",
-    "zed-industries",
+    "zed",
 )
 
 #: Workday tenant tokens. See the module docstring: the shard (``wd1`` … ``wd12``) and the
@@ -186,43 +237,51 @@ _ASHBY_BOARDS: Final[tuple[str, ...]] = (
 #: complement to the startup-heavy lists above — even though it is discovery-only, since its
 #: account-gated multi-step flow routes every application to manual review
 #: (``docs/CONTRACTS.md`` §9).
+#:
+#: Two kinds of token were removed in the 2026-08-09 sweep and are worth telling apart.
+#: ``walmart`` answers ``410 ERR_TENANT_MIGRATED`` — it has left this address entirely.
+#: ``nike``'s ``robots.txt`` allows nothing and disallows its three real boards, so the
+#: provider declines to poll it even though the CXS API would answer
+#: (:func:`app.jobs.workday.career_sites_from_robots`, golden rule #10). The rest — ``amd``,
+#: ``ford``, ``qualcomm`` and friends — simply are not on a ``myworkdayjobs.com`` or
+#: ``myworkdaysite.com`` host under that tenant token any more.
 _WORKDAY_TENANTS: Final[tuple[str, ...]] = (
     "3m",
     "accenture",
-    "amd",
+    "adobe",
+    "amat",
     "analogdevices",
     "autodesk",
     "blackrock",
     "broadcom",
     "capitalone",
+    "chevron",
     "cisco",
-    "cognizant",
     "comcast",
-    "dell",
+    "cvshealth",
     "disney",
-    "eaton",
-    "ford",
+    "dow",
+    "emerson",
     "gilead",
     "hpe",
+    "humana",
     "intel",
+    "marvell",
     "mastercard",
+    "medtronic",
     "micron",
-    "morganstanley",
-    "nike",
     "nvidia",
+    "nxp",
     "paypal",
-    "pepsico",
     "pfizer",
     "philips",
     "pnc",
-    "qualcomm",
-    "rtx",
+    "rockwellautomation",
     "salesforce",
     "statestreet",
+    "stryker",
     "target",
     "unilever",
-    "vmware",
-    "walmart",
     "workday",
 )
 

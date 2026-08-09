@@ -56,7 +56,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import structlog
 from sqlalchemy import delete, func, or_, select, update
@@ -90,6 +90,7 @@ from app.models.knowledge import (
 from app.plugins.base import PluginNotFound
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    from sqlalchemy.engine import CursorResult
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.ai.embeddings import Embedder
@@ -680,7 +681,9 @@ class KnowledgeIndexer:
                 .values(is_active=False, updated_at=utcnow())
                 .execution_options(synchronize_session="fetch")
             )
-            deactivated += int(result.rowcount or 0)
+            # ``execute`` is annotated as returning the general ``Result``, but a DML
+            # statement always produces a ``CursorResult`` — the class carrying ``rowcount``.
+            deactivated += int(cast("CursorResult[Any]", result).rowcount or 0)
 
         await self.session.delete(source)
         await self.session.commit()

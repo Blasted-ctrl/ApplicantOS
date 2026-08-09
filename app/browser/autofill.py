@@ -483,7 +483,10 @@ DISCOVERY_SCRIPT: Final[str] = (
     };
   };
 
-  let roots = query(document, rootSelector);
+  /* `matched` counts what the *pack's* root selector found, before any fallback, so Python
+     can tell "the application form is here" from "we are looking at some other page". */
+  const matches = query(document, rootSelector);
+  let roots = matches;
   if (!roots.length) roots = [document.body || document.documentElement].filter(Boolean);
   let root = null;
   let best = -1;
@@ -494,7 +497,7 @@ DISCOVERY_SCRIPT: Final[str] = (
   if (!root) return { root: "", matched: 0, controls: [] };
   return {
     root: cssPath(root),
-    matched: roots.length,
+    matched: matches.length,
     controls: query(root, CONTROLS).map(describe),
   };
 }
@@ -998,9 +1001,19 @@ class AutoFiller:
         controls are skipped, and radios and checkboxes sharing a ``name`` are collapsed into
         one field.
 
+        **A page whose pack root matched nothing is not an application form**, and is reported
+        as no fields rather than described anyway. The script falls back to ``document.body``
+        so that a form the root selector merely mis-describes is still readable, but that
+        fallback is only safe when the page really is the form. It is routinely not: a
+        Greenhouse posting whose employer embeds the board redirects to the employer's own
+        careers site, where — measured on 2026-08-09 against a real posting — the fallback
+        happily returned that site's "Search for a role" box as the application's only field.
+        Answering a question nobody asked is the failure golden rule #2 exists to prevent, so
+        an unmatched root escalates to a human instead (``docs/CONTRACTS.md`` §12).
+
         Returns:
-            The fields in document order. Empty when the form could not be read, which the
-            caller treats as a review item rather than as an empty form.
+            The fields in document order. Empty when the form could not be read or was not
+            found, which the caller treats as a review item rather than as an empty form.
         """
         self._choice_targets.clear()
         self._toggles.clear()
@@ -1014,6 +1027,14 @@ class AutoFiller:
                 "label": self.pack.label,
             },
         )
+        if isinstance(payload, Mapping) and not _int(payload.get("matched")):
+            logger.warning(
+                "autofill.form_root_unmatched",
+                pack=self.pack.name,
+                form_root=self.pack.form_root,
+                url=page_url(self.session) or None,
+            )
+            return []
         controls = self._controls_from(payload)
         if not controls:
             logger.warning(

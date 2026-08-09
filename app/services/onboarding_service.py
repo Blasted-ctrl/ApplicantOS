@@ -46,7 +46,7 @@ from __future__ import annotations
 import types
 import typing
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -652,7 +652,12 @@ class OnboardingService:
             payload if isinstance(payload, BaseModel) else _expand_dotted_keys(payload)
         )
 
-        handlers = {
+        # The payload model and the writer are chosen by the *same* key, so ``data`` is always
+        # the model the writer declares — but nothing in the type system ties the two lookups
+        # together, and each writer takes a different payload class. ``Any`` in the payload
+        # position states exactly that: the pairing is guaranteed by
+        # :data:`ONBOARDING_PAYLOAD_MODELS`, not by the annotation.
+        handlers: dict[str, Callable[[User, Any], Awaitable[None]]] = {
             "identity": self._write_identity,
             "contact": self._write_contact,
             "work_authorization": self._write_work_authorization,

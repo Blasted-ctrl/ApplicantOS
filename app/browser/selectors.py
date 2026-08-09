@@ -17,6 +17,13 @@ checkable precisely because :attr:`SelectorPack.submit` is the *only* place a su
 selector is written down. A pack is also the only place a captcha or cookie banner is
 described, so "did we detect the blocker?" has one answer per ATS.
 
+A ``captcha_markers`` entry names a challenge a **human would have to solve**, not merely the
+presence of a captcha vendor's script. Greenhouse, Lever and Ashby all load reCAPTCHA or
+hCaptcha in invisible mode on every posting, so a marker list that matched the vendor's
+bookkeeping would escalate every application ever attempted to manual review — see
+:data:`_COMMON_CAPTCHA_MARKERS`, where that exact mistake is recorded along with the live
+evidence that found it.
+
 **Import-time independence from Playwright.** This module is pure data and pure functions:
 no third-party import, no browser, no network. ``app.browser`` can therefore be imported —
 and a provider can therefore reference its pack — on a machine with no Playwright installed,
@@ -281,18 +288,43 @@ _FILLABLE_CONTROLS: Final[str] = (
 )
 
 #: Bot-challenge widgets, in the three flavours that appear in front of ATS forms: Google
-#: reCAPTCHA, hCaptcha and Cloudflare's Turnstile / interstitial. Any of them ends the
-#: attempt and sends the application to a human (golden rule #2).
+#: reCAPTCHA, hCaptcha and Cloudflare's Turnstile / interstitial. Any of them **that a human
+#: can actually see** ends the attempt and sends the application to a human (golden rule #2).
+#:
+#: These markers name the *challenge* surface, never the vendor's bookkeeping, and
+#: :meth:`app.browser.playwright_runner.BrowserSession._probe_captcha` additionally requires a
+#: match to be visibly rendered. Both halves are needed, and the reason is measured rather than
+#: theoretical — driven against real forms on 2026-08-09, the previous list reported a captcha
+#: on **every** Greenhouse, Lever and Ashby application form in existence:
+#:
+#: * Greenhouse loads reCAPTCHA Enterprise in invisible mode. Its only DOM presence is the
+#:   ``div.grecaptcha-badge`` logo parked off-screen, which carries an ``iframe`` whose ``src``
+#:   contains ``recaptcha`` and whose ``title`` is ``reCAPTCHA`` — matched by the old
+#:   ``iframe[src*='recaptcha']``, and rendered, so a visibility test alone would not have saved
+#:   it. Hence ``:not(.grecaptcha-badge *)``: the badge is a logo, not a puzzle. When an
+#:   invisible reCAPTCHA *does* escalate, it injects its ``bframe`` challenge outside the badge,
+#:   where this marker still finds it.
+#: * Lever loads hCaptcha in invisible mode: a zero-height ``div#h-captcha[data-sitekey]`` and
+#:   two ``display:none`` enclave iframes. Neither renders, so the visibility requirement
+#:   excludes them — while a real hCaptcha checkbox, which occupies ~300x78, still matches.
+#: * ``[data-sitekey]`` and ``#g-recaptcha-response`` are gone outright. The first is an
+#:   attribute every invisible widget also carries; the second is a hidden textarea that exists
+#:   from the moment the script loads. Neither can ever be something a human solves.
+#:
+#: An invisible, score-based widget presents nothing to solve, so escalating on one is not
+#: caution — it is a guarantee that no application is ever submitted, which is the same product
+#: as having no automation at all. If such a widget silently rejects a submission anyway, the
+#: attempt still ends in review, because :meth:`app.browser.autofill.AutoFiller.submit` treats
+#: an unconfirmed outcome as a failure.
 _COMMON_CAPTCHA_MARKERS: Final[tuple[str, ...]] = (
-    "iframe[src*='recaptcha']",
-    "iframe[title*='reCAPTCHA']",
-    ".g-recaptcha",
-    "#g-recaptcha-response",
+    "iframe[src*='recaptcha']:not(.grecaptcha-badge *)",
+    "iframe[title*='reCAPTCHA']:not(.grecaptcha-badge *)",
+    ".g-recaptcha:not(.grecaptcha-badge)",
     "iframe[src*='hcaptcha']",
     ".h-captcha",
     "iframe[src*='challenges.cloudflare.com']",
+    ".cf-turnstile",
     "#cf-challenge-running",
-    "[data-sitekey]",
 )
 
 #: Consent banners, which render above the form and eat the first click. The two managed
@@ -315,10 +347,22 @@ _COMMON_COOKIE_BANNER: Final[str] = (
 #: ``job-boards.greenhouse.io/<token>``, plus the same form embedded in an employer's own
 #: careers page. A single-page form: one ``#application_form``, one submit button, one
 #: confirmation. Submission is supported (``docs/CONTRACTS.md`` §9).
+#:
+#: ``field_container`` names the wrappers the current (React) board renders —
+#: ``.text-input-wrapper`` around a labelled text input or textarea, ``.select__container``
+#: around a combobox. Measured against a live board on 2026-08-09, the previous
+#: ``.field, .application-question, [class*='field--']`` matched **nothing at all**, so every
+#: control fell through to the preceding-heading walk for its label. That was survivable only
+#: because Greenhouse also emits ``<label for>``, which wins earlier in the priority order; a
+#: question rendered without one had no label at all. ``.field`` and ``.application-question``
+#: are retained for the older markup still served by employer-embedded copies of the form.
 GREENHOUSE: Final[SelectorPack] = SelectorPack(
     name=ATSProviderName.GREENHOUSE.value,
     form_root="#application_form, form#application-form, form[action*='/applications']",
-    field_container=".field, .application-question, [class*='field--']",
+    field_container=(
+        ".text-input-wrapper, .select__container, .field, .application-question, "
+        "[class*='field--']"
+    ),
     label="label, .application-label",
     input=_FILLABLE_CONTROLS,
     file_input="input[type='file']",
@@ -345,14 +389,37 @@ GREENHOUSE: Final[SelectorPack] = SelectorPack(
 #: with ``data-qa`` attributes, which are markedly more stable than its class names; the
 #: submit selector leads with the annotated one for exactly that reason. Submission is
 #: supported (``docs/CONTRACTS.md`` §9).
+#:
+#: Two corrections came out of driving a real Lever form on 2026-08-09, and both were silent:
+#:
+#: **The root was a section, not the form.** ``.application-form`` is the class Lever puts on
+#: each *panel* of the page — there are five of them — while the form itself is
+#: ``form#application-form``. :data:`app.browser.autofill.DISCOVERY_SCRIPT` picks the matching
+#: root holding the most controls, which was the personal-details panel: 7 controls out of the
+#: form's 23. Discovery therefore never saw the LinkedIn URL, the employer's custom questions
+#: or the marketing-consent checkbox — every one of them a field an application is incomplete
+#: without, and none of them ever reported as missing. ``form#application-form`` now leads.
+#:
+#: **The submit selector pointed at a hidden button.** ``[data-qa='submit-application-button']``
+#: matches nothing on the current form; the real control is
+#: ``button#btn-submit[data-qa='btn-submit']``, and it carries ``type="button"`` because Lever
+#: drives submission from JavaScript. The generic ``button[type='submit']`` fallback therefore
+#: resolved to the *only* other candidate — ``button#hcaptchaSubmitBtn.hidden``, a zero-size
+#: helper hCaptcha uses to re-enter the form. Since a Playwright locator resolves ``.first`` in
+#: document order rather than selector order, that hidden button won. Clicking it would either
+#: time out on visibility or fire a native form submit that bypasses Lever's own validation.
+#: The fallback now excludes hidden buttons for exactly that reason.
 LEVER: Final[SelectorPack] = SelectorPack(
     name=ATSProviderName.LEVER.value,
-    form_root=".application-form, form[action*='/apply']",
+    form_root="form#application-form, form[action*='/apply'], .application-form",
     field_container=".application-question, .application-field, li.application-question",
     label=".application-label, label",
     input=_FILLABLE_CONTROLS,
     file_input="input[type='file'][name='resume'], input[type='file']",
-    submit="[data-qa='submit-application-button'], button[type='submit']",
+    submit=(
+        "#btn-submit, [data-qa='btn-submit'], [data-qa='submit-application-button'], "
+        "button[type='submit']:not(.hidden):not([hidden])"
+    ),
     success_markers=(
         ".application-confirmation",
         "[data-qa='application-confirmation']",
@@ -375,9 +442,21 @@ LEVER: Final[SelectorPack] = SelectorPack(
 #: application whose class names are hashed per build, so every selector here matches on a
 #: substring of the stable ``ashby-application-form-*`` prefix rather than on an exact class.
 #: Submission is supported (``docs/CONTRACTS.md`` §9).
+#:
+#: Ashby renders **no ``<form>`` element at all** — confirmed live on 2026-08-09 — so the root
+#: has to be a ``div``. It leads with ``ashby-application-form-container`` because the looser
+#: ``[class*='ashby-application-form']`` matched 38 elements on one posting, most of them
+#: labels and icons, and the résumé-autofill drop pane among them. Discovery survived that only
+#: because it keeps whichever match holds the most controls; naming the container makes the
+#: choice deliberate rather than a tie-break, and keeps ``form_root`` usable as the "this really
+#: is an application form" evidence :meth:`~app.browser.playwright_runner.BrowserSession.
+#: _probe_login_wall` reads it as.
 ASHBY: Final[SelectorPack] = SelectorPack(
     name=ATSProviderName.ASHBY.value,
-    form_root="form[class*='ashby'], [class*='ashby-application-form'], form",
+    form_root=(
+        "[class*='ashby-application-form-container'], form[class*='ashby'], "
+        "[class*='ashby-application-form'], form"
+    ),
     field_container="[class*='ashby-application-form-field-entry'], [class*='_fieldEntry']",
     label="label, [class*='ashby-application-form-field-label']",
     input=_FILLABLE_CONTROLS,

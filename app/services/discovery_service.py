@@ -15,6 +15,16 @@ skips *that board* for this cycle, any other failure is recorded in
 :attr:`DiscoveryReport.errors`, and the remaining providers run to completion. Individual
 postings are isolated the same way — one unparseable advertisement costs one advertisement.
 
+**Silence is a result too.** The failure this service is worst placed to notice is the one
+where nothing goes wrong: every provider answers, no exception is raised, and the feed is
+empty because the boards it polled have nothing on them. That is not hypothetical — on
+2026-08-09, 28 of the 33 Lever tokens then shipped in :mod:`app.jobs.seeds` were gone or
+empty, and every Workday tenant resolved to nothing at all, so Workday contributed exactly
+zero postings on every install and nothing anywhere said so.
+:attr:`DiscoveryReport.boards_by_provider` and :attr:`DiscoveryReport.empty_providers` are
+what make that legible: "workday: 37 boards, 0 postings" is an actionable sentence, and a
+bare ``0`` — identical to the one a disabled provider produces — is not.
+
 **Scoring is deterministic by default.** :meth:`DiscoveryService.score_new` runs
 :meth:`app.ai.scoring.Scorer.score_rules`, which is pure, synchronous and free, so the whole
 pipeline works with zero API keys. When a real model is configured
@@ -47,6 +57,7 @@ from app.jobs.base import (
     SearchQuery,
 )
 from app.jobs.registry import resolve_providers
+from app.jobs.seeds import boards_from_query
 from app.models.enums import PostingStatus
 from app.models.posting import JobPosting
 from app.models.score import JobScore
@@ -62,6 +73,7 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 __all__ = [
     "DEFAULT_KEYWORDS",
     "DEFAULT_POSTED_WITHIN_DAYS",
+    "EVENT_PROVIDER_EMPTY",
     "EVENT_PROVIDER_FAILED",
     "EVENT_PROVIDER_FINISHED",
     "EVENT_PROVIDER_STARTED",
@@ -96,6 +108,11 @@ DEFAULT_POSTED_WITHIN_DAYS: Final[int] = 30
 EVENT_PROVIDER_STARTED: Final[str] = "provider.started"
 EVENT_PROVIDER_FINISHED: Final[str] = "provider.finished"
 EVENT_PROVIDER_FAILED: Final[str] = "provider.failed"
+
+#: Log event emitted when a provider completed without error and produced nothing. Not a
+#: progress event: it names a *condition*, and the desktop app reads it from
+#: :attr:`DiscoveryReport.empty_providers` rather than from the event stream.
+EVENT_PROVIDER_EMPTY: Final[str] = "discovery.provider_empty"
 
 #: Statuses whose posting may have its lifecycle state rewritten by a scoring pass. A
 #: posting that has been queued, applied to, or escalated to a human has moved *past*
@@ -141,6 +158,14 @@ class DiscoveryReport:
         by_provider: Postings found, keyed by provider name. A provider that was polled and
             yielded nothing appears with ``0``, which is how "the board is empty" is
             distinguished from "the board was never asked".
+        boards_by_provider: How many boards each provider was asked to poll, keyed by
+            provider name. Without it a zero in :attr:`by_provider` is unreadable — it could
+            mean the provider has no boards configured, or that it polled thirty-three of
+            them and every one came back empty, and those are completely different problems.
+        empty_providers: Providers that were polled successfully and produced nothing. A
+            *successful* run that found nothing is the failure mode this exists to make
+            visible: it raises no error, fills no counter, and is otherwise indistinguishable
+            from not having run at all.
         duration_seconds: Wall-clock time the run took.
     """
 
@@ -151,12 +176,32 @@ class DiscoveryReport:
     skipped: int = 0
     errors: list[str] = field(default_factory=list)
     by_provider: dict[str, int] = field(default_factory=dict)
+    boards_by_provider: dict[str, int] = field(default_factory=dict)
+    empty_providers: list[str] = field(default_factory=list)
     duration_seconds: float = 0.0
 
     @property
     def ok(self) -> bool:
         """Whether the run completed without recording a single failure."""
         return not self.errors
+
+    def describe_empty_providers(self) -> list[str]:
+        """Render one human-readable line per provider that discovered nothing.
+
+        Returns:
+            Lines of the form ``"lever: 33 boards, 0 postings"``, one per entry in
+            :attr:`empty_providers`, in poll order. A provider with no configured boards is
+            described as such rather than as an empty board list, because "nowhere to look"
+            and "looked everywhere and found nothing" call for different fixes.
+        """
+        lines: list[str] = []
+        for name in self.empty_providers:
+            boards = self.boards_by_provider.get(name, 0)
+            if boards:
+                lines.append(f"{name}: {boards} boards, 0 postings")
+            else:
+                lines.append(f"{name}: no boards configured, 0 postings")
+        return lines
 
     def as_dict(self) -> dict[str, Any]:
         """Return the report as a JSON-ready mapping.
@@ -173,6 +218,8 @@ class DiscoveryReport:
             "skipped": self.skipped,
             "errors": list(self.errors),
             "by_provider": dict(self.by_provider),
+            "boards_by_provider": dict(self.boards_by_provider),
+            "empty_providers": list(self.empty_providers),
             "duration_seconds": round(self.duration_seconds, 3),
         }
 
@@ -390,7 +437,15 @@ class DiscoveryService:
         """
         name = provider.meta.name
         report.by_provider.setdefault(name, 0)
-        await self._emit(EVENT_PROVIDER_STARTED, {"provider": name, "limit": query.limit})
+        # Resolved here rather than asked of the provider: `boards_from_query` is the same
+        # pure function every provider calls to decide what to poll, so this is the real
+        # board count without a new provider-side hook and without any shared mutable state
+        # that two concurrent runs could scribble over.
+        boards = len(boards_from_query(name, query.extra))
+        report.boards_by_provider[name] = boards
+        await self._emit(
+            EVENT_PROVIDER_STARTED, {"provider": name, "limit": query.limit, "boards": boards}
+        )
 
         found = 0
         try:
@@ -451,11 +506,25 @@ class DiscoveryService:
             )
             return
 
+        if found == 0:
+            # A provider that answered without error and produced nothing. Recorded rather
+            # than merely logged, because this is the one outcome that is silent everywhere
+            # else: no exception, no entry in `errors`, and a `by_provider` count of zero
+            # that reads exactly like a provider that was never enabled.
+            report.empty_providers.append(name)
+            logger.warning(
+                EVENT_PROVIDER_EMPTY,
+                provider=name,
+                boards=boards,
+                keywords=query.keywords,
+                posted_within_days=query.posted_within_days,
+            )
+
         await self._emit(
             EVENT_PROVIDER_FINISHED,
             # ``provider_found`` is this board's own tally; the spread carries the run's
             # running totals, and the two must not share a key.
-            {"provider": name, "provider_found": found, **report.as_dict()},
+            {"provider": name, "provider_found": found, "boards": boards, **report.as_dict()},
         )
 
     async def _ingest(

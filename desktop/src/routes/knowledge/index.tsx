@@ -270,7 +270,8 @@ export function KnowledgeRoute() {
         {/* Sources rail. */}
         <aside className="scroll-region col-span-12 min-h-0 rounded-lg border border-default bg-surface p-2 lg:col-span-3">
           <SectionHeading>Sources</SectionHeading>
-          {rows.length === 0 ? (
+          {/* §10.10 — never over a query that has not answered yet. */}
+          {sources.isPending ? null : rows.length === 0 ? (
             <EmptyState
               title="No sources yet"
               description="ApplicantOS learns from what you point it at. Nothing is scraped."
@@ -359,7 +360,8 @@ export function KnowledgeRoute() {
         {/* Centre pane. */}
         <div className={cn('col-span-12 min-h-0', selectedNode === null ? 'lg:col-span-9' : 'lg:col-span-6')}>
           {view === 'graph' ? (
-            graph.data === undefined || graph.data.nodes.length === 0 ? (
+            graph.isPending ? null : graph.data === undefined ||
+              graph.data.nodes.length === 0 ? (
               <EmptyState
                 icon={Network}
                 title="The graph is empty"

@@ -507,8 +507,23 @@ looks like submit" anywhere in this codebase, because that is how an automation 
 Account".
 
 Prefer stable attributes over class names, in this order: a purpose-built `data-*` attribute, an
-ARIA role or accessible name, an id, a class. Lever's pack leads with
-`[data-qa='submit-application-button']` for exactly this reason.
+ARIA role or accessible name, an id, a class. Lever's pack leads with `#btn-submit,
+[data-qa='btn-submit']` for exactly this reason.
+
+**Order your fallbacks defensively, then verify them against the real page.** A Playwright
+locator resolves `.first` in *document* order, not selector order, so a broad fallback like
+`button[type='submit']` can win over the specific alternative you listed first. Lever's pack
+shipped for months resolving to `#hcaptchaSubmitBtn.hidden` — a zero-size helper button earlier
+in the DOM — because of exactly that; it is why the fallback now reads
+`button[type='submit']:not(.hidden):not([hidden])`. Add your ATS to
+`tests/integration/test_browser_live.py`, which opens a real posting and asserts that the pack's
+submit selector resolves to one visible control whose text says "submit". It never clicks.
+
+**`captcha_markers` name a challenge, not a vendor.** Every major ATS loads reCAPTCHA or
+hCaptcha in invisible, score-based mode, and matching that bookkeeping sends 100% of
+applications to manual review while every unit test stays green. Reuse
+`_COMMON_CAPTCHA_MARKERS`; only add a marker that identifies something a human would have to
+solve. `BrowserSession._probe_captcha` additionally requires the match to be rendered.
 
 ---
 
@@ -531,6 +546,23 @@ DEFAULT_BOARDS: Final[dict[str, list[str]]] = {
 
 A user who names their own boards in `SearchQuery.extra` gets exactly those and none of these. A
 stale token 404s, which `search()` already handles.
+
+**Verify every token against the live API before you commit it, and never guess one.** Board
+tokens are not employer names — Anduril publishes as `andurilindustries`, DoorDash as
+`doordashusa`, NVIDIA's Workday career site is `NVIDIAExternalCareerSite` — and they go stale
+constantly: a 2026-08-09 sweep of the four shipped lists found 46 of 107 tokens returning
+nothing, including 28 of 33 on Lever. Add your provider to `scripts/validate_boards.py` and run
+it:
+
+```bash
+python -m scripts.validate_boards --provider hirebase --tokens acme-robotics,globex-embedded
+python -m scripts.validate_boards --provider hirebase        # the whole shipped list
+```
+
+It exits non-zero when any token discovers nothing, and `.github/workflows/integration.yml`
+runs it nightly. Two traps it exists to catch: a board that answers `200` with an empty array is
+indistinguishable from an employer who is not hiring, and on some providers tokens are
+case-sensitive (`api.lever.co/v0/postings/Osmind` works, `.../osmind` 404s).
 
 ---
 

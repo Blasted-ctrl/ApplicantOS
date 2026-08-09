@@ -112,7 +112,8 @@ export function ResumesRoute() {
         </Button>
       }
     >
-      {variants.length === 0 ? (
+      {/* §10.10 — never over a query that has not answered yet. */}
+      {resumes.isPending ? null : variants.length === 0 ? (
         <EmptyState
           title="No résumé variants yet"
           description="A variant is a named configuration — a template and a slant. Versions are generated from your knowledge graph each time a posting is tailored for."

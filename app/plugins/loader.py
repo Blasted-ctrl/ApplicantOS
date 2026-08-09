@@ -12,7 +12,7 @@ worker), and does two things in order:
    log line instead of taking the process down.
 
 2. **Walks the ``applicantos.*`` entry-point groups.** Any installed distribution can
-   contribute a provider, model, template, parser or analyzer by declaring an entry point
+   contribute a provider, model, template, analyzer or tracker by declaring an entry point
    in one of the groups in :data:`ENTRY_POINT_GROUPS`. A third-party plugin that fails to
    import, or that turns out not to be a valid plugin, is logged and skipped — one broken
    package must never prevent the application from starting.
@@ -59,7 +59,6 @@ ENTRY_POINT_GROUPS: Final[dict[PluginKind, str]] = {
     PluginKind.PROVIDER: "applicantos.providers",
     PluginKind.MODEL: "applicantos.models",
     PluginKind.TEMPLATE: "applicantos.templates",
-    PluginKind.PARSER: "applicantos.parsers",
     PluginKind.ANALYZER: "applicantos.analyzers",
     PluginKind.TRACKER: "applicantos.trackers",
 }

@@ -17,7 +17,7 @@ Everything below was checked against the repository on 2026-08-08.
 
 Config (87 settings), structlog with permanent secret redaction, async SQLAlchemy 2.0, portable
 column types, 24 tables, the migration, the cache protocol with four backends, and one plugin
-registry for six plugin kinds.
+registry for five plugin kinds.
 
 Both database backends work. `alembic upgrade head` round-trips on SQLite and PostgreSQL, and the
 CI matrix runs the whole suite against both because the zero-infrastructure path is a hard

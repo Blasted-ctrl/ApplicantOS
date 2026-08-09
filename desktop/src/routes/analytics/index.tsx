@@ -302,7 +302,8 @@ export function AnalyticsRoute() {
 
         <section>
           <SectionHeading>Insights</SectionHeading>
-          {insights.length === 0 ? (
+          {/* §10.10 — never over a query that has not answered yet. */}
+          {overview.isPending ? null : insights.length === 0 ? (
             <EmptyState
               title="No insights yet"
               description="Observations need a body of applications to be drawn from. They appear once there is enough history for a pattern to be more than a coincidence."

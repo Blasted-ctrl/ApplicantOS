@@ -46,7 +46,7 @@ import time
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
 
 import structlog
 from sqlalchemy import func, or_, select
@@ -174,11 +174,14 @@ REASON_MEMORY: Final[str] = "remembered from earlier feedback"
 
 #: Item-kind prefixes used to key :attr:`RetrievalResult.reasons` and
 #: :attr:`RetrievalResult.scores`, matching
-#: :data:`app.schemas.knowledge.KnowledgeSearchKind`.
-ITEM_FACT: Final[str] = "fact"
-ITEM_CHUNK: Final[str] = "chunk"
-ITEM_ENTITY: Final[str] = "entity"
-ITEM_MEMORY: Final[str] = "memory"
+#: :data:`app.schemas.knowledge.KnowledgeSearchKind`. Typed as literals rather than ``str``
+#: because that is the whole point of them: they are handed straight to
+#: :class:`~app.schemas.knowledge.KnowledgeSearchResult`, whose ``kind`` accepts exactly
+#: these four values, so a typo becomes an error here instead of a 500 at serialisation.
+ITEM_FACT: Final[Literal["fact"]] = "fact"
+ITEM_CHUNK: Final[Literal["chunk"]] = "chunk"
+ITEM_ENTITY: Final[Literal["entity"]] = "entity"
+ITEM_MEMORY: Final[Literal["memory"]] = "memory"
 
 #: ``LIKE`` escape character and the characters that need escaping under it.
 _LIKE_ESCAPE: Final[str] = "\\"
@@ -845,9 +848,9 @@ class KnowledgeRetriever:
                 break
             if entity_id in seeds:
                 continue
-            entity = await self.session.get(KnowledgeEntity, entity_id)
-            if entity is not None and entity.user_id == user_id:
-                seeds[entity.id] = entity
+            anchor = await self.session.get(KnowledgeEntity, entity_id)
+            if anchor is not None and anchor.user_id == user_id:
+                seeds[anchor.id] = anchor
 
         return list(seeds.values())[:SEED_ENTITY_LIMIT]
 

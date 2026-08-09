@@ -1611,3 +1611,139 @@ the memory has to be recorded *before* the transition or it is never persisted. 
 ordering `resolve` uses and the same exposure the `Application.notes` mutation directly above it
 already has: a transition that raises leaves an uncommitted memory in a session the caller is
 about to roll back.
+
+---
+
+## Phase 9 — G10: the `parser` plugin kind, and a sweep for other decoration
+
+### 72. `PluginKind.PARSER` is removed — document reading is not an extension point
+
+`parser` was one of the declared plugin kinds and had **zero implementations**. Nothing ever
+called `registry.get(PluginKind.PARSER, ...)` or `registry.all(PluginKind.PARSER)`; the only
+references anywhere were the enum member itself and its `ENTRY_POINT_GROUPS` row. That is the
+decorative registry `docs/RESEARCH_EVOLVEAGENT.md` criticises in the researched repo, so it was
+removed rather than shipped.
+
+**Implementing one was considered first and rejected on evidence.** The thing a `ParserPlugin`
+would abstract already exists exactly once and is already shared:
+`app/knowledge/analyzers/document.py` holds `read_pdf_text`, `read_docx_text`, `read_html_text`
+and the single dispatcher `extract_text_from_bytes`, and **both** consumers —
+`DocumentAnalyzer` and `ResumeParser` — import them by name from that one module. There is no
+duplication to remove, so Option B would have created an abstraction over code that is already
+factored.
+
+Worse, it would have created one that cannot express the dispatch it replaces.
+`extract_text_from_bytes` picks a reader by **inspecting the bytes** — the `%PDF-` and ZIP
+magic numbers beat both the filename suffix and the server's `Content-Type`, deliberately,
+because a portfolio serving `resume.pdf` as `application/octet-stream` is entirely normal. A
+registry keyed by `(kind, name)` has no way to say that. Routing through it would mean either
+re-implementing the sniffing at the call site to pick a plugin *name*, or replacing one
+`if/elif` chain with an "ask every registered parser whether it claims these bytes" loop:
+strictly more machinery, identical behaviour, and — with `document.py` the only producer — one
+implementation behind it.
+
+`app/documents/{docx,html,markdown,latex}.py` were checked and are the *write* path
+(`TemplatePlugin` renderers). They share nothing with the readers. `docs/ROADMAP.md` names no
+parser-shaped extension point either; the resume reader it lists is one of the six
+**analyzers**.
+
+**The rule that survives:** a new *format* is a branch in `extract_text_from_bytes`; a new
+source of *knowledge* is an `analyzer`. Golden rule #5 is untouched — `document.py` is inside
+`app/knowledge/analyzers/`, and its readers are imported within that package only.
+
+Changed together, because §17 freezes the enum vocabulary across three files:
+`app/models/enums.py`, `desktop/src/lib/api/types.ts`, `docs/CONTRACTS.md` §6 — plus
+`app/plugins/loader.py` (`ENTRY_POINT_GROUPS`), the `app/plugins/base.py` and
+`app/plugins/registry.py` module docstrings, `docs/ARCHITECTURE.md` and `CLAUDE.md`.
+`pyproject.toml` needed no edit: this distribution declares **no** entry points of its own —
+the groups exist for third-party distributions only.
+
+**No migration is required.** `PluginKind` is not a database column. It appears only in
+`PluginMeta.kind` and in `PluginRead.kind` on `GET /settings/plugins`, both derived at
+runtime from registered classes. No stored row could ever have held `"parser"`.
+
+**Corrected in passing:** §6 said "Five kinds: `provider`, `model`, `template`, `parser`,
+`analyzer`" while the enum has carried `tracker` since §17 landed — so the contract listed a
+kind with no implementations and omitted one with a real one (`EmailTracker`). §6 and the
+documented form of `ENTRY_POINT_GROUPS` now both read `provider`, `model`, `template`,
+`analyzer`, `tracker`.
+
+### 73. Enum parity between Python and TypeScript was never actually tested
+
+§17 requires every enum vocabulary to be byte-identical in `app/models/enums.py` and
+`desktop/src/lib/api/types.ts`, and **nothing enforced it**. Removing `PARSER` from one file
+and forgetting the other would have left `ruff`, `mypy`, `pytest`, `npm run typecheck` and the
+smoke test all green, and broken only at runtime in a client that has no schema to complain
+with.
+
+`tests/test_models.py` now parses every `export const NAME = [...] as const;` block out of
+`types.ts` and asserts, per enum, that the values **and their order** match. A second test
+asserts the `MIRRORED_ENUMS` table covers every `StrEnum` declared in `app/models/enums.py`,
+so adding an enum without a mirror fails rather than passing silently. All 22 enums pass,
+order included.
+
+### 74. What else the decoration sweep found
+
+Method: parse every `__all__` in `app/`, every `Settings` field and every enum member; index
+identifiers across `app/`, `tests/`, `scripts/`, `alembic/` and `desktop/src/`; report anything
+whose only occurrence is its own definition. Constants exported purely for readability were
+filtered out — the pattern worth hunting is the `as_prompt_context` / `ApplicationVerifier`
+shape, which is *behaviour* with no producer or consumer.
+
+**Clean.** Every `Settings` field has a reader — no dead config keys. Every plugin class,
+storage backend and template that looks unreferenced is resolved through the registry by name
+string, which is golden rule #5 working as designed, not decoration.
+
+**Fixed here.** `PluginKind.PARSER` (item 72) and the missing parity test (item 73).
+
+**Left, with a recommendation each:**
+
+1. **Eight Prometheus collectors have no producer** — `record_posting_discovered`,
+   `record_posting_deduped`, `record_score`, `record_application`, `observe_apply`,
+   `record_document_rendered`, `record_knowledge_document`, `observe_knowledge_index`. The
+   *infrastructure* metrics are wired (HTTP via `ObservabilityMiddleware`, cache via
+   `app/cache/base.py`, LLM via `app/ai/llm.py`, Celery via `app/workers/__init__.py`, review
+   queue and session gauges via `app/workers/cleanup.py`), but **every domain metric is flat
+   zero forever** — which is to say the whole funnel this product exists to run (discovered →
+   deduped → scored → applied) is unobservable, and a dashboard built on `/metrics` would show
+   nothing. This is the same shape as `ApplicationVerifier` and larger; it is a gap, not a
+   sweep leftover, and is filed as **G12** in `docs/DEFINITION_OF_DONE.md`. Recommended call
+   sites, one line each: `DiscoveryService` for the two posting counters, after `Scorer.score`
+   for `record_score`, `ApplicationService.transition` for `record_application`, the apply
+   path in `Pipeline` for `observe_apply`, `render_resume` in `app/documents/renderer.py` for
+   `record_document_rendered`, and `KnowledgeIndexer` for the last two. Not taken in this pass
+   because half those modules are being edited concurrently and a partial wiring is worse than
+   an honest inventory.
+
+2. **`StatusSource.PIPELINE` is never written.** `applications.status_source` defaults to
+   `MANUAL` and is only ever set by `app/tracking/service.py` (`EMAIL`, `PORTAL`, `INFERRED`,
+   `MANUAL`). So an application the pipeline drove to `submitted` is recorded as though a
+   human did it, and the enum member that exists precisely to say otherwise is unused. That is
+   a provenance defect, not merely dead vocabulary. Recommended: give
+   `ApplicationService.transition` a `source: StatusSource = StatusSource.MANUAL` keyword and
+   have `Pipeline` pass `StatusSource.PIPELINE`. Not taken here because it changes a signature
+   on the golden-rule-#1 transition path, which wants its own test pass.
+
+3. **Five `PostingStatus` members are never written** — `QUEUED`, `PROCESSING`, `APPLIED`,
+   `NEEDS_REVIEW`, `FAILED`. A posting's status stops at `DISCOVERED` → `DEDUPED` → `SCORED` /
+   `SKIPPED`, plus `EXPIRED` from `cleanup`; everything after scoring is tracked on the
+   `Application` row instead, which is the right design. Recommended: **delete the five**, the
+   same three-file change as item 72, once someone confirms no desktop screen renders them.
+   Deliberately not bundled into this pass — two independent enum removals in one commit make
+   the parity test's first real exercise ambiguous if it fails.
+
+4. **Six API schemas have no endpoint** — `DocumentRead`, `ChunkRead`, `EdgeRead` (the
+   knowledge API exposes sources, facts, entities, graph, search and stats, but never
+   documents, chunks or edges), `SyncReportRead` (`POST /tracking/sync` returns `OkResponse`;
+   the report reaches the client only as a WebSocket `tracking.sync_progress` payload built
+   from `SyncReport.as_dict()`), and `UserCreate` / `UserUpdate` (there is no users route —
+   auth is a single-tenant shim). None has a `types.ts` mirror except that event payload, so
+   nothing client-side depends on them. Recommended: keep `DocumentRead`/`ChunkRead`/`EdgeRead`
+   only if the "browse indexed documents" screen in `docs/UI.md` is still wanted, and delete
+   `UserCreate`/`UserUpdate` outright — multi-user is explicitly out of scope.
+
+5. **`SignalSource.ATS_PORTAL` and `SignalSource.WEBHOOK` are unproduced**, and that is fine.
+   `tracker` is a real extension point with a real implementation (`EmailTracker`), and
+   `MailProvider.signal_source()` produces the three email sources dynamically. These two name
+   the channels a third-party tracker would report against — vocabulary for an extension point
+   that exists, which is the opposite of item 72's problem. No action.

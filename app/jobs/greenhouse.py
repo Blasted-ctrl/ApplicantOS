@@ -614,7 +614,7 @@ class GreenhouseProvider(ATSProvider):
 
         return await cache.get_or_set(key, factory, ttl=ttl)
 
-    async def _board_jobs(self, board: str) -> list[dict[str, Any]]:
+    async def _board_jobs(self, board: str) -> list[Mapping[str, Any]]:
         """Return every open posting on one board, descriptions included.
 
         Args:

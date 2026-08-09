@@ -160,21 +160,53 @@ print(await retriever.retrieve(user.id, "embedded systems firmware C++"))
 
 ## Screenshots
 
-> **Coming soon.** The desktop app is built and runs; the screenshots below are placeholders until
-> a signed build exists on all three platforms.
+Captured from the running app at 1440×900, against the database `python -m scripts.seed` produces
+plus one real pass of the apply pipeline over it. Every number on screen was computed by the code
+that ships — the scores by `Scorer`, the two blocked applications by `Pipeline.run_one` stopping at
+the kill switch. Nothing is mocked and nothing is drawn.
 
-| | |
-|---|---|
-| **Dashboard** — live session, funnel, today's activity | `docs/images/dashboard.png` |
-| **Postings** — scored list with the full breakdown panel | `docs/images/postings.png` |
-| **Score breakdown** — every rule that fired, and every one that didn't | `docs/images/score-breakdown.png` |
-| **Knowledge graph** — entities, edges, and which facts back each one | `docs/images/knowledge.png` |
-| **Review queue** — what it refused to guess, and why | `docs/images/reviews.png` |
-| **Application detail** — timeline, generated resume, confirmation screenshot | `docs/images/application.png` |
+### Dashboard
 
-The design system it's built against is [`docs/UI.md`](docs/UI.md), including a testable
+The morning read: what the last run did, what needs a human, what is worth a look next.
+
+![The ApplicantOS dashboard, showing the last run's hero figure, a review-queue card with two blocked applications, the highest-scoring open postings and the discovery-to-offer funnel.](docs/screenshots/dashboard.png)
+
+### Review queue
+
+Two applications the agent refused to send. Both stopped at the kill switch — `Dry run` is on, so
+the card says plainly that approving still sends nothing until both switches are armed.
+
+![The review queue with two waiting applications, each showing the provider, the reason it stopped, and exactly what approving and dismissing would each do.](docs/screenshots/reviews.png)
+
+### Applications
+
+Every application, its status, its score and where it came from.
+
+![The applications table listing two applications, both Needs review, scored 92 and 100, from Lever and Greenhouse.](docs/screenshots/applications.png)
+
+### Knowledge
+
+Three indexed sources on the left, and the entity graph they produced — 23 nodes, 16 edges. This
+is the graph résumés are generated from; there is no stored résumé to edit.
+
+![The knowledge screen: an indexed résumé, GitHub account and project folder on the left, and a coloured entity graph of 23 nodes and 16 edges on the right.](docs/screenshots/knowledge.png)
+
+### Analytics
+
+The funnel with real counts: six postings discovered and scored, two prepared, none submitted —
+because submission is off.
+
+![The analytics screen showing four stat tiles, an applications-over-time chart with no activity in the window, the discovery-to-offer funnel, and applications split by provider.](docs/screenshots/analytics.png)
+
+The remaining screens — postings, application detail, résumés, runs, status sync, logs, settings
+and onboarding — are in [`docs/screenshots/`](docs/screenshots/).
+
+The design system they're built against is [`docs/UI.md`](docs/UI.md), including a testable
 performance budget: route changes in one frame, cold start to real data in 800ms, 60fps on a
-5,000-row table.
+5,000-row table. Measured on the production build against a live backend: cold start to the
+dashboard's first real figure **455ms** from an empty cache and **262ms** with the hot snapshot,
+route change to an already-visited route **8.6ms p50** once the harness's own two-frame overhead
+is subtracted, and click-to-repaint on a filter chip **13ms p50 / 18ms p99**.
 
 ---
 

@@ -174,17 +174,24 @@ PLAYWRIGHT_INSTALL_HINT: Final[str] = (
 WaitState = Literal["commit", "domcontentloaded", "load", "networkidle"]
 
 #: Captcha widgets probed for when no :class:`~app.browser.selectors.SelectorPack` is
-#: supplied. Narrower than a pack's ``captcha_markers`` on purpose: this list matches the
-#: *visible challenge widgets* of the three vendors that appear in front of ATS forms, not
-#: the invisible score-based variants whose presence does not block a submission.
+#: supplied. This list matches the *visible challenge widgets* of the three vendors that
+#: appear in front of ATS forms, not the invisible score-based variants whose presence does
+#: not block a submission — and :meth:`BrowserSession._probe_captcha` enforces that intent by
+#: requiring a match to be rendered, rather than merely present.
+#:
+#: The reCAPTCHA entries exclude ``div.grecaptcha-badge``, the off-screen logo an invisible
+#: reCAPTCHA parks on every page it loads on. The badge *is* rendered, so visibility alone
+#: does not exclude it, and it carries an iframe titled ``reCAPTCHA``. A genuine challenge —
+#: including one an invisible reCAPTCHA escalates to — is injected outside the badge and is
+#: still matched here.
 _DEFAULT_CAPTCHA_MARKERS: Final[tuple[str, ...]] = (
-    "iframe[src*='recaptcha']",
-    "iframe[title*='reCAPTCHA']",
+    "iframe[src*='recaptcha']:not(.grecaptcha-badge *)",
+    "iframe[title*='reCAPTCHA']:not(.grecaptcha-badge *)",
     "iframe[src*='hcaptcha']",
     "iframe[title*='hCaptcha']",
     "iframe[src*='challenges.cloudflare.com']",
     "iframe[title*='Widget containing a Cloudflare security challenge']",
-    "div[class*='g-recaptcha']",
+    "div[class*='g-recaptcha']:not(.grecaptcha-badge)",
     "div[class*='h-captcha']",
     "div[class*='cf-turnstile']",
 )
@@ -384,6 +391,7 @@ class BrowserSession:
         *,
         storage_state: Path | None = None,
         artifacts_dir: Path | None = None,
+        user_agent: str | None = None,
     ) -> None:
         """Configure a session without starting anything.
 
@@ -402,10 +410,17 @@ class BrowserSession:
             artifacts_dir: Where screenshots, the trace and the HAR are written. Defaults to
                 ``settings.screenshot_path``; the pipeline normally passes the per-application
                 directory owned by :class:`app.browser.recorder.ArtifactRecorder`.
+            user_agent: Overrides :data:`DESKTOP_USER_AGENT`. Exists for the one caller that
+                should identify itself rather than blend in — ``tests/integration/
+                test_browser_live.py`` opens employers' forms to check the selector packs
+                against real markup, and a site operator reading their logs deserves to see
+                what that traffic is. An applicant's own submission is not that case: it is a
+                person applying for a job through their own browser, and the default stands.
         """
         self.settings = settings
         self._storage_state = Path(storage_state) if storage_state is not None else None
         self._artifacts_dir = self._resolve_artifacts_dir(settings, artifacts_dir)
+        self._user_agent = (user_agent or "").strip() or DESKTOP_USER_AGENT
         self.artifacts = BrowserArtifacts()
 
         self._playwright: Playwright | None = None
@@ -602,14 +617,14 @@ class BrowserSession:
         """Build the keyword arguments for ``browser.new_context``.
 
         Returns:
-            The context options: a desktop viewport, a real desktop User-Agent, downloads
-            accepted (an ATS confirmation is sometimes a PDF), a US English locale, the
-            supplied storage state when it exists, and HAR recording in debug mode with
-            bodies omitted.
+            The context options: a desktop viewport, the session's User-Agent (a real desktop
+            one unless the caller supplied its own), downloads accepted (an ATS confirmation
+            is sometimes a PDF), a US English locale, the supplied storage state when it
+            exists, and HAR recording in debug mode with bodies omitted.
         """
         options: dict[str, Any] = {
             "viewport": {"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
-            "user_agent": DESKTOP_USER_AGENT,
+            "user_agent": self._user_agent,
             "accept_downloads": True,
             "locale": DEFAULT_LOCALE,
         }
@@ -1010,16 +1025,35 @@ class BrowserSession:
         return blockers
 
     async def _probe_captcha(self, pack: SelectorPack | None) -> bool:
-        """Return whether a captcha or bot-challenge widget is on the page.
+        """Return whether a captcha a human would have to solve is on the page.
+
+        Visibility, not presence, is the test — and the difference is the whole feature.
+        Greenhouse, Lever and Ashby every one of them load reCAPTCHA or hCaptcha in
+        *invisible* mode on *every* posting: a score-based widget that renders nothing, asks
+        nothing and blocks nothing. Reporting those as blockers, which a presence test does,
+        escalates one hundred per cent of applications to manual review and leaves the product
+        with no automation at all. Requiring the widget to occupy space on screen is what
+        separates "there is a puzzle here" from "this site uses a captcha vendor".
+
+        This does not weaken golden rule #2. A challenge a human must solve is rendered by
+        definition, so it is still caught — including one an invisible reCAPTCHA escalates to
+        mid-submission, which is injected outside the badge and sized to be seen. And a
+        submission an invisible widget silently rejects still ends in review, because
+        :meth:`app.browser.autofill.AutoFiller.submit` reports an unconfirmed outcome as a
+        failure rather than a success.
 
         Args:
             pack: The provider's pack, whose ``captcha_markers`` are preferred when present.
 
         Returns:
-            ``True`` when any marker matches.
+            ``True`` when any marker matches an element that is actually rendered.
         """
         markers = pack.captcha_markers if pack and pack.captcha_markers else ()
-        return await self._any_present(markers or _DEFAULT_CAPTCHA_MARKERS)
+        for marker in markers or _DEFAULT_CAPTCHA_MARKERS:
+            if marker and await self._any_visible(marker):
+                logger.debug("browser.captcha_visible", selector=marker)
+                return True
+        return False
 
     async def _probe_cloudflare(self, text: str) -> bool:
         """Return whether a Cloudflare interstitial is showing.

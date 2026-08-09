@@ -87,8 +87,26 @@ ASYNC_TO_SYNC_DRIVERS: Final[dict[str, str]] = {
 #: Location of the packaged default scoring rule pack (``app/config/scoring_rules.yaml``).
 DEFAULT_SCORING_RULES_PATH: Final[Path] = Path(__file__).resolve().parent / "scoring_rules.yaml"
 
-#: Default CORS origins: the Vite dev server and the packaged Electron custom scheme.
-_DEFAULT_CORS_ORIGINS: Final[list[str]] = ["http://localhost:5173", "app://applicantos"]
+#: Default CORS origins: every origin a *local* ApplicantOS renderer can present.
+#:
+#: Both spellings of the dev-server loopback are listed because they are distinct origins to
+#: a browser and ``desktop/vite.config.ts`` binds to ``127.0.0.1`` while
+#: ``src-tauri/tauri.conf.json`` points ``devUrl`` at ``localhost``. Listing one and not the
+#: other is a CORS failure on every request with no server-side symptom at all.
+#:
+#: The three ``tauri`` entries are the packaged webview's origin, which differs per platform:
+#: a custom ``tauri://`` scheme on macOS and Linux, and an ``http(s)://tauri.localhost`` shim
+#: on Windows because WebView2 cannot register a custom scheme as a secure context. They are
+#: listed unconditionally — an origin that never appears simply never matches — and they must
+#: be here rather than only in ``sidecar.rs``, because a debug shell *attaches* to the backend
+#: `desktop/scripts/dev-with-backend.mjs` already started and therefore never gets to set them.
+_DEFAULT_CORS_ORIGINS: Final[list[str]] = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+]
 
 
 # --------------------------------------------------------------------------------------

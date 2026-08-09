@@ -615,10 +615,13 @@ def _build_alias_index() -> tuple[dict[str, str], dict[str, str], re.Pattern[str
     return spaced, compact, pattern
 
 
-_ALIAS_BY_SPACED: Final[dict[str, str]]
-_ALIAS_BY_COMPACT: Final[dict[str, str]]
-_VOCABULARY_PATTERN: Final[re.Pattern[str]]
-_ALIAS_BY_SPACED, _ALIAS_BY_COMPACT, _VOCABULARY_PATTERN = _build_alias_index()
+#: The vocabulary index, built once at import. Bound to the whole tuple first and unpacked by
+#: position afterwards, because a tuple-unpacking target cannot itself be ``Final``.
+_ALIAS_INDEX: Final = _build_alias_index()
+
+_ALIAS_BY_SPACED: Final[dict[str, str]] = _ALIAS_INDEX[0]
+_ALIAS_BY_COMPACT: Final[dict[str, str]] = _ALIAS_INDEX[1]
+_VOCABULARY_PATTERN: Final[re.Pattern[str]] = _ALIAS_INDEX[2]
 
 
 def canonical_skill(value: str) -> str | None:

@@ -27,7 +27,7 @@
 
 import { experimental_createQueryPersister } from '@tanstack/query-persist-client-core';
 import { dehydrate, hydrate, type DehydratedState } from '@tanstack/react-query';
-import { clear, createStore, del, get, set, type UseStore } from 'idb-keyval';
+import { clear, createStore, del, entries, get, set, type UseStore } from 'idb-keyval';
 
 import { API_SCHEMA_VERSION } from '@/lib/api/types';
 
@@ -72,11 +72,25 @@ function idbStore(): UseStore {
   return store;
 }
 
-/** `idb-keyval` wrapped in the three methods the persister asks for. */
+/**
+ * `idb-keyval` wrapped in the four methods the persister asks for.
+ *
+ * **`entries` is not optional in practice.** It is the only way `persisterGc` can walk the
+ * store, so without it every expired or busted entry stays in IndexedDB forever — and a
+ * development build does not degrade quietly, it *throws* on the first `persisterGc()` call,
+ * which is once per launch. Keys are narrowed to strings because the persister prefix-matches
+ * them; `idb-keyval` types them as `IDBValidKey`, and only string keys are ever written here.
+ */
 const idbStorage = {
   getItem: (key: string): Promise<unknown> => get(key, idbStore()),
   setItem: (key: string, value: unknown): Promise<void> => set(key, value, idbStore()),
   removeItem: (key: string): Promise<void> => del(key, idbStore()),
+  entries: async (): Promise<[string, unknown][]> => {
+    const stored = await entries<IDBValidKey, unknown>(idbStore());
+    return stored
+      .filter((pair): pair is [string, unknown] => typeof pair[0] === 'string')
+      .map(([key, value]) => [key, value]);
+  },
 };
 
 /**
@@ -254,9 +268,13 @@ export function installPersistence(): () => void {
   window.addEventListener('pagehide', onPageHide);
 
   // Drop expired entries once, off the critical path. `persisterGc` walks the store, so it
-  // waits until the first frame has been painted rather than competing with it.
+  // waits until the first frame has been painted rather than competing with it. A rejection
+  // is swallowed rather than left to become an unhandled rejection: an uncollected cache
+  // entry is a housekeeping miss, and it must never surface as an application error.
   requestAnimationFrame(() => {
-    void persister.persisterGc();
+    persister.persisterGc().catch(() => {
+      /* IndexedDB is unavailable or blocked; the sweep simply repeats next launch. */
+    });
   });
 
   return () => {

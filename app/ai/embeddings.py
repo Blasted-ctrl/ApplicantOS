@@ -49,7 +49,7 @@ import re
 import threading
 from importlib.util import find_spec
 from itertools import pairwise
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeGuard, runtime_checkable
 
 import structlog
 
@@ -2503,11 +2503,15 @@ def _cache_key(text: str, provider: str, model: str, dimension: int) -> str:
     return make_key(NAMESPACES.EMBEDDING, provider, model, dimension, text)
 
 
-def _is_usable_vector(value: Any, dimension: int) -> bool:
+def _is_usable_vector(value: object, dimension: int) -> TypeGuard[list[float]]:
     """Return whether a cached value is a vector of the expected width.
 
     A cache entry written by an older algorithm, a different width, or a hand edit must be
     treated as a miss rather than trusted.
+
+    Returns a :data:`~typing.TypeGuard` because the caller immediately iterates the value it
+    has just proven to be a list of numbers, and that proof is worth carrying across the
+    call rather than restating at every use.
 
     Args:
         value: Whatever the cache returned.

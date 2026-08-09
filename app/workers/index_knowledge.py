@@ -27,7 +27,7 @@ Four tasks:
 from __future__ import annotations
 
 import uuid
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import structlog
 from sqlalchemy import select
@@ -48,6 +48,9 @@ from app.database.session import session_scope
 from app.workers import run_async, task_span
 from app.workers.celery_app import celery_app
 from app.workers.retry import retryable
+
+if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    from app.database.types import EmbeddingType
 
 __all__ = [
     "EMBED_BATCH_SIZE",
@@ -298,7 +301,11 @@ def _chunk_embedding_absent(session: Any) -> Any:
     from app.models.knowledge import KnowledgeChunk
 
     dialect = session.get_bind().dialect
-    implementation = KnowledgeChunk.__table__.c.embedding.type.load_dialect_impl(dialect)
+    # ``Column.type`` is annotated as the base ``TypeEngine``; this column is declared with
+    # :class:`~app.database.types.EmbeddingType`, and ``load_dialect_impl`` is the
+    # ``TypeDecorator`` hook being asked which implementation the dialect resolved to.
+    column_type = cast("EmbeddingType", KnowledgeChunk.__table__.c.embedding.type)
+    implementation = column_type.load_dialect_impl(dialect)
     if isinstance(implementation, JSON):
         return or_(
             KnowledgeChunk.embedding.is_(None),

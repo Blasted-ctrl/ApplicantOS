@@ -382,6 +382,113 @@ def test_every_enum_value_is_lowercase_snake_case(enum_cls) -> None:
         assert "-" not in member.value
 
 
+# ======================================================================================
+# Enum parity with the desktop client
+# ======================================================================================
+#
+# §17 requires every enum vocabulary to be byte-identical in `app/models/enums.py` and
+# `desktop/src/lib/api/types.ts`. Nothing enforced that until now: `PluginKind.PARSER` was
+# removed in one file and would have survived in the other with every gate still green,
+# and JSON has no schema to complain at runtime. These two tests are that enforcement.
+
+
+def _typescript_unions() -> dict[str, tuple[str, ...]]:
+    """Parse every ``export const NAME = [...] as const;`` array out of ``types.ts``.
+
+    Returns:
+        Const name to the string literals it lists, in file order.
+    """
+    import re
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "desktop" / "src" / "lib" / "api" / "types.ts"
+    ).read_text(encoding="utf-8")
+    blocks = re.findall(
+        r"^export const ([A-Z][A-Z0-9_]*) = (\[.*?\]) as const;",
+        source,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    return {name: tuple(re.findall(r"'([^']*)'", body)) for name, body in blocks}
+
+
+#: Python enum to the TypeScript const that mirrors it. Every ``StrEnum`` in
+#: ``app/models/enums.py`` must appear here — ``test_every_enum_is_mirrored_in_typescript``
+#: is what makes adding one without a mirror fail.
+MIRRORED_ENUMS: dict[str, str] = {
+    "ATSProviderName": "ATS_PROVIDER_NAMES",
+    "ApplicationStatus": "APPLICATION_STATUSES",
+    "CheckpointStatus": "CHECKPOINT_STATUSES",
+    "DocumentKind": "DOCUMENT_KINDS",
+    "EmploymentType": "EMPLOYMENT_TYPES",
+    "EntityKind": "ENTITY_KINDS",
+    "FactKind": "FACT_KINDS",
+    "FieldKind": "FIELD_KINDS",
+    "IndexStatus": "INDEX_STATUSES",
+    "MailProvider": "MAIL_PROVIDERS",
+    "MemoryKind": "MEMORY_KINDS",
+    "PluginKind": "PLUGIN_KINDS",
+    "PostingStatus": "POSTING_STATUSES",
+    "RelationKind": "RELATION_KINDS",
+    "ReviewReason": "REVIEW_REASONS",
+    "SessionStatus": "SESSION_STATUSES",
+    "SignalKind": "SIGNAL_KINDS",
+    "SignalSource": "SIGNAL_SOURCES",
+    "SourceKind": "SOURCE_KINDS",
+    "StatusSource": "STATUS_SOURCES",
+    "WorkArrangement": "WORK_ARRANGEMENTS",
+    "WorkAuthStatus": "WORK_AUTH_STATUSES",
+}
+
+
+def _declared_str_enums() -> dict[str, type]:
+    """Return every ``StrEnum`` subclass declared in ``app.models.enums``."""
+    import inspect as _inspect
+
+    from app.models import enums as enums_module
+
+    return {
+        name: obj
+        for name, obj in vars(enums_module).items()
+        if _inspect.isclass(obj)
+        and issubclass(obj, enums_module.StrEnum)
+        and obj is not enums_module.StrEnum
+        and obj.__module__ == enums_module.__name__
+    }
+
+
+def test_every_enum_is_mirrored_in_typescript() -> None:
+    """A new enum without a TypeScript union is a silently broken client."""
+    declared = set(_declared_str_enums())
+    mapped = set(MIRRORED_ENUMS)
+    assert declared - mapped == set(), (
+        f"enums with no entry in MIRRORED_ENUMS: {sorted(declared - mapped)}"
+    )
+    assert mapped - declared == set(), (
+        f"MIRRORED_ENUMS names an enum that no longer exists: {sorted(mapped - declared)}"
+    )
+
+    unions = _typescript_unions()
+    missing = {const for const in MIRRORED_ENUMS.values() if const not in unions}
+    assert not missing, f"types.ts declares no union for: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("enum_name", sorted(MIRRORED_ENUMS))
+def test_enum_values_match_the_typescript_union(enum_name: str) -> None:
+    """The vocabulary and its order are identical on both sides of the wire (§17)."""
+    enum_cls = _declared_str_enums()[enum_name]
+    expected = tuple(member.value for member in enum_cls)
+    actual = _typescript_unions()[MIRRORED_ENUMS[enum_name]]
+
+    assert actual == expected, (
+        f"{enum_name} and {MIRRORED_ENUMS[enum_name]} disagree.\n"
+        f"  only in Python: {sorted(set(expected) - set(actual))}\n"
+        f"  only in types.ts: {sorted(set(actual) - set(expected))}\n"
+        f"  python: {expected}\n"
+        f"  types.ts: {actual}"
+    )
+
+
 def test_application_status_helpers_agree_with_each_other() -> None:
     """``is_post_submit`` is what golden rule #1's status guard reads."""
     for status in ApplicationStatus:

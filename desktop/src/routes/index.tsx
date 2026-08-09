@@ -275,7 +275,9 @@ export function DashboardRoute() {
               }
             />
             <CardBody>
-              {reviewCount === 0 ? (
+              {/* §10.10 — "Nothing needs you" is never printed over a queue that has not
+                  answered yet, here or on `/reviews`. */}
+              {reviews.isPending ? null : reviewCount === 0 ? (
                 <EmptyState
                   title="Nothing needs you"
                   description="The agent handled everything on its own."
@@ -325,7 +327,7 @@ export function DashboardRoute() {
               subtitle={`Highest-scoring open postings from the ${String(postings.data?.items.length ?? 0)} most recent`}
             />
             <CardBody>
-              {topPostings.length === 0 ? (
+              {postings.isPending ? null : topPostings.length === 0 ? (
                 <EmptyState
                   title="No scored open postings yet"
                   description="Run discovery to fill this list."
@@ -355,7 +357,7 @@ export function DashboardRoute() {
 
           <section>
             <SectionHeading>Recent activity</SectionHeading>
-            {recentActivity.length === 0 ? (
+            {applications.isPending ? null : recentActivity.length === 0 ? (
               <EmptyState
                 title="No activity yet"
                 description="Applications appear here as the pipeline moves them, newest first."

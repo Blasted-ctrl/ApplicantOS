@@ -909,7 +909,10 @@ class Pipeline:
 
         # -- 4. provider posture (golden rule #10) -----------------------------------------
         if not self._supports_auto_apply(provider_name):
-            payload = {
+            # Annotated because the kill-switch branch below reuses the name for a payload
+            # carrying the two switch booleans; both go to ``mark_needs_review``, which takes
+            # ``dict[str, Any]``.
+            payload: dict[str, Any] = {
                 "provider": provider_name,
                 "apply_url": posting.apply_url or posting.url,
                 "reason": "provider does not support automated submission",
@@ -1744,9 +1747,9 @@ class Pipeline:
             if candidates:
                 cover_path = candidates[0]
             else:
-                document = CoverLetterDocument(body=letter.body)
+                letter_document = CoverLetterDocument(body=letter.body)
                 render = await self._render_cover_letter_file(
-                    document, directory, self._settings.resume_template
+                    letter_document, directory, self._settings.resume_template
                 )
                 cover_path = render.path
 

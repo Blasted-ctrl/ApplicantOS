@@ -504,7 +504,7 @@ class GmailMailbox(OAuthMailbox):
             The instant in UTC; the current time when the field is missing or malformed,
             which keeps the message inside the window it was found in.
         """
-        raw = payload.get("internalDate")
+        raw: Any = payload.get("internalDate")
         try:
             return datetime.fromtimestamp(int(raw) / 1000, tz=UTC)
         except (TypeError, ValueError):

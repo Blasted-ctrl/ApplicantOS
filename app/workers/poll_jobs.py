@@ -89,7 +89,10 @@ def _search_query(query: dict[str, Any] | None) -> Any:
 
     from app.jobs.base import SearchQuery
 
-    fields = {
+    # ``query`` is a serialised request body, so every value is ``Any``; annotating the
+    # accumulator says that plainly instead of letting the checker infer a union of the five
+    # observed value types and then reject ``**fields`` against every parameter in turn.
+    fields: dict[str, Any] = {
         "keywords": list(query.get("keywords") or []),
         "locations": list(query.get("locations") or []),
         "remote_only": bool(query.get("remote_only", False)),

@@ -272,7 +272,7 @@ different. Check `applicantos_documents_rendered_total{engine="html"}` if you ex
 |---|---|---|---|---|
 | `API_HOST` | str | `127.0.0.1` | Bind address | **Leave it.** `0.0.0.0` exposes an unauthenticated API to your network |
 | `API_PORT` | int | `8000` | Bind port | A port conflict. The Tauri shell picks a free port itself and ignores this |
-| `CORS_ORIGINS` | list[str] | `["http://localhost:5173", "app://applicantos"]` | Allowed origins | A different dev-server port |
+| `CORS_ORIGINS` | list[str] | both spellings of `:5173` plus the three `tauri://` / `tauri.localhost` webview origins | Allowed origins | A different dev-server port. Note `localhost` and `127.0.0.1` are **different origins** to a browser — list both |
 
 There is no authentication. The API identifies the user by an `X-User-Id` header because there is
 exactly one user and it listens on loopback. **Binding it to a routable address would expose every

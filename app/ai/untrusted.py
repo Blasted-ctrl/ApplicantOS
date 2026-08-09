@@ -311,17 +311,13 @@ class UntrustedContentError(RuntimeError):
 #: joiners, the word joiner, the byte-order mark, and the Mongolian vowel separator. Removed
 #: before anything else so that ``ig​nore`` cannot walk past a pattern that reads
 #: ``ignore``.
-_ZERO_WIDTH_CHARS: Final[frozenset[str]] = frozenset(
-    "​‌‍⁠⁡⁢⁣⁤﻿᠎­"
-)
+_ZERO_WIDTH_CHARS: Final[frozenset[str]] = frozenset("​‌‍⁠⁡⁢⁣⁤﻿᠎­")
 
 #: Bidirectional control characters. These reorder rendered text without changing the code
 #: point sequence a model sees, which makes them a pure deception primitive: the human review
 #: screen and the tokenizer read different documents. There is no legitimate reason for one to
 #: appear in a job description.
-_BIDI_CHARS: Final[frozenset[str]] = frozenset(
-    "‪‫‬‭‮⁦⁧⁨⁩‎‏؜"
-)
+_BIDI_CHARS: Final[frozenset[str]] = frozenset("‪‫‬‭‮⁦⁧⁨⁩‎‏؜")
 
 #: Runs of horizontal whitespace, collapsed to one space.
 _HORIZONTAL_WHITESPACE: Final[re.Pattern[str]] = re.compile(r"[^\S\n]+")
@@ -753,6 +749,56 @@ _MODEL_IMPERATIVE_VERBS: Final[frozenset[str]] = frozenset(
 #: Sentence boundary, used only for the instruction-density count.
 _SENTENCE_SPLIT: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?;])\s+|\n+")
 
+#: Constructions that mean the writer is *naming* an attack rather than performing one: a
+#: quotation mark around the match, or a detection verb just before it. A security,
+#: ML-safety or trust-and-safety job description legitimately says "write rules that detect
+#: strings like 'ignore previous instructions'". Blocking that posting costs the user a job
+#: they are qualified for and stops no attacker — a real injection has no reason to quote
+#: itself or ask to be detected.
+_PATTERN_CITATION_LEAD: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:detect|detects|detecting|detection|identify|identifies|identifying|flag|flags|"
+    r"flagging|catch|catches|catching|block|blocks|blocking|prevent|prevents|preventing|"
+    r"mitigate|mitigates|mitigating|recognise|recognize|classify|classifies|classifying|"
+    r"scan|scans|scanning|filter|filters|filtering|test|tests|testing|red[- ]?team|"
+    r"such as|for example|like|including)\b[^.\n]{0,60}$",
+    _I,
+)
+
+#: How far back to look for a citation lead.
+_CITATION_LOOKBEHIND: Final[int] = 80
+
+#: Quote characters that count as framing, straight and curly, plus the backtick.
+_QUOTE_CHARACTERS: Final[str] = "\"'‘’“”`"
+
+
+def _is_cited(text: str, span: tuple[int, int]) -> bool:
+    """Return whether the match at *span* is being quoted or described, not performed.
+
+    Two independent tells, either of which is enough:
+
+    * the match is wrapped in quote characters, or
+    * a detection verb (``detect``, ``flag``, ``such as``, …) appears within
+      :data:`_CITATION_LOOKBEHIND` characters before it, in the same sentence.
+
+    Args:
+        text: The normalised document.
+        span: ``(start, end)`` of the pattern match.
+
+    Returns:
+        ``True`` when the surrounding prose frames the match as an example.
+    """
+    start, end = span
+    before = text[max(0, start - _CITATION_LOOKBEHIND) : start]
+
+    stripped_before = before.rstrip()
+    if stripped_before and stripped_before[-1] in _QUOTE_CHARACTERS:
+        trailing = text[end : end + 2].lstrip()
+        if trailing[:1] and trailing[0] in _QUOTE_CHARACTERS:
+            return True
+
+    return bool(_PATTERN_CITATION_LEAD.search(before))
+
+
 #: The pattern-driven signals, in the order they are evaluated. Order does not affect the
 #: score — it only fixes the order spans are collected in, which keeps the sanitised output
 #: deterministic.
@@ -880,6 +926,20 @@ def _score(
 
     for signal, pattern in _PATTERN_SIGNALS:
         found = [match.span() for match in pattern.finditer(text)]
+        if signal is SIGNAL_INSTRUCTION_OVERRIDE and found:
+            # Calibration rule 2 grants this signal HIGH_RISK_SCORE alone because it
+            # "cannot plausibly fire on a genuine job description". That holds only for an
+            # *uncited* match — a security posting describing the attack trips the very
+            # same pattern. Dropping cited matches keeps the rule true; lowering the weight
+            # instead would let a bare, uncited injection through.
+            kept = [span for span in found if not _is_cited(text, span)]
+            if len(kept) != len(found):
+                logger.debug(
+                    "untrusted.citation_ignored",
+                    signal=signal.name,
+                    ignored=len(found) - len(kept),
+                )
+            found = kept
         if not found:
             continue
         hits[signal.name] = len(found)
@@ -1163,9 +1223,7 @@ _PATTERN_PHONE: Final[re.Pattern[str]] = re.compile(
 #: Only contact details are allow-listable: a user's own email and phone belong on their own
 #: résumé, but there is no configuration under which their Social Security number belongs in
 #: a prompt.
-_ALLOWLISTABLE: Final[frozenset[PiiCategory]] = frozenset(
-    {PiiCategory.EMAIL, PiiCategory.PHONE}
-)
+_ALLOWLISTABLE: Final[frozenset[PiiCategory]] = frozenset({PiiCategory.EMAIL, PiiCategory.PHONE})
 
 #: Non-alphanumeric characters, stripped before an allow-list comparison so that
 #: ``+1 (555) 010-9999`` and ``5550109999`` are recognised as the same number.

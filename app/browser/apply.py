@@ -440,9 +440,7 @@ class _Attempt:
         Returns:
             The result.
         """
-        logger.warning(
-            "apply.failed", error=error, pack=self.pack.name, **self.ctx.log_context()
-        )
+        logger.warning("apply.failed", error=error, pack=self.pack.name, **self.ctx.log_context())
         return ApplyResult.failed(
             error,
             screenshot_paths=self.screenshots(filler, evidence),
@@ -529,9 +527,7 @@ async def _dismiss_banner(session: Any, pack: SelectorPack) -> bool:
     try:
         return bool(await dismiss(pack))
     except Exception as exc:
-        logger.debug(
-            "apply.cookie_banner_failed", error=str(exc), error_type=type(exc).__name__
-        )
+        logger.debug("apply.cookie_banner_failed", error=str(exc), error_type=type(exc).__name__)
         return False
 
 
@@ -583,7 +579,7 @@ def _build_resolver(ctx: ApplyContext) -> FieldResolver:
             consequence="free-text questions will escalate to review",
         )
         llm = None
-    return FieldResolver.for_user(ctx.user, ctx.answers, llm=llm)
+    return FieldResolver.for_user(ctx.user, ctx.answers, llm=llm, knowledge=ctx.knowledge)
 
 
 async def _upload_documents(
@@ -676,9 +672,7 @@ async def _drive(ctx: ApplyContext, session: Any, pack: SelectorPack) -> ApplyRe
     if not fields:
         blockers = await _detect_blockers(session, pack)
         reason = filler.review_reason_for((), blockers=blockers, essays=0)
-        attempt.record(
-            _STEP_DISCOVER, "no fields could be read", blockers=sorted(blockers) or None
-        )
+        attempt.record(_STEP_DISCOVER, "no fields could be read", blockers=sorted(blockers) or None)
         return attempt.review(
             reason,
             "the application form could not be read; a human should open it",

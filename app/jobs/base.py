@@ -1062,6 +1062,11 @@ class ApplyContext:
         dry_run: When ``True``, fill everything and stop short of clicking submit. Combined
             with ``settings.auto_apply_enabled`` this is golden rule #3, and the guard is
             re-applied in :func:`app.jobs._apply.run_browser_apply`.
+        knowledge: Optional :class:`app.knowledge.retrieval.KnowledgeRetriever`. Typed
+            ``Any`` for the same reason as *recorder*: ``app/jobs`` must not import the
+            knowledge package. Without it a free-text form answer is generated from the
+            profile alone -- no knowledge grounding, and no prior correction from the
+            user's memory, so the same question escalates to review a second time.
         recorder: Optional :class:`app.browser.recorder.ArtifactRecorder` collecting
             screenshots, HTML and a manifest. Untyped here so that ``app/jobs`` never imports
             the browser package.
@@ -1075,6 +1080,7 @@ class ApplyContext:
     answers: dict[str, Any] = field(default_factory=dict)
     dry_run: bool = True
     recorder: Any | None = None
+    knowledge: Any | None = None
 
     def __post_init__(self) -> None:
         """Coerce path-like arguments and guarantee ``answers`` is a dictionary."""

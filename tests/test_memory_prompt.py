@@ -301,9 +301,7 @@ async def test_the_recorded_pii_stamp_alone_excludes_a_memory(session, settings,
     entry.context = {"pii": {"categories": ["ssn"], "hits": 1, "allowed": 0}}
     await session.flush()
 
-    block = await build_memory_block(
-        store, user.id, "ordinary preference", purpose="test", k=8
-    )
+    block = await build_memory_block(store, user.id, "ordinary preference", purpose="test", k=8)
 
     assert block.empty
     assert block.excluded == 1
@@ -580,7 +578,7 @@ async def test_prepare_does_not_reinforce_an_escalation(
 async def test_dismiss_records_the_negative_signal(
     session, settings, user, posting, make_application
 ) -> None:
-    """"I don't want jobs like this" is a judgement, and it used to be thrown away.
+    """ "I don't want jobs like this" is a judgement, and it used to be thrown away.
 
     ``resolve`` fed ``record_correction`` and ``dismiss`` wrote a note to ``Application.notes``
     and nothing else. The company and the title go into the body rather than staying behind a
@@ -679,3 +677,71 @@ async def test_an_answerer_without_a_retriever_still_answers(session, settings, 
 
     assert plan.value == "answered anyway"
     assert answerer.injected_memory_ids == []
+
+
+# =======================================================================================
+# The live screen — the branch that catches memories written before the stamp existed
+# =======================================================================================
+
+
+async def test_live_screen_excludes_an_unstamped_memory(session: Any, user: Any) -> None:
+    """A memory carrying PII but **no stamp** is still excluded.
+
+    ``_screen`` has two independent tests, and every other test in this file records its
+    memory through ``MemoryStore._record``, which stamps ``context["pii"]``. That means only
+    the stamp branch was ever exercised — mutation-proven: replacing the live screen's
+    ``if verdict.found:`` with ``if False:`` left this whole file green.
+
+    The live screen exists for exactly one situation the stamp cannot cover: a user upgrades
+    from a build that predates stamping, so their existing ``memory_entries`` rows carry no
+    stamp at all. One of them is the Social Security number they typed into an unknown field.
+    Without this branch it goes straight into the next prompt.
+
+    So this constructs the row the way the database would hand it back — text with PII,
+    context without a stamp — and asserts the reader still refuses it.
+    """
+    from app.ai.memory_prompt import _screen
+    from app.knowledge.memory import CONTEXT_KEY_PII
+    from app.models.knowledge import MemoryEntry
+
+    unstamped = MemoryEntry(
+        user_id=user.id,
+        kind=MemoryKind.CORRECTION,
+        text=f"Preferred answer: {SSN}",
+        context={"field": "#national_id"},  # note: no CONTEXT_KEY_PII
+        weight=1.0,
+    )
+    assert CONTEXT_KEY_PII not in unstamped.context, "fixture must be genuinely unstamped"
+
+    with structlog.testing.capture_logs() as records:
+        screened = _screen([unstamped], allow=(), purpose="field_answer", user_id=user.id)
+
+    assert screened.excluded == 1
+    assert screened.kept == [], "an unstamped PII memory must not reach the prompt"
+
+    blob = repr(records)
+    assert SSN not in blob, "the excluded value must never appear in a log line"
+    assert any("pii" in str(record.get("event", "")).lower() for record in records)
+
+
+async def test_live_screen_keeps_an_unstamped_clean_memory(session: Any, user: Any) -> None:
+    """The live screen must not over-fire: an unstamped, PII-free memory still gets through.
+
+    The failure direction matters. Excluding everything unstamped would be "safe" and would
+    also silently delete the entire feature for anyone upgrading.
+    """
+    from app.ai.memory_prompt import _screen
+    from app.models.knowledge import MemoryEntry
+
+    clean = MemoryEntry(
+        user_id=user.id,
+        kind=MemoryKind.PREFERENCE,
+        text="Prefers a four week notice period.",
+        context={"field": "#notice"},
+        weight=1.0,
+    )
+
+    screened = _screen([clean], allow=(), purpose="field_answer", user_id=user.id)
+
+    assert screened.excluded == 0
+    assert len(screened.kept) == 1

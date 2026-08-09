@@ -974,6 +974,10 @@ class Pipeline:
                 # Belt and braces: guard 5 already proved this is False. If that guard is
                 # ever reordered away, the provider still receives the safe value.
                 dry_run=not self._settings.is_submission_allowed,
+                # Without this the field answerer has no retriever, so every free-text
+                # form answer is written from the profile alone -- ignoring both the
+                # knowledge graph and any correction the user has already made.
+                knowledge=self._retriever(),
             )
 
             await self._applications.transition(
@@ -1916,6 +1920,22 @@ class Pipeline:
 
             self._cache = get_cache()
         return self._cache
+
+    def _retriever(self) -> Any:
+        """Return a knowledge retriever bound to this pipeline's session.
+
+        Used both for résumé tailoring and — via :attr:`ApplyContext.knowledge` — for
+        answering free-text questions on the form itself. The second consumer is easy to
+        forget, and forgetting it is silent: the answerer simply falls back to the profile
+        block, so every free-text answer loses its knowledge grounding *and* any correction
+        the user has already made, and the same question escalates to review a second time.
+
+        Returns:
+            A :class:`app.knowledge.retrieval.KnowledgeRetriever` over this session.
+        """
+        from app.knowledge.retrieval import KnowledgeRetriever
+
+        return KnowledgeRetriever(self._session)
 
     def _llm_client(self) -> Any:
         """Return the reasoning-tier model client, resolved once per pipeline instance.

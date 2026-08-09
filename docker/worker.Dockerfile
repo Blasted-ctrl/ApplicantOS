@@ -158,7 +158,17 @@ WARMUP
 # broker another container's reply satisfies this one's probe. It catches a broker outage and
 # a fully dead worker tier precisely; a single wedged container it catches only via the
 # soft/hard task time limits in `celery_app.py`.
-HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
+# Budget, because these two timeouts are not independent and getting it wrong makes a healthy
+# worker report unhealthy forever. The probe is a cold Python process: importing the Celery app
+# alone costs ~6s in this image, the broker check ~1s, and only then does the control ping start
+# spending its own `--timeout`. At `--timeout=15s` with a 10s ping the total was ~17s, so Docker
+# killed every probe at 15s with exit -1 and all four workers sat `unhealthy` while cheerfully
+# consuming their queues. Measured, not guessed:
+#
+#     20:05:42 start -> 20:05:48 imports done -> 20:05:49 broker ok -> killed 20:05:57
+#
+# So the outer timeout must exceed startup + broker + ping with real headroom.
+HEALTHCHECK --interval=30s --timeout=40s --start-period=90s --retries=3 \
     CMD ["python", "-m", "app.workers.healthcheck", "--workers", "--timeout", "10"]
 
 # The default command consumes every queue, which is the right shape for a single-container

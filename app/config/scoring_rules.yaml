@@ -1,5 +1,5 @@
 # =====================================================================================
-# ApplicantOS — default scoring rule pack
+# ApplicantOS — scoring rule pack
 # =====================================================================================
 #
 # Consumed by `app/ai/scoring.py` (`DEFAULT_RULES`, `load_rules()`). Rule evaluation is
@@ -42,136 +42,410 @@
 #                     contract | new_grad | unknown
 #
 # -------------------------------------------------------------------------------------
+# WHO THIS PACK IS FOR
+#
+# A software engineering **intern** searching in **Michigan or remote**, who is a **US
+# citizen** and therefore needs no visa sponsorship.
+#
+# Three consequences shape every number below, and each replaced something that was
+# actively wrong for this search:
+#
+# 1. **Internship is the axis, not a bonus.** A posting's intern-ness outweighs any single
+#    technology match, because a perfect Python role that wants six years of experience is
+#    not a near-miss — it is unreachable. `internship_title` is the largest positive in the
+#    pack and the seniority penalties are the largest negatives.
+#
+# 2. **No salary floor.** Internships are paid hourly or monthly ("$25/hour",
+#    "$4,800/month") and very often post no figure at all. A $60,000 floor rule read those
+#    as underpaid and subtracted from exactly the postings this search exists to find.
+#
+# 3. **Sponsorship is not a signal.** For a US citizen, "we cannot sponsor" says nothing
+#    about fit — a -40 rule on it was subtracting from every posting that merely mentioned
+#    visas. It is now -2, kept only so the engine's veto path stays wired for anyone who
+#    edits their profile to need sponsorship.
+#
+# Location is scored rather than merely filtered, because discovery's location filter is a
+# substring match that has to be wide enough to catch "Remote - US" and every spelling of
+# Michigan. Anything that slips through is corrected here.
+#
+# -------------------------------------------------------------------------------------
 # CANONICAL WORKED EXAMPLE — this pack must reproduce it exactly.
 #
-# A remote, new-grad embedded-robotics firmware role written in C++ that also asks for
-# 8+ years of experience and states it cannot sponsor:
+# A fully remote software engineering internship for summer, written in Python with
+# React, deployed on AWS, at an employer that states it cannot sponsor visas:
 #
-#     embedded                     +40
-#     robotics                     +30
-#     firmware                     +25
-#     cpp                          +15
-#     new_grad                     +10
-#     remote                       +10
-#     requires_senior_experience   -20
-#     sponsorship_unavailable      -40
+#     internship_title              +45
+#     software_engineering_title    +30
+#     remote                        +25
+#     structured_program            +10
+#     python                        +10
+#     summer_season                  +8
+#     web_frameworks                 +8
+#     cloud_platform                 +8
+#     sponsorship_unavailable        -2
 #     -------------------------------
-#     TOTAL                         70
+#     TOTAL                         142   (normalised to 100)
 #
-# Do not change the points of those eight rules without updating the worked example in
-# the product documentation and the scoring engine's regression test.
+# `sponsorship_unavailable` deliberately contributes almost nothing to that total. The
+# employer in the example states it cannot sponsor, and for a US citizen that is not a
+# fact about fit — it was a -40 rule subtracting from every posting that mentioned visas
+# at all. It survives at -2 only so the engine's veto path stays wired for anyone who
+# edits their profile to need sponsorship, at which point it becomes a hard negative
+# regardless of these points.
+#
+# `tests/test_scoring.py` asserts this total. Do not change these nine rules without
+# updating that test in the same commit.
 # =====================================================================================
 
 version: 1
-name: default
+name: swe-internship-michigan-remote
 description: >-
-  Default ApplicantOS scoring pack, tuned for a new-graduate embedded / robotics /
-  firmware engineer with a strong systems-programming background. Positive rules reward
-  domain fit; negative rules encode hard blockers (sponsorship, clearance) and soft
-  mismatches (seniority, arrangement, compensation).
+  Software engineering internships in Michigan or fully remote, for a US citizen who
+  needs no visa sponsorship. Internship signals and location dominate; seniority,
+  experience requirements and unpaid work are the hard negatives. There is deliberately
+  no compensation floor — internship pay is hourly or monthly and frequently unposted.
 
 rules:
+  # ===================================================================================
+  # The internship axis — the largest positives in the pack
+  # ===================================================================================
 
-  # ---------------------------------------------------------------------------------
-  # Canonical worked example — the eight rules that sum to 70.
-  # ---------------------------------------------------------------------------------
+  - key: "internship_title"
+    label: "Internship or co-op"
+    points: 45
+    field: "title"
+    any_of: []
+    all_of: []
+    none_of: []
+    regex: '\b(?:intern|interns|internship|internships|co-?op)\b'
 
-  - key: "embedded"
-    label: "Embedded systems role"
-    points: 40
-    field: "text"
+  - key: "internship_employment_type"
+    label: "Typed as an internship by the employer"
+    points: 15
+    field: "employment_type"
     any_of:
-      - "embedded systems"
-      - "embedded software"
-      - "embedded engineer"
-      - "embedded c"
-      - "embedded development"
-      - "embedded"
-      - "bare metal"
-      - "bare-metal"
-      - "microcontroller"
-      - "system on chip"
-      - "system-on-chip"
+      - "internship"
     all_of: []
     none_of: []
     regex: null
 
-  - key: "robotics"
-    label: "Robotics domain"
+  - key: "summer_season"
+    label: "Summer or seasonal cohort"
+    points: 8
+    field: "text"
+    any_of: []
+    all_of: []
+    none_of: []
+    regex: '\b(?:summer|fall|winter|spring)\s*20\d{2}\b'
+
+  - key: "student_or_entry_level"
+    label: "Open to students and entry level"
+    points: 10
+    field: "text"
+    any_of:
+      - "currently enrolled"
+      - "pursuing a bachelor"
+      - "pursuing a degree"
+      - "undergraduate"
+      - "rising junior"
+      - "rising senior"
+      - "entry level"
+      - "entry-level"
+      - "new grad"
+      - "new graduate"
+      - "university program"
+      - "campus hire"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "structured_program"
+    label: "Structured internship or rotational programme"
+    points: 10
+    field: "text"
+    any_of:
+      - "internship program"
+      - "intern program"
+      - "rotational program"
+      - "cohort"
+      - "mentorship"
+      - "mentor"
+    all_of: []
+    none_of: []
+    regex: null
+
+  # ===================================================================================
+  # Software engineering — what the role actually is
+  # ===================================================================================
+
+  - key: "software_engineering_title"
+    label: "Software engineering role"
     points: 30
-    field: "text"
+    field: "title"
+    any_of: []
+    all_of: []
+    none_of: []
+    regex: '\b(?:software\s+(?:engineer|engineering|developer|development)|swe|programmer)\b'
+
+  - key: "engineering_discipline"
+    label: "Engineering discipline named in the body"
+    points: 8
+    field: "description"
     any_of:
-      - "robotics"
-      - "robotic"
-      - "robot"
-      - "autonomous system"
-      - "autonomous vehicle"
-      - "motion planning"
-      - "manipulator"
-      - "mobile robot"
-      - "drone"
-      - "uav"
+      - "software engineer"
+      - "software development"
+      - "software engineering"
+      - "computer science"
     all_of: []
     none_of: []
     regex: null
 
-  - key: "firmware"
-    label: "Firmware engineering"
-    points: 25
+  - key: "backend"
+    label: "Backend engineering"
+    points: 12
     field: "text"
     any_of:
-      - "firmware"
-      - "bootloader"
-      - "device driver"
-      - "board support package"
-      - "low-level driver"
-      - "low level driver"
-      - "register-level"
-      - "peripheral driver"
+      - "backend"
+      - "back-end"
+      - "back end"
+      - "server-side"
+      - "server side"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "frontend"
+    label: "Frontend engineering"
+    points: 10
+    field: "text"
+    any_of:
+      - "frontend"
+      - "front-end"
+      - "front end"
+      - "user interface"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "fullstack"
+    label: "Full-stack engineering"
+    points: 12
+    field: "text"
+    any_of:
+      - "full stack"
+      - "full-stack"
+      - "fullstack"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "distributed_systems"
+    label: "Distributed systems and scale"
+    points: 8
+    field: "text"
+    any_of:
+      - "distributed systems"
+      - "microservices"
+      - "high availability"
+      - "scalability"
+      - "concurrency"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "data_structures_algorithms"
+    label: "Data structures and algorithms"
+    points: 6
+    field: "text"
+    any_of:
+      - "data structures"
+      - "algorithms"
+      - "problem solving"
+      - "problem-solving"
+    all_of: []
+    none_of: []
+    regex: null
+
+  # ===================================================================================
+  # Languages and tooling
+  # ===================================================================================
+
+  - key: "python"
+    label: "Python"
+    points: 10
+    field: "text"
+    any_of:
+      - "python"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "java"
+    label: "Java"
+    points: 10
+    field: "text"
+    any_of: []
+    all_of: []
+    none_of: []
+    regex: '\bjava\b(?!script)'
+
+  - key: "javascript_typescript"
+    label: "JavaScript or TypeScript"
+    points: 10
+    field: "text"
+    any_of:
+      - "javascript"
+      - "typescript"
     all_of: []
     none_of: []
     regex: null
 
   - key: "cpp"
-    label: "C++ required"
-    points: 15
+    label: "C or C++"
+    points: 8
     field: "text"
     any_of:
       - "c++"
-      - "cpp"
-      - "modern c++"
-      - "c++11"
-      - "c++14"
-      - "c++17"
-      - "c++20"
     all_of: []
     none_of: []
     regex: null
 
-  - key: "new_grad"
-    label: "New graduate / entry level"
-    points: 10
+  - key: "golang"
+    label: "Go"
+    points: 8
     field: "text"
     any_of:
-      - "new grad"
-      - "new graduate"
-      - "recent graduate"
-      - "entry level"
-      - "entry-level"
-      - "early career"
-      - "university graduate"
-      - "campus hire"
-      - "grad program"
-      - "0-2 years"
-      - "0-1 years"
-      - "1-2 years"
+      - "golang"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "csharp_dotnet"
+    label: "C# or .NET"
+    points: 6
+    field: "text"
+    any_of:
+      - "c#"
+      - ".net"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "web_frameworks"
+    label: "Common web frameworks"
+    points: 8
+    field: "text"
+    any_of:
+      - "react"
+      - "node.js"
+      - "nodejs"
+      - "django"
+      - "flask"
+      - "spring boot"
+      - "next.js"
+      - "angular"
+      - "vue"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "cloud_platform"
+    label: "Cloud platform"
+    points: 8
+    field: "text"
+    any_of:
+      - "aws"
+      - "amazon web services"
+      - "gcp"
+      - "google cloud"
+      - "azure"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "containers_and_ci"
+    label: "Containers and CI/CD"
+    points: 6
+    field: "text"
+    any_of:
+      - "docker"
+      - "kubernetes"
+      - "ci/cd"
+      - "continuous integration"
+      - "terraform"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "databases"
+    label: "Databases and SQL"
+    points: 6
+    field: "text"
+    any_of:
+      - "sql"
+      - "postgres"
+      - "postgresql"
+      - "mysql"
+      - "mongodb"
+      - "redis"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "version_control_and_testing"
+    label: "Version control and testing practice"
+    points: 4
+    field: "text"
+    any_of:
+      - "git"
+      - "unit test"
+      - "unit testing"
+      - "code review"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "machine_learning"
+    label: "Machine learning or data"
+    points: 6
+    field: "text"
+    any_of:
+      - "machine learning"
+      - "deep learning"
+      - "pytorch"
+      - "tensorflow"
+      - "data science"
+    all_of: []
+    none_of: []
+    regex: null
+
+  # ===================================================================================
+  # Location — Michigan or remote, scored as well as filtered
+  # ===================================================================================
+
+  - key: "location_michigan"
+    label: "In Michigan"
+    points: 25
+    field: "location"
+    any_of:
+      - "michigan"
+      - ", mi"
+      - "ann arbor"
+      - "detroit"
+      - "dearborn"
+      - "grand rapids"
+      - "lansing"
+      - "troy, "
+      - "warren, "
+      - "southfield"
+      - "auburn hills"
     all_of: []
     none_of: []
     regex: null
 
   - key: "remote"
     label: "Fully remote"
-    points: 10
+    points: 25
     field: "work_arrangement"
     any_of:
       - "remote"
@@ -179,363 +453,70 @@ rules:
     none_of: []
     regex: null
 
-  - key: "requires_senior_experience"
-    label: "Requires 8+ years of experience"
-    points: -20
-    field: "text"
-    any_of: []
-    all_of: []
-    none_of: []
-    regex: '\b(?:[89]|[1-9][0-9])\s*\+?\s*(?:years|yrs)\b'
-
-  - key: "sponsorship_unavailable"
-    label: "Visa sponsorship explicitly unavailable"
-    points: -40
-    field: "text"
-    any_of:
-      - "will not sponsor"
-      - "cannot sponsor"
-      - "unable to sponsor"
-      - "do not sponsor"
-      - "does not sponsor"
-      - "not able to sponsor"
-      - "no sponsorship"
-      - "no visa sponsorship"
-      - "sponsorship is not available"
-      - "sponsorship not available"
-      - "not provide sponsorship"
-      - "without sponsorship now or in the future"
-      - "not require sponsorship"
-    all_of: []
-    none_of: []
-    regex: null
-
-  # ---------------------------------------------------------------------------------
-  # Technology fit — positive.
-  # ---------------------------------------------------------------------------------
-
-  - key: "cuda_gpu"
-    label: "CUDA / GPU compute"
-    points: 18
-    field: "text"
-    any_of:
-      - "cuda"
-      - "gpu programming"
-      - "gpgpu"
-      - "tensorrt"
-      - "cudnn"
-      - "opencl"
-      - "jetson"
-      - "gpu kernel"
-      - "parallel compute"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "computer_vision"
-    label: "Computer vision"
-    points: 20
-    field: "text"
-    any_of:
-      - "computer vision"
-      - "opencv"
-      - "image processing"
-      - "object detection"
-      - "visual slam"
-      - "stereo vision"
-      - "camera calibration"
-      - "point cloud"
-      - "depth camera"
-      - "lidar"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "rtos"
-    label: "Real-time operating systems"
-    points: 22
-    field: "text"
-    any_of:
-      - "rtos"
-      - "freertos"
-      - "zephyr"
-      - "threadx"
-      - "vxworks"
-      - "real-time operating system"
-      - "real time operating system"
-      - "hard real-time"
-      - "deterministic scheduling"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "luau_roblox"
-    label: "Roblox / Luau platform"
-    points: 18
-    field: "text"
-    any_of:
-      - "roblox"
-      - "luau"
-      - "roblox studio"
-      - "lua scripting"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "rust"
-    label: "Rust systems programming"
-    points: 14
-    field: "text"
-    any_of: []
-    all_of: []
-    none_of: []
-    regex: '\b(?:rust|rustlang|tokio|no_std|embassy-rs)\b'
-
-  - key: "python"
-    label: "Python"
-    points: 8
-    field: "text"
-    any_of: []
-    all_of: []
-    none_of: []
-    regex: '\b(?:python|pytest|asyncio|numpy)\b'
-
-  - key: "machine_learning"
-    label: "Machine learning"
-    points: 12
-    field: "text"
-    any_of:
-      - "machine learning"
-      - "deep learning"
-      - "neural network"
-      - "pytorch"
-      - "tensorflow"
-      - "reinforcement learning"
-      - "scikit-learn"
-      - "mlops"
-      - "model inference"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "control_systems"
-    label: "Control systems"
-    points: 18
-    field: "text"
-    any_of:
-      - "control systems"
-      - "control theory"
-      - "pid control"
-      - "pid controller"
-      - "kalman filter"
-      - "state estimation"
-      - "sensor fusion"
-      - "model predictive control"
-      - "servo control"
-      - "trajectory tracking"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "pcb_hardware"
-    label: "PCB / hardware design"
-    points: 16
-    field: "text"
-    any_of:
-      - "pcb"
-      - "schematic capture"
-      - "altium"
-      - "kicad"
-      - "hardware design"
-      - "circuit design"
-      - "board bring-up"
-      - "board bring up"
-      - "signal integrity"
-      - "oscilloscope"
-      - "logic analyzer"
-      - "soldering"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "ros_middleware"
-    label: "ROS / robotics middleware"
-    points: 16
-    field: "text"
-    any_of:
-      - "ros2"
-      - "ros 2"
-      - "robot operating system"
-      - "rclcpp"
-      - "rclpy"
-      - "moveit"
-      - "gazebo"
-      - "nav2"
-      - "urdf"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "dsp_signal_processing"
-    label: "Digital signal processing"
-    points: 14
-    field: "text"
-    any_of:
-      - "digital signal processing"
-      - "signal processing"
-      - "dsp"
-      - "fft"
-      - "filter design"
-      - "sensor signal"
-      - "adc"
-      - "dac"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "linux_kernel_drivers"
-    label: "Linux kernel / embedded Linux"
-    points: 15
-    field: "text"
-    any_of:
-      - "linux kernel"
-      - "kernel module"
-      - "kernel driver"
-      - "device tree"
-      - "yocto"
-      - "buildroot"
-      - "u-boot"
-      - "uboot"
-      - "embedded linux"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "simulation_modeling"
-    label: "Simulation and modelling"
-    points: 10
-    field: "text"
-    any_of:
-      - "simulink"
-      - "matlab"
-      - "digital twin"
-      - "physics simulation"
-      - "hardware-in-the-loop"
-      - "hardware in the loop"
-      - "hil testing"
-      - "isaac sim"
-    all_of: []
-    none_of: []
-    regex: null
-
-  # ---------------------------------------------------------------------------------
-  # Fit modifiers — role shape, arrangement, location, compensation.
-  # ---------------------------------------------------------------------------------
-
-  - key: "full_time_role"
-    label: "Full-time employment"
-    points: 5
-    field: "employment_type"
-    any_of:
-      - "full_time"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "internship_opportunity"
-    label: "Internship or co-op"
-    points: 8
-    field: "title"
-    any_of: []
-    all_of: []
-    none_of: []
-    regex: '\b(?:intern|interns|internship|co-?op)\b'
-
-  - key: "new_grad_program_bonus"
-    label: "Structured new-graduate or rotational program"
-    points: 12
-    field: "text"
-    any_of:
-      - "rotational program"
-      - "new grad program"
-      - "new graduate program"
-      - "university program"
-      - "early career program"
-      - "mentorship program"
-      - "engineering residency"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "sponsorship_friendly"
-    label: "Employer sponsors work visas"
-    points: 15
-    field: "text"
-    any_of:
-      - "will sponsor"
-      - "we sponsor"
-      - "sponsorship available"
-      - "sponsorship is available"
-      - "sponsorship provided"
-      - "open to sponsorship"
-      - "visa sponsorship"
-      - "h-1b sponsorship"
-      - "cap-exempt"
-    all_of: []
-    none_of:
-      - "will not sponsor"
-      - "cannot sponsor"
-      - "unable to sponsor"
-      - "does not sponsor"
-      - "do not sponsor"
-      - "no visa sponsorship"
-      - "no sponsorship"
-      - "sponsorship is not available"
-      - "sponsorship not available"
-    regex: null
-
-  - key: "location_michigan"
-    label: "Preferred location — Michigan"
-    points: 12
+  - key: "remote_outside_the_us"
+    label: "Remote, but not in the United States"
+    points: -30
     field: "location"
     any_of:
-      - "michigan"
-      - ", mi"
-      - "ann arbor"
-      - "detroit"
-      - "grand rapids"
-      - "lansing"
-      - "dearborn"
-      - "auburn hills"
-      - "kalamazoo"
-      - "royal oak"
-      - "novi"
-      - "plymouth, mi"
+      - "poland"
+      - "india"
+      - "canada"
+      - "emea"
+      - "apac"
+      - "asia"
+      - "united kingdom"
+      - "germany"
+      - "ireland"
+      - "brazil"
+      - "mexico"
+      - "singapore"
+      - "australia"
+      - "bangalore"
+      - "europe"
+      - "spain"
+      - "portugal"
+      - "france"
+      - "netherlands"
+      - "sweden"
+      - "switzerland"
+      - "japan"
+      - "korea"
+      - "hong kong"
+      - "taiwan"
+      - "philippines"
+      - "vietnam"
+      - "indonesia"
+      - "israel"
+      - "dubai"
+      - "united arab emirates"
+      - "nigeria"
+      - "kenya"
+      - "south africa"
+      - "argentina"
+      - "colombia"
+      - "chile"
+      - "costa rica"
+      - "romania"
+      - "ukraine"
+      - "türkiye"
+      - "turkey"
     all_of: []
     none_of: []
     regex: null
 
-  - key: "salary_six_figure"
-    label: "Posted compensation at or above $100,000"
-    points: 12
-    field: "description"
-    any_of: []
-    all_of: []
-    none_of: []
-    regex: '\$\s?(?:1[0-9]{2}|[2-9][0-9]{2})[,.]?[0-9]{3}'
-
-  - key: "salary_below_floor"
-    label: "Posted compensation below the $60,000 floor"
+  - key: "onsite_far_from_michigan"
+    label: "On-site, and not in Michigan"
     points: -15
-    field: "description"
-    any_of: []
+    field: "work_arrangement"
+    any_of:
+      - "onsite"
     all_of: []
     none_of: []
-    regex: '\$\s?(?:[1-5][0-9]|[1-9])[,.]?[0-9]{3}(?![0-9])'
+    regex: null
 
   - key: "hybrid_arrangement"
     label: "Hybrid arrangement"
-    points: -8
+    points: -5
     field: "work_arrangement"
     any_of:
       - "hybrid"
@@ -543,64 +524,80 @@ rules:
     none_of: []
     regex: null
 
-  - key: "onsite_relocation_required"
-    label: "Mandatory relocation or full-time on-site"
-    points: -12
-    field: "text"
-    any_of:
-      - "relocation required"
-      - "must relocate"
-      - "required to relocate"
-      - "fully onsite"
-      - "fully on-site"
-      - "100% onsite"
-      - "100% on-site"
-      - "5 days a week in office"
-      - "five days a week in the office"
-      - "in-office 5 days"
+  # ===================================================================================
+  # Hard negatives — the reasons an internship search must skip a posting
+  # ===================================================================================
+
+  - key: "not_an_internship"
+    label: "Not an internship or co-op"
+    points: -60
+    field: "title"
+    any_of: []
     all_of: []
-    none_of: []
+    none_of:
+      - "intern"
+      - "co-op"
+      - "coop"
     regex: null
 
   - key: "senior_title_mismatch"
-    label: "Seniority above new-graduate level"
-    points: -25
+    label: "Seniority above intern level"
+    points: -35
     field: "title"
+    any_of: []
+    all_of: []
+    none_of:
+      - "intern"
+    regex: '\b(?:senior|sr\.?|staff|principal|lead|manager|director|head\s+of|architect|vp|president)\b'
+
+  - key: "requires_professional_experience"
+    label: "Requires years of professional experience"
+    points: -30
+    field: "text"
+    any_of: []
+    all_of: []
+    none_of: []
+    regex: '\b(?:[3-9]|1[0-9])\+?\s*(?:\+|or\s+more)?\s*years?\b'
+
+  - key: "phd_required"
+    label: "Doctorate required"
+    points: -25
+    field: "text"
     any_of:
-      - "senior"
-      - "sr."
-      - "sr "
-      - "staff "
-      - "principal"
-      - "lead "
-      - " lead"
-      - "director"
-      - "head of"
-      - "vp of"
-      - "vice president"
-      - "architect"
-      - "manager"
-      - "chief"
+      - "phd required"
+      - "ph.d. required"
+      - "doctorate required"
+      - "must have a phd"
     all_of: []
     none_of: []
     regex: null
 
-  - key: "startup_too_small"
-    label: "Very early-stage or sub-scale startup"
-    points: -10
+  - key: "security_clearance_required"
+    label: "Active security clearance required"
+    points: -35
     field: "text"
     any_of:
-      - "pre-seed"
-      - "pre seed"
-      - "seed stage"
-      - "seed-stage"
-      - "series a"
-      - "founding engineer"
-      - "first engineering hire"
-      - "stealth startup"
-      - "stealth mode"
-      - "team of 3"
-      - "fewer than 10 employees"
+      - "security clearance"
+      - "ts/sci"
+      - "top secret"
+      - "secret clearance"
+      - "polygraph"
+    all_of: []
+    none_of: []
+    regex: null
+
+  - key: "unpaid_or_commission"
+    label: "Unpaid, equity-only, or commission-only"
+    points: -50
+    field: "text"
+    any_of:
+      - "unpaid internship"
+      - "unpaid"
+      - "equity only"
+      - "equity-only"
+      - "commission only"
+      - "commission-only"
+      - "for credit only"
     all_of: []
     none_of: []
     regex: null
@@ -611,95 +608,68 @@ rules:
     field: "text"
     any_of:
       - "staffing agency"
-      - "staffing firm"
-      - "recruiting firm"
-      - "third-party recruiter"
-      - "our client is seeking"
-      - "our client, a"
+      - "recruiting agency"
+      - "our client is"
+      - "on behalf of our client"
+      - "c2c"
       - "corp to corp"
-      - "corp-to-corp"
-      - "c2c only"
-      - "w2 contract only"
     all_of: []
     none_of: []
     regex: null
 
-  # ---------------------------------------------------------------------------------
-  # Hard negatives — blockers that should keep the total well below the apply threshold.
-  # ---------------------------------------------------------------------------------
+  - key: "not_engineering"
+    label: "Not a software engineering role"
+    points: -25
+    field: "title"
+    any_of: []
+    all_of: []
+    none_of:
+      - "engineer"
+      - "developer"
+      - "software"
+    regex: '\b(?:sales|account\s+executive|recruiter|marketing|customer\s+success|business\s+development|operations|finance|accounting|paralegal|nurse|driver|technician)\b'
 
-  - key: "security_clearance_required"
-    label: "Active security clearance required"
-    points: -35
+  # ===================================================================================
+  # Weak positives kept for ranking, not for gating
+  # ===================================================================================
+
+  - key: "sponsorship_unavailable"
+    label: "Visa sponsorship explicitly unavailable"
+    points: -2
     field: "text"
     any_of:
-      - "security clearance"
-      - "active clearance"
-      - "secret clearance"
-      - "top secret"
-      - "ts/sci"
-      - "dod clearance"
-      - "polygraph"
-      - "public trust clearance"
-      - "ability to obtain a clearance"
+      - "cannot sponsor"
+      - "unable to sponsor"
+      - "not able to sponsor"
+      - "no sponsorship"
+      - "without sponsorship"
+      - "do not sponsor"
+      - "does not sponsor"
     all_of: []
     none_of: []
     regex: null
 
-  - key: "phd_required"
-    label: "Doctorate required"
-    points: -30
+  - key: "sponsorship_friendly"
+    label: "Employer sponsors work visas"
+    points: 3
     field: "text"
     any_of:
-      - "phd required"
-      - "ph.d. required"
-      - "phd is required"
-      - "requires a phd"
-      - "must have a phd"
-      - "doctorate required"
-      - "doctoral degree required"
-      - "phd in"
+      - "will sponsor"
+      - "sponsorship available"
+      - "visa sponsorship provided"
     all_of: []
     none_of: []
     regex: null
 
-  - key: "defense_contractor"
-    label: "Defense / weapons contractor"
-    points: -20
+  - key: "large_employer_program"
+    label: "Named early-career programme"
+    points: 5
     field: "text"
     any_of:
-      - "defense contractor"
-      - "defence contractor"
-      - "weapons system"
-      - "munitions"
-      - "missile"
-      - "itar"
-      - "lockheed"
-      - "raytheon"
-      - "northrop"
-      - "general dynamics"
-      - "bae systems"
-      - "l3harris"
-      - "anduril"
-    all_of: []
-    none_of: []
-    regex: null
-
-  - key: "unpaid_or_commission"
-    label: "Unpaid, equity-only, or commission-only"
-    points: -50
-    field: "text"
-    any_of:
-      - "unpaid"
-      - "unpaid internship"
-      - "no salary"
-      - "commission only"
-      - "commission-only"
-      - "equity only"
-      - "equity-only"
-      - "volunteer position"
-      - "profit share only"
-      - "for exposure"
+      - "early career"
+      - "early-career"
+      - "university recruiting"
+      - "campus recruiting"
     all_of: []
     none_of: []
     regex: null

@@ -39,28 +39,32 @@ from app.jobs.base import RawPosting
 from app.models.enums import ATSProviderName, EmploymentType, WorkArrangement
 from app.models.user import UserPreferences
 
-#: The posting from the pack's own worked example: remote, new-grad, embedded robotics
-#: firmware in C++, asking for 8+ years, and unable to sponsor.
+#: The posting from the pack's own worked example: a fully remote software engineering
+#: internship for summer, in Python and React on AWS, from an employer that cannot sponsor.
+#:
+#: The employer's inability to sponsor is deliberately still in the text. The pack is
+#: written for a US citizen, so it carries no signal and must contribute nothing — a rule
+#: that fired here would be subtracting points for a fact that does not affect this
+#: candidate at all.
 CANONICAL_DESCRIPTION = (
-    "We are hiring a new grad engineer to work on embedded systems for our robotics "
-    "platform. You will write firmware and low-level drivers in modern C++ for our "
-    "autonomous mobile robot fleet. Requires 8+ years of relevant experience. "
-    "We cannot sponsor visas for this position."
+    "Join our summer 2027 internship program. You will write Python and React, deploying "
+    "services on AWS alongside a mentor. We are unable to sponsor visas for this role."
 )
 
 #: The exact components the header says must fire, and their points.
 CANONICAL_COMPONENTS: dict[str, int] = {
-    "embedded": 40,
-    "robotics": 30,
-    "firmware": 25,
-    "cpp": 15,
-    "new_grad": 10,
-    "remote": 10,
-    "requires_senior_experience": -20,
-    "sponsorship_unavailable": -40,
+    "internship_title": 45,
+    "software_engineering_title": 30,
+    "remote": 25,
+    "structured_program": 10,
+    "python": 10,
+    "summer_season": 8,
+    "web_frameworks": 8,
+    "cloud_platform": 8,
+    "sponsorship_unavailable": -2,
 }
 
-CANONICAL_TOTAL = 70
+CANONICAL_TOTAL = 142
 
 
 def _posting(**overrides) -> RawPosting:
@@ -69,13 +73,14 @@ def _posting(**overrides) -> RawPosting:
         "provider": ATSProviderName.GREENHOUSE,
         "external_id": "canonical-1",
         "url": "https://boards.greenhouse.io/acme/jobs/1",
-        "title": "Embedded Robotics Firmware Engineer",
-        "company_name": "Acme Robotics",
+        "title": "Software Engineer Intern",
+        "company_name": "Acme Software",
         "description": CANONICAL_DESCRIPTION,
         "location": "Remote — US",
         "work_arrangement": WorkArrangement.REMOTE,
         # Deliberately UNKNOWN: the worked example states no employment type, and
-        # declaring one fires the extra `full_time_role` rule (+5) that is not in it.
+        # declaring `internship` fires `internship_employment_type` (+15), which is a real
+        # rule but not one of the seven the header enumerates.
         "employment_type": EmploymentType.UNKNOWN,
     }
     values.update(overrides)
@@ -93,8 +98,13 @@ def scorer() -> Scorer:
 # ======================================================================================
 
 
-def test_the_canonical_posting_totals_seventy(scorer) -> None:
-    """The header of ``scoring_rules.yaml`` says this pack must reproduce 70. It must."""
+def test_the_canonical_posting_totals_its_documented_figure(scorer) -> None:
+    """The header of ``scoring_rules.yaml`` documents a total. The pack must reproduce it.
+
+    The number itself is not the point — keeping the file's own worked example honest is.
+    A pack whose documentation describes a different score than the code produces is worse
+    than an undocumented one, because the reader has no reason to doubt it.
+    """
     result = scorer.score_rules(_posting())
     assert result.total == CANONICAL_TOTAL
 
@@ -117,17 +127,17 @@ def test_the_canonical_total_equals_the_sum_of_its_components(scorer) -> None:
 def test_cannot_sponsor_is_a_penalty_not_a_veto_for_a_candidate_who_needs_none(
     scorer,
 ) -> None:
-    """ "We cannot sponsor" costs 40 points but does not veto — and that is correct.
+    """ "We cannot sponsor" is scored but never vetoes for someone who needs no sponsorship.
 
-    A posting refusing to sponsor is irrelevant to an applicant who needs no sponsorship, so
-    treating it as a hard negative would silently delete valid jobs from their feed. The
-    worked example depends on exactly this: the penalty applies, the veto does not, and the
-    total is 70 rather than a floored score.
+    A posting refusing to sponsor is irrelevant to such an applicant, so treating it as a
+    hard negative would silently delete valid jobs from their feed. The points are near
+    zero for the same reason — this pack is written for a US citizen, and the rule survives
+    mainly so the veto path below stays reachable.
     """
     result = scorer.score_rules(_posting())
     fired = {c.rule: c.points for c in result.matched_components}
 
-    assert fired["sponsorship_unavailable"] == -40
+    assert fired["sponsorship_unavailable"] == -2
     assert result.has_hard_negative is False
     assert result.total == CANONICAL_TOTAL
 
@@ -298,7 +308,7 @@ async def test_use_llm_false_reproduces_the_rule_total(scorer) -> None:
 
 def test_a_blocked_company_is_a_hard_negative() -> None:
     """A user's block list is a hard negative, not a soft preference."""
-    prefs = UserPreferences(blocked_companies=["Acme Robotics"])
+    prefs = UserPreferences(blocked_companies=["Acme Software"])
     result = Scorer(prefs=prefs).score_rules(_posting())
     assert result.has_hard_negative is True
 

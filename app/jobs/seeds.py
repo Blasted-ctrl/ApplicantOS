@@ -87,6 +87,7 @@ logger = structlog.get_logger(__name__)
 #: publishes as ``andurilindustries``, DoorDash as ``doordashusa``, Sourcegraph as
 #: ``sourcegraph91``. Every entry here was confirmed by request, never inferred.
 _GREENHOUSE_BOARDS: Final[tuple[str, ...]] = (
+    "maymobility",
     "affirm",
     "airbnb",
     "airtable",
@@ -97,6 +98,7 @@ _GREENHOUSE_BOARDS: Final[tuple[str, ...]] = (
     "betterment",
     "brex",
     "carta",
+    "censys",
     "checkr",
     "chime",
     "clickhouse",
@@ -131,6 +133,7 @@ _GREENHOUSE_BOARDS: Final[tuple[str, ...]] = (
     "sourcegraph91",
     "squarespace",
     "stripe",
+    "stockx",
     "temporaltechnologies",
     "twilio",
     "vercel",

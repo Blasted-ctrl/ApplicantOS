@@ -161,14 +161,23 @@ class RecordingInline:
 
 
 @pytest.fixture(autouse=True)
-def _clean_dispatch_state() -> Iterator[None]:
-    """Reset every process-wide cache this subsystem keeps, on both sides of each test.
+def _clean_dispatch_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Reset every process-wide cache this subsystem keeps, and cut the broker off entirely.
 
-    Three of them are global by design and all three leak across tests otherwise: the
-    memoised Celery client, the liveness cache (which holds an answer for
-    ``WORKER_PROBE_TTL_SECONDS`` and would let one test's "no worker" decide the next test's
-    routing), and the inline executor's daemon threads. Cleaning up *before* as well as after
-    means a failure in one test cannot cascade into a false failure in the next.
+    Three caches are global by design and all three leak across tests otherwise: the memoised
+    Celery client, the liveness cache (which holds an answer for ``WORKER_PROBE_TTL_SECONDS``
+    and would let one test's "no worker" decide the next test's routing), and the inline
+    executor's daemon threads. Cleaning up *before* as well as after means a failure in one
+    test cannot cascade into a false failure in the next.
+
+    **The default client is ``None``, and that is what makes this file deterministic.** The
+    real :func:`_celery_client` builds a client for ``redis://localhost:6379/0`` — the default
+    Redis port, which on a developer machine is very often answered by something: another
+    project's container, a leftover from a tutorial. ``worker_serves`` would then issue a
+    genuine ``inspect().active_queues()`` broadcast against that stranger and route on
+    whatever came back within 0.75 seconds, so the same test passed or failed depending on
+    how quickly an unrelated container replied. Every test that wants a broker installs its
+    own fake over this one.
     """
     from app.workers.inline import reset_executor_state, shutdown_executor
 
@@ -176,11 +185,42 @@ def _clean_dispatch_state() -> Iterator[None]:
         reset_dispatcher()
         reset_worker_probe()
         shutdown_executor()
+        _await_quiescence()
         reset_executor_state()
 
     _reset()
+    monkeypatch.setattr("app.api.tasks._celery_client", lambda: None)
     yield
     _reset()
+
+
+def _await_quiescence(timeout: float = _THREAD_WAIT_SECONDS) -> None:
+    """Block until no inline drain thread from a previous test is still alive.
+
+    ``shutdown_executor`` asks the threads to stop and joins them, but a thread part-way
+    through ``task.apply()`` finishes that job first — so it can outlive the test that
+    created it and go on touching the module globals the next test is about to assert on.
+    Every one of these tests passes in its own process and the file as a whole failed on a
+    *different* test each run, which is that carry-over and nothing else.
+
+    Waiting on the thread names rather than on a handle covers the executors tests build
+    directly, which the process-wide shutdown never sees.
+
+    Args:
+        timeout: Seconds to wait before giving up and letting the test proceed.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        alive = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name.startswith("applicantos-inline-") and thread.is_alive()
+        ]
+        if not alive:
+            return
+        time.sleep(0.02)
 
 
 @pytest.fixture
@@ -345,8 +385,11 @@ async def test_a_worker_on_another_queue_does_not_claim_this_one(
     client = FakeCeleryClient(served={QUEUE_DISCOVERY})
     monkeypatch.setattr("app.api.tasks._celery_client", lambda: client)
 
-    to_worker = await dispatch(TASK_JOBS_POLL_ALL)
+    # The unserved queue is asked about *first*, on a cold cache. Asking it second would let
+    # a probe that answers "some worker replied" pass, because the correct per-queue answer
+    # would already be memoised from the discovery probe.
     to_inline = await dispatch(TASK_APPLY_SUBMIT, "application-id")
+    to_worker = await dispatch(TASK_JOBS_POLL_ALL)
 
     assert to_worker.mode == "worker"
     assert to_inline.mode == "inline"
@@ -362,14 +405,19 @@ async def test_worker_liveness_answer_is_cached_across_dispatches(
 
     The probe sits on the way *in* to a request the user is watching. Workers do not appear
     and vanish between two clicks, so the answer is trusted for ``WORKER_PROBE_TTL_SECONDS``.
+
+    The first question is deliberately about the queue nobody serves, and asked cold. That is
+    the only ordering that can tell "does a worker consume *this* queue" apart from "did any
+    worker reply at all" — ask the served queue first and the correct per-queue answer is
+    already in the cache, which would hide a probe that collapsed the two questions into one.
     """
     monkeypatch.setattr(settings, "task_execution", "auto")
     client = FakeCeleryClient(served={QUEUE_DISCOVERY})
     monkeypatch.setattr("app.api.tasks._celery_client", lambda: client)
 
+    assert await worker_serves(QUEUE_APPLY) is False, "a worker elsewhere claimed this queue"
     assert await worker_serves(QUEUE_DISCOVERY) is True
     assert await worker_serves(QUEUE_DISCOVERY) is True
-    assert await worker_serves(QUEUE_APPLY) is False
     assert client.probes == 1, "re-probed the broker inside the TTL"
 
     reset_worker_probe()

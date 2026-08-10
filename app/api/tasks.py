@@ -536,7 +536,7 @@ async def dispatch(
     # answer is "this may or may not have started", which is reported as degraded.
     except TimeoutError:
         logger.warning("api.dispatch_timed_out", task=task, queue=target_queue)
-        return _run_here(task, target_queue, args, kwargs)
+        return Dispatch(task=task, queue=target_queue, mode="none", reason=_REASON_AMBIGUOUS)
     except Exception as exc:
         logger.warning(
             "api.dispatch_failed",

@@ -46,6 +46,7 @@ from __future__ import annotations
 from datetime import timedelta
 from threading import Event
 from typing import Any, Final
+from uuid import uuid4
 
 import structlog
 from celery import Celery
@@ -76,6 +77,10 @@ from app.api.tasks import (
 )
 from app.config.settings import get_settings
 from app.workers import shutdown_loop
+
+#: Prefix marking a task id that was run in-process rather than by a broker. Greppable on
+#: purpose: an id in a log that no Celery worker ever saw should say so.
+_INLINE_TASK_ID_PREFIX: Final[str] = "inline-"
 
 #: Set once this process is a running Celery worker.
 #:
@@ -316,8 +321,16 @@ def enqueue(task: str, *args: Any, queue: str | None = None, **kwargs: Any) -> s
         from app.workers.inline import submit_inline
 
         if submit_inline(task, tuple(args), dict(kwargs)):
-            logger.debug("workers.enqueued_inline", task=task, queue=target)
-            return None
+            # A synthetic id, not ``None``. Every caller reads this return as
+            # ``is not None`` meaning "accepted" — ``apply_jobs`` sets
+            # ``queued_for_submit`` from it, ``poll_jobs`` counts what it fanned out, and
+            # ``sync_status`` increments a counter. Returning ``None`` on the *success*
+            # path would have made an inline run report that it queued nothing while it
+            # was in fact running everything, so the session counters would read zero
+            # through a working pipeline.
+            identifier = f"{_INLINE_TASK_ID_PREFIX}{uuid4()}"
+            logger.debug("workers.enqueued_inline", task=task, queue=target, task_id=identifier)
+            return identifier
         logger.warning("workers.inline_queue_full", task=task, queue=target)
         return None
 
@@ -332,9 +345,9 @@ def enqueue(task: str, *args: Any, queue: str | None = None, **kwargs: Any) -> s
             error_type=type(exc).__name__,
         )
         return None
-    identifier = getattr(result, "id", None)
-    logger.debug("workers.enqueued", task=task, queue=target, task_id=str(identifier))
-    return str(identifier) if identifier is not None else None
+    broker_id = getattr(result, "id", None)
+    logger.debug("workers.enqueued", task=task, queue=target, task_id=str(broker_id))
+    return str(broker_id) if broker_id is not None else None
 
 
 def _executing_inline() -> bool:
@@ -398,7 +411,16 @@ def _reset_inherited_resources(**_kwargs: Any) -> None:
 
     ``dispose(close=False)`` replaces the pool **without** closing the underlying sockets:
     they still belong to the parent, and closing them here would break it.
+
+    It also re-sets :data:`_IN_CELERY_WORKER`, and that line is load-bearing. ``worker_ready``
+    fires in the **parent** only, while tasks execute in these children — so under the
+    default prefork pool the flag was set in the one process that never runs a task and
+    unset in every process that does. :func:`_executing_inline` would then have concluded
+    "not a worker" inside a real worker, and every fan-out would have run in the child that
+    made it: ``apply.submit`` executing inside ``worker-discovery`` instead of the apply
+    queue, which destroys the per-queue isolation the deployment is built on.
     """
+    _IN_CELERY_WORKER.set()
     from app.database.session import engine
 
     try:

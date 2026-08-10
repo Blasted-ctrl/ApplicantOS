@@ -175,6 +175,16 @@ _REASON_NO_BROKER: Final[str] = (
     "yet. Start the worker (or Redis) and try again."
 )
 
+#: Reason reported when a publish was attempted and its outcome is unknown — a timeout, or a
+#: transport error after the bytes may have left. Deliberately does **not** promise the work
+#: did not start: it may be sitting in the broker waiting for a worker, and re-running it
+#: here would be the second execution of a task that is already queued.
+_REASON_AMBIGUOUS: Final[str] = (
+    "The background worker's broker did not confirm this work. It may be queued and waiting "
+    "for a worker to start, so it was not re-run here. Start the worker, or check the run "
+    "before triggering it again."
+)
+
 #: Reason reported when the in-process executor is saturated. Distinct from a broker
 #: failure: the system is working, it is simply already busy.
 _REASON_INLINE_FULL: Final[str] = (
@@ -513,11 +523,20 @@ async def dispatch(
             asyncio.to_thread(_send, client, task, target_queue, args, kwargs),
             timeout=BROKER_TIMEOUT_SECONDS,
         )
+    # **Never fall back to inline after attempting a publish.**
+    #
+    # A timeout does not mean the message was rejected — it means the answer did not arrive
+    # in time. The publish may already have landed in the broker, where a worker will pick it
+    # up whenever one appears. Running it here as well would be two executions of one task,
+    # and for `apply.submit` that is an application sent twice: golden rule #1, defeated by
+    # the very mechanism meant to make the app more reliable.
+    #
+    # So the inline decision is made strictly *before* any publish (no client, or no worker
+    # consuming the queue), never after one. Once bytes may be on the wire the only honest
+    # answer is "this may or may not have started", which is reported as degraded.
     except TimeoutError:
         logger.warning("api.dispatch_timed_out", task=task, queue=target_queue)
-        if mode == "auto":
-            return _run_here(task, target_queue, args, kwargs)
-        return Dispatch(task=task, queue=target_queue, mode="none", reason=_REASON_NO_BROKER)
+        return _run_here(task, target_queue, args, kwargs)
     except Exception as exc:
         logger.warning(
             "api.dispatch_failed",
@@ -526,9 +545,7 @@ async def dispatch(
             error_type=type(exc).__name__,
             error=str(exc),
         )
-        if mode == "auto":
-            return _run_here(task, target_queue, args, kwargs)
-        return Dispatch(task=task, queue=target_queue, mode="none", reason=_REASON_NO_BROKER)
+        return Dispatch(task=task, queue=target_queue, mode="none", reason=_REASON_AMBIGUOUS)
 
     logger.info("api.dispatched", task=task, queue=target_queue, task_id=task_id)
     return Dispatch(task=task, queue=target_queue, mode="worker", task_id=task_id)

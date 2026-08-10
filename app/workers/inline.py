@@ -52,7 +52,13 @@ import structlog
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.config.settings import Settings
 
-__all__ = ["InlineExecutor", "get_executor", "shutdown_executor", "submit_inline"]
+__all__ = [
+    "InlineExecutor",
+    "get_executor",
+    "reset_executor_state",
+    "shutdown_executor",
+    "submit_inline",
+]
 
 logger = structlog.get_logger(__name__)
 
@@ -136,8 +142,10 @@ class InlineExecutor:
         """Stop draining and wait briefly for in-flight work.
 
         Args:
-            timeout: Total seconds to wait for threads to finish their current job.
+            timeout: Total seconds to wait, shared across threads.
         """
+        import time
+
         with self._lock:
             threads, self._threads = self._threads, []
         if not threads:
@@ -149,9 +157,13 @@ class InlineExecutor:
             with contextlib.suppress(queue.Full):
                 self._queue.put_nowait(_STOP)
 
-        deadline = timeout / max(1, len(threads))
+        # The budget is shared and spent as it elapses, not divided up front. Dividing gave
+        # each thread `timeout / len(threads)` whether or not the others needed any of it —
+        # so the single thread that was mid-submission got a quarter of the grace period
+        # while three idle threads exited instantly and wasted the rest of theirs.
+        deadline = time.monotonic() + timeout
         for thread in threads:
-            thread.join(timeout=deadline)
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
         pending = self._queue.qsize()
         logger.info(
@@ -318,6 +330,10 @@ _executor: InlineExecutor | None = None
 #: Guards :data:`_executor` against two concurrent requests each building a pool.
 _executor_lock: Final[threading.Lock] = threading.Lock()
 
+#: Latched by :func:`shutdown_executor` so a late submission cannot rebuild the pool while
+#: the application is stopping.
+_shutting_down: Final[threading.Event] = threading.Event()
+
 
 def get_executor(settings: Settings | None = None) -> InlineExecutor:
     """Return the process-wide inline executor, creating it on first call.
@@ -328,8 +344,16 @@ def get_executor(settings: Settings | None = None) -> InlineExecutor:
 
     Returns:
         The started executor.
+
+    Raises:
+        RuntimeError: If the application is shutting down. Callers treat this the same as a
+            full queue — the work did not start, and saying so is better than starting
+            threads that outlive the engine they need.
     """
     global _executor
+
+    if _shutting_down.is_set():
+        raise RuntimeError("the inline executor is shutting down")
 
     with _executor_lock:
         if _executor is None:
@@ -384,9 +408,15 @@ def submit_inline(task: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> b
         kwargs: Keyword arguments.
 
     Returns:
-        Whether it was queued.
+        Whether it was queued. ``False`` when the pool is saturated or the application is
+        stopping — both mean "this did not start", which the caller reports rather than
+        letting the work vanish.
     """
-    return get_executor().submit(task, args, kwargs)
+    try:
+        return get_executor().submit(task, args, kwargs)
+    except RuntimeError:
+        logger.warning("inline.rejected_while_stopping", task=task)
+        return False
 
 
 def shutdown_executor() -> None:
@@ -395,10 +425,23 @@ def shutdown_executor() -> None:
     Called from the application lifespan alongside
     :func:`~app.api.tasks.reset_dispatcher`, so a desktop app that is closing does not leave
     daemon threads mid-submission.
+
+    :data:`_shutting_down` is latched *before* the (slow) join, and :func:`get_executor`
+    refuses once it is set. Without that latch the ten-second join is a window in which a
+    request still in flight calls :func:`submit_inline`, finds ``_executor is None``, and
+    builds a fresh pool with fresh threads — resurrecting the executor moments after the
+    application said it had stopped, and leaving those threads running against an engine the
+    lifespan is about to dispose.
     """
     global _executor
 
+    _shutting_down.set()
     with _executor_lock:
         executor, _executor = _executor, None
     if executor is not None:
         executor.shutdown()
+
+
+def reset_executor_state() -> None:
+    """Allow a new executor after a shutdown. For tests, and for an app that restarts in-process."""
+    _shutting_down.clear()

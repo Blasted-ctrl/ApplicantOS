@@ -6,11 +6,13 @@
  * directly under the Rust shell in development. It does four things, and each exists because of
  * a specific way the naive version fails.
  *
- * **Health-check before spawning.** A second uvicorn on a second port opens the same SQLite file
- * as the first, and on Windows the second one loses. `docs/CONTRACTS.md` §18 names an orphaned
- * uvicorn holding that file as this architecture's most common failure, and re-running
- * `npm run dev` in a second terminal is the easiest way to create one. So: probe first, adopt
- * what is already there, and only spawn when nothing answers.
+ * **Health-check before spawning — but only against a backend of ours.** A second uvicorn on a
+ * second port opens the same SQLite file as the first, and on Windows the second one loses.
+ * `docs/CONTRACTS.md` §18 names an orphaned uvicorn holding that file as this architecture's
+ * most common failure, and re-running `npm run dev` in a second terminal is the easiest way to
+ * create one. So a run adopts the backend a previous run *recorded* rather than whatever
+ * happens to answer on port 8000 — see {@link adoptablePort}. Adopting a stranger is how you
+ * end up editing one codebase and running another.
  *
  * **The handoff file.** The Rust shell has no way to learn a port chosen by a Node script in
  * another process, and hardcoding one would defeat the runtime port selection in
@@ -32,7 +34,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
@@ -330,16 +332,53 @@ function startFrontend() {
   });
 }
 
+/**
+ * The port this launcher may adopt, or `null` when it must start its own backend.
+ *
+ * An explicit `APPLICANTOS_BACKEND_PORT` is a deliberate instruction and wins. Otherwise the
+ * only adoptable backend is one a previous run recorded in the handoff file — see the note in
+ * {@link main} for why a bare probe of {@link PREFERRED_PORT} is not good enough.
+ *
+ * @returns {number | null} The port to health-check, or `null`.
+ */
+function adoptablePort() {
+  const configured = Number.parseInt(process.env['APPLICANTOS_BACKEND_PORT'] ?? '', 10);
+  if (Number.isInteger(configured)) return configured;
+
+  if (!existsSync(HANDOFF_FILE)) return null;
+  try {
+    const recorded = JSON.parse(readFileSync(HANDOFF_FILE, 'utf8'));
+    return Number.isInteger(recorded?.port) ? recorded.port : null;
+  } catch {
+    return null; // a truncated or hand-edited file is not a record of anything
+  }
+}
+
 async function main() {
   process.on('SIGINT', () => shutdown(0));
   process.on('SIGTERM', () => shutdown(0));
 
-  const configured = Number.parseInt(process.env['APPLICANTOS_BACKEND_PORT'] ?? '', 10);
-  const existingPort = Number.isInteger(configured) ? configured : PREFERRED_PORT;
+  // Adopt a backend only when we can point at the record of having started it.
+  //
+  // This used to probe PREFERRED_PORT unconditionally and adopt anything that answered
+  // `/health`. That is fine right up until something *else* is on 8000 — most often an
+  // orphaned uvicorn from a hard-killed session, running the code as it was that day. The
+  // launcher would then hand the frontend a stale build over a stale database, and the
+  // symptom is the worst kind: the app works, it is simply not the app you are editing.
+  // `/health` cannot tell them apart either, and rightly does not report the data directory
+  // it opened.
+  //
+  // So the rule is "adopt what I recorded, never a stranger". The handoff file is written on
+  // start and removed on exit, which is exactly the record of "a dev backend of mine is
+  // live"; an explicit APPLICANTOS_BACKEND_PORT still wins, because that is someone saying
+  // so on purpose. Anything else gets a fresh backend on a free port, and `findPort` skips
+  // the occupied one on its own.
+  const adoptable = adoptablePort();
 
-  let port = existingPort;
-  if (await isHealthy(existingPort, ADOPT_TIMEOUT_MS)) {
-    log(colour.yellow(`reusing the backend already running on ${HOST}:${existingPort}`));
+  let port;
+  if (adoptable !== null && (await isHealthy(adoptable, ADOPT_TIMEOUT_MS))) {
+    port = adoptable;
+    log(colour.yellow(`reusing the backend already running on ${HOST}:${adoptable}`));
   } else {
     port = await findPort();
     await startBackend(port);

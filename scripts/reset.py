@@ -57,6 +57,61 @@ _DERIVED_TABLES: Final[tuple[str, ...]] = (
 #: rule #6) and screenshots belong to applications that are about to stop existing.
 _ARTEFACT_DIRS: Final[tuple[str, ...]] = ("storage", "screenshots", "browser", "cache")
 
+#: Files under ``data_path`` that hold derived state of their own.
+#:
+#: The vector store is the one that matters and the one it is easiest to forget: it is a
+#: *separate* SQLite file, so deleting the database leaves every embedding behind. A "clean"
+#: install would then retrieve chunks belonging to the seeded fictional engineer against a
+#: facts table that no longer contains them — someone else's history, surfacing in the one
+#: place the product promises never to invent anything (golden rule #7).
+_DERIVED_FILES: Final[tuple[str, ...]] = ("vectors.db",)
+
+#: Suffixes SQLite writes alongside a database in WAL mode. Leaving them behind is not
+#: cosmetic: a ``-wal`` still holds committed pages, so a recreated database can come back
+#: carrying rows this script was run to destroy.
+_SQLITE_SIDECARS: Final[tuple[str, ...]] = ("-wal", "-shm", "-journal")
+
+
+def _with_sidecars(path: Path) -> tuple[Path, ...]:
+    """Return every file that exists for the database at *path*, sidecars included.
+
+    A sidecar is checked independently of the database itself, because the interesting case
+    is precisely the one where they disagree: an interrupted run can delete the ``.db`` and
+    leave the ``-wal`` holding committed pages, and a guard of "does the database exist"
+    would then skip the file that still has the data in it.
+
+    Args:
+        path: A SQLite database file, which need not exist.
+
+    Returns:
+        The subset of the database and its sidecars that are actually on disk.
+    """
+    candidates = (path, *(path.with_name(path.name + suffix) for suffix in _SQLITE_SIDECARS))
+    return tuple(candidate for candidate in candidates if candidate.exists())
+
+
+def _remove(path: Path) -> bool:
+    """Delete one file, reporting a lock rather than raising it.
+
+    A locked file is the *ordinary* failure here, not an exceptional one: on Windows the app
+    keeps its SQLite handles open, so running this with the backend still up is the first
+    thing anybody does. A traceback ending in ``WinError 32`` buries that, and — worse — it
+    aborts partway, leaving a half-wiped install that looks reset and is not.
+
+    Args:
+        path: The file to delete.
+
+    Returns:
+        ``True`` if it is gone, ``False`` if something still holds it.
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except PermissionError:
+        print(f"  STILL IN USE  {path}", file=sys.stderr)
+        return False
+    print(f"Removed {path}")
+    return True
+
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     """Parse the command line.
@@ -131,9 +186,11 @@ def main(argv: list[str] | None = None) -> int:
         argv: Command-line arguments, or ``None`` to read :data:`sys.argv`.
 
     Returns:
-        ``0`` on success, ``1`` when the install is not SQLite, ``2`` without ``--yes``.
+        ``0`` on success, ``1`` when the install is not SQLite, ``2`` without ``--yes``, and
+        ``3`` when something still holds a file open and the wipe is therefore incomplete.
     """
     args = _parse_args(argv)
+    locked = False
 
     database = _database_file()
     if database is None:
@@ -159,6 +216,9 @@ def main(argv: list[str] | None = None) -> int:
         target = data_path / name
         if target.exists():
             print(f"  {target}")
+    for name in _DERIVED_FILES:
+        for target in _with_sidecars(data_path / name):
+            print(f"  {target}")
 
     if not args.yes:
         print("\nNothing was deleted. Re-run with --yes if that is what you want.")
@@ -171,8 +231,9 @@ def main(argv: list[str] | None = None) -> int:
         for name, count in sorted(removed.items(), key=lambda item: -item[1]):
             print(f"  {name:24s} {count}")
     elif database.exists():
-        database.unlink()
-        print(f"\nDeleted {database}")
+        print()
+        for target in _with_sidecars(database):
+            locked |= not _remove(target)
     else:
         print(f"\n{database} was already absent.")
 
@@ -181,6 +242,18 @@ def main(argv: list[str] | None = None) -> int:
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
             print(f"Removed {target}")
+
+    for name in _DERIVED_FILES:
+        for companion in _with_sidecars(data_path / name):
+            locked |= not _remove(companion)
+
+    if locked:
+        print(
+            "\nSome files are still open, so this install is only partly reset. Stop the app "
+            "and the backend (`uvicorn`, `npm run dev`, the Tauri window) and run this again.",
+            file=sys.stderr,
+        )
+        return 3
 
     print("\nNow recreate the schema:")
     print("    alembic upgrade head")

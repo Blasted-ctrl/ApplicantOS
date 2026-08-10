@@ -705,6 +705,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         ``0`` when every polled token returned at least one posting, ``1`` when any token was
         empty or missing, and ``2`` on a usage error.
     """
+    # This script prints live job titles, which are not ASCII: an em dash, an accented
+    # name, a CJK office location. Windows still defaults stdout to cp1252, so printing one
+    # raised UnicodeEncodeError partway through the sweep — after ~139 of 156 boards, with no
+    # summary and a traceback instead of a result. Fail-soft rather than fail-late: a console
+    # that cannot render a character should degrade that character, never lose the report.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:  # pragma: no branch - always present on 3.7+
+            reconfigure(encoding="utf-8", errors="replace")
+
     args = _parse_args(argv)
     providers = [
         name for name in VALIDATABLE_PROVIDERS if not args.provider or name in args.provider

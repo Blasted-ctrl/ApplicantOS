@@ -63,6 +63,7 @@ from app.api.tasks import (
     QUEUE_KNOWLEDGE,
     QUEUE_MAINTENANCE,
     TASK_CLEANUP_EXPIRE_POSTINGS,
+    TASK_CLEANUP_REFRESH_GAUGES,
     TASK_CLEANUP_TEMP_DOCUMENTS,
     TASK_JOBS_POLL_ALL,
     TASK_KNOWLEDGE_REFRESH_STALE,
@@ -174,6 +175,18 @@ BEAT_SCHEDULE: Final[dict[str, dict[str, Any]]] = {
         "task": TASK_CLEANUP_EXPIRE_POSTINGS,
         "schedule": crontab(hour=DAILY_MAINTENANCE_HOUR_UTC, minute=0),
         "kwargs": {"apply": True},
+        "options": {"queue": QUEUE_MAINTENANCE},
+    },
+    # Gauges are process-local and start at zero, so after any restart
+    # `applicantos_review_queue_size` and `applicantos_session_active` claim "nothing pending,
+    # nothing running" until something recounts them. `cleanup.refresh_gauges` exists for
+    # exactly that and sets both correctly -- it was simply never scheduled, so the gauges sat
+    # at zero forever while the review queue filled up behind them. Five minutes matches the
+    # watchdog: often enough that a dashboard is not lying for long, cheap enough that it is
+    # two COUNT queries.
+    TASK_CLEANUP_REFRESH_GAUGES: {
+        "task": TASK_CLEANUP_REFRESH_GAUGES,
+        "schedule": timedelta(minutes=5),
         "options": {"queue": QUEUE_MAINTENANCE},
     },
     TASK_SESSION_WATCHDOG: {

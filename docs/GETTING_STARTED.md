@@ -86,10 +86,14 @@ This is the step that determines whether the résumés are any good. Under **Kno
 | Source | What to give it | What it extracts |
 |---|---|---|
 | **GitHub profile** | your username | Every repo: languages, dependencies, READMEs, stars, commit dates |
-| **Résumé** | a PDF or DOCX | Roles, dates, employers, bullets, education |
+| **Résumé** | a PDF or DOCX — drag it onto the drop zone | Roles, dates, employers, bullets, education |
 | **Project folder** | a local path | READMEs, manifests, language mix, git history |
 | **Personal website** | a URL | Project pages and prose (crawls politely, honours robots.txt) |
 | **LinkedIn export** | the ZIP LinkedIn emails you | Positions, education, certifications, honours |
+
+Résumés, cover letters and LinkedIn exports are uploaded — pick **Add a source**, choose the
+kind, and drop the file in. The other three want a location you type: a GitHub username, a URL,
+a folder path.
 
 For LinkedIn: *Settings → Data privacy → Get a copy of your data*. It arrives by email in a few
 minutes. **It is never scraped** — the export is the only way in, deliberately.

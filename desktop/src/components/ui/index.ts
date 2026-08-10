@@ -77,6 +77,7 @@ export {
   type DialogContentProps,
 } from './dialog';
 export { EmptyState, NoResults, type EmptyStateProps, type NoResultsProps } from './empty-state';
+export { FileDropzone, type FileDropzoneProps } from './file-drop';
 export {
   Field,
   FieldError,

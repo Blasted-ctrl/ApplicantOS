@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
 # --------------------------------------------------------------------------------------
@@ -96,13 +97,19 @@ pytest_plugins: list[str] = []
 
 
 @pytest.fixture
-def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
     """The process-wide settings singleton, pointed at this test's temp directory.
 
     ``get_settings()`` is ``lru_cache``d and returns the same object as the module-level
     ``settings``, so every module that calls it mid-test — ``AutoFiller.submit`` does, on
     purpose, so the kill switch reflects a flip without a restart — observes these values.
     ``monkeypatch.setattr`` restores them when the test ends.
+
+    ``get_storage()`` is memoised the same way but is *not* re-read per call: it resolves the
+    root once and keeps it. So the memo is dropped on both sides of the test. Without that,
+    the first test to touch storage pins every later test's uploads to the first test's temp
+    directory, and the failure surfaces as "the bytes are not where the row says they are" —
+    which reads like a bug in the code under test rather than in this fixture.
     """
     resolved = get_settings()
     for field, value in (
@@ -120,7 +127,12 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
         ("dry_run", True),
     ):
         monkeypatch.setattr(resolved, field, value, raising=False)
-    return resolved
+
+    from app.storage import reset_storage
+
+    reset_storage()
+    yield resolved
+    reset_storage()
 
 
 @pytest.fixture

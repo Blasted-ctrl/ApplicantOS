@@ -640,6 +640,29 @@ export interface DiscoverRequest {
 // Applications
 // ══════════════════════════════════════════════════════════════════════════════════════
 
+/**
+ * A catalogue entry in `uploaded_files` — what `POST /files` returns.
+ *
+ * `storage_key` and `backend` look like internals and would be in a hosted product. Here the
+ * default backend is a directory on the user's own disk, and someone who has just uploaded
+ * their resume is entitled to know where it landed.
+ */
+export interface FileRead {
+  id: Uuid;
+  user_id?: Uuid | null;
+  kind: DocumentKind;
+  filename: string;
+  content_type?: string | null;
+  size_bytes: number;
+  /** Lowercase hex SHA-256 of the bytes. The same file uploaded twice has the same digest. */
+  sha256?: string | null;
+  storage_key: string;
+  /** `'local'` or `'s3'`. */
+  backend: string;
+  expires_at?: IsoDateTime | null;
+  created_at: IsoDateTime;
+}
+
 /** A stored file produced or consumed by an application. */
 export interface ArtifactRead {
   id: Uuid;
@@ -884,7 +907,14 @@ export interface SourceRead {
 /** Register something for the indexer to read. */
 export interface SourceCreate {
   kind: SourceKind;
-  uri: string;
+  /** A URL, a handle, or an absolute path. Supply this or `file_id`, never both. */
+  uri?: string | null;
+  /**
+   * An uploaded file to index instead of a location. The server resolves it to the stored
+   * path — the alternative was asking for the absolute path of a file just chosen in a
+   * picker, which is not something a user can be expected to know.
+   */
+  file_id?: Uuid | null;
   label?: string | null;
   config?: JsonObject;
   enabled?: boolean;

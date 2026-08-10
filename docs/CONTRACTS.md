@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
+    max_upload_mb: int = 25
 
     # browser
     playwright_headless: bool = True
@@ -788,6 +789,7 @@ Every long operation writes a `Checkpoint` so a crash resumes rather than restar
 | health | `GET /health` `GET /ready` `GET /metrics` |
 | onboarding | `GET /onboarding/status` `GET /onboarding/steps` `POST /onboarding/steps/{step}` `POST /onboarding/complete` |
 | profile | `GET|PUT /profile` `GET|PUT /profile/preferences` |
+| files | `POST /files` (multipart) `GET /files` `GET /files/{id}` `GET /files/{id}/content` `DELETE /files/{id}` |
 | knowledge | `GET|POST /knowledge/sources` `DELETE /knowledge/sources/{id}` `POST /knowledge/sources/{id}/reindex` `POST /knowledge/reindex` `GET /knowledge/facts` `PATCH /knowledge/facts/{id}` `GET /knowledge/entities` `GET /knowledge/graph` `GET /knowledge/search` `GET /knowledge/stats` |
 | postings | `GET /postings` `GET /postings/{id}` `POST /postings/discover` `POST /postings/{id}/apply` |
 | applications | `GET /applications` `GET /applications/{id}` `POST /applications/{id}/retry` `PATCH /applications/{id}` `GET /applications/{id}/artifacts` |
@@ -800,6 +802,20 @@ Every long operation writes a `Checkpoint` so a crash resumes rather than restar
 | events | `GET /ws` (WebSocket) — live event stream |
 
 Every list endpoint returns `Page[T] = {items, total, limit, offset}`.
+
+**Three onboarding endpoints answer without an account.** `GET /onboarding/status`,
+`GET /onboarding/steps` and `POST /onboarding/steps/{step}` resolve the user through
+`get_optional_user`, which returns `None` rather than 404 where the rest of the API raises.
+Onboarding is what *creates* the account, so gating it on one deadlocks first run: the wizard
+cannot render the form whose submission would create the user it is being asked for. The
+`identity` step creates the row and therefore requires an email; any other step submitted
+before it is a 422.
+
+`POST /files` is the only multipart endpoint. Storage keys are content-addressed
+(`uploads/{kind}/{sha256}.{ext}`), so the same bytes uploaded twice occupy one object and two
+catalogue rows. `SourceCreate` takes `uri` **or** `file_id`, never both — a `file_id` is
+resolved server-side to the stored path, because a user who just picked a file in a picker
+does not know its absolute path.
 
 `app/api/events.py` — `EventBus` publishing typed events to WebSocket subscribers:
 `session.started|updated|finished`, `posting.discovered|scored`,

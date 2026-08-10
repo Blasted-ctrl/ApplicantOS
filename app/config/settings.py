@@ -250,6 +250,7 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
+    max_upload_mb: int = 25
 
     # -- browser ---------------------------------------------------------------------
     playwright_headless: bool = True

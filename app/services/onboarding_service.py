@@ -128,6 +128,20 @@ ADDRESS_COMPONENTS: Final[tuple[str, ...]] = (
 #: and revisitable from settings.
 REQUIRED_STEP_KEYS: Final[frozenset[str]] = frozenset({"identity"})
 
+#: Rejection for a step submitted before the account exists. Only ``identity`` can create
+#: one, so every other step has nothing to write onto.
+_NO_ACCOUNT_YET_DETAIL: Final[str] = (
+    "No account exists yet. Submit the `identity` step first — it is what creates one."
+)
+
+#: Rejection when ``identity`` creates the account without an email. Optional once an
+#: account exists, because it falls back to the account's address; on the call that is
+#: *creating* the account there is nothing to fall back to.
+_EMAIL_REQUIRED_DETAIL: Final[str] = (
+    "An email address is required to create your account. It is the address employers "
+    "reply to, and it is what every application form asks for first."
+)
+
 #: Profile link slot to the knowledge source it becomes when ``index_now`` is set.
 #: ``linkedin`` is deliberately absent — see the module docstring.
 INDEXABLE_LINK_KINDS: Final[dict[str, SourceKind]] = {
@@ -273,7 +287,9 @@ STEPS: Final[tuple[OnboardingStep, ...]] = (
                 "email",
                 "Email",
                 FieldKind.EMAIL,
-                placeholder="Defaults to your account address",
+                required=True,
+                placeholder="you@example.com",
+                help="Where employers reply. This step is also what creates your account.",
             ),
             _field("pronouns", "Pronouns"),
             _field(
@@ -563,40 +579,42 @@ class OnboardingService:
     # Reading
     # ----------------------------------------------------------------------------------
 
-    async def steps(self, user_id: uuid.UUID | str) -> list[OnboardingStep]:
+    async def steps(self, user_id: uuid.UUID | str | None) -> list[OnboardingStep]:
         """Return every step with this user's completion state filled in.
 
         Args:
-            user_id: The user being onboarded.
+            user_id: The user being onboarded, or ``None`` on a first run where no account
+                exists yet — the wizard has to render before it can create one.
 
         Returns:
             Copies of :data:`STEPS` with ``complete`` computed from the real profile — never
-            the shared definitions themselves, which must stay unmutated.
+            the shared definitions themselves, which must stay unmutated. With no user, the
+            definitions as written: nothing is complete because nothing has been answered.
 
         Raises:
             LookupError: If *user_id* is malformed or names no user.
         """
-        user = await self._user(user_id)
-        completion = await self._completion(user)
+        completion = await self._completion_for(user_id)
         return [
             step.model_copy(update={"complete": completion.get(step.key, False)}) for step in STEPS
         ]
 
-    async def status(self, user_id: uuid.UUID | str) -> OnboardingStatus:
+    async def status(self, user_id: uuid.UUID | str | None) -> OnboardingStatus:
         """Return where the user is in the wizard.
 
         Args:
-            user_id: The user being onboarded.
+            user_id: The user being onboarded, or ``None`` when the install has no account.
 
         Returns:
             The steps, the key of the first incomplete one (what the client resumes to after
-            a restart), the completed fraction, and whether onboarding has finished.
+            a restart), the completed fraction, and whether onboarding has finished. With no
+            account: not complete, zero progress, resuming at the first step.
 
         Raises:
             LookupError: If *user_id* is malformed or names no user.
         """
-        user = await self._user(user_id)
-        completion = await self._completion(user)
+        user = None if user_id is None else await self._user(user_id)
+        completion = {} if user is None else await self._completion(user)
         steps = [
             step.model_copy(update={"complete": completion.get(step.key, False)}) for step in STEPS
         ]
@@ -604,7 +622,7 @@ class OnboardingService:
         total = len(steps) or 1
         current = next((step.key for step in steps if not step.complete), None)
         return OnboardingStatus(
-            complete=user.onboarded_at is not None,
+            complete=user is not None and user.onboarded_at is not None,
             current_step=current,
             steps=steps,
             progress=min(1.0, max(0.0, done / total)),
@@ -616,7 +634,7 @@ class OnboardingService:
 
     async def submit_step(
         self,
-        user_id: uuid.UUID | str,
+        user_id: uuid.UUID | str | None,
         step: str,
         payload: Mapping[str, Any] | BaseModel,
     ) -> OnboardingStatus:
@@ -626,8 +644,12 @@ class OnboardingService:
         :data:`~app.schemas.onboarding.ONBOARDING_PAYLOAD_MODELS` names for *step*, so an
         unknown key fails at the boundary rather than becoming a silently ignored write.
 
+        **This is where the account comes from.** On a first run *user_id* is ``None`` and the
+        ``identity`` step creates the row every other endpoint resolves; see
+        :meth:`_create_account`.
+
         Args:
-            user_id: The user being onboarded.
+            user_id: The user being onboarded, or ``None`` on a first run with no account.
             step: One of :data:`~app.schemas.onboarding.ONBOARDING_STEP_KEYS`.
             payload: The step's answers, as a mapping or as an already-built payload model.
 
@@ -636,8 +658,9 @@ class OnboardingService:
 
         Raises:
             LookupError: If *user_id* is malformed or names no user.
-            ValueError: If *step* is unknown, or the payload fails validation (as
-                ``pydantic.ValidationError``, which is a :class:`ValueError`).
+            ValueError: If *step* is unknown, if the payload fails validation (as
+                ``pydantic.ValidationError``, which is a :class:`ValueError`), or if a step
+                other than ``identity`` is submitted before an account exists.
         """
         key = str(step or "").strip()
         model = ONBOARDING_PAYLOAD_MODELS.get(key)
@@ -647,9 +670,13 @@ class OnboardingService:
                 f"Expected one of: {', '.join(ONBOARDING_STEP_KEYS)}"
             )
 
-        user = await self._user(user_id)
         data = model.model_validate(
             payload if isinstance(payload, BaseModel) else _expand_dotted_keys(payload)
+        )
+        user = (
+            await self._create_account(data)
+            if user_id is None
+            else await self._user(user_id)
         )
 
         # The payload model and the writer are chosen by the *same* key, so ``data`` is always
@@ -994,6 +1021,8 @@ class OnboardingService:
             payload: The validated answers.
         """
         for source in payload.sources:
+            if source.uri is None:  # a wizard source is always a typed-in location
+                continue
             await self._ensure_source(
                 user.id,
                 SourceKind(source.kind),
@@ -1037,6 +1066,61 @@ class OnboardingService:
     # ----------------------------------------------------------------------------------
     # Internals
     # ----------------------------------------------------------------------------------
+
+    async def _completion_for(self, user_id: uuid.UUID | str | None) -> dict[str, bool]:
+        """Per-step completion for a user that may not exist yet.
+
+        Args:
+            user_id: The user being onboarded, or ``None`` on a first run.
+
+        Returns:
+            Step key to completion. Empty when there is no account, which reads correctly
+            everywhere: nothing has been answered, so nothing is complete.
+
+        Raises:
+            LookupError: If *user_id* is malformed or names no user.
+        """
+        if user_id is None:
+            return {}
+        return await self._completion(await self._user(user_id))
+
+    async def _create_account(self, data: BaseModel) -> User:
+        """Create the account the rest of the application resolves as the current user.
+
+        Called only from :meth:`submit_step`, and only when the install has no account. That
+        makes ``identity`` the one step that can run without one — which is also the only
+        step that carries what an account needs, a name and an address to be reached at.
+
+        Args:
+            data: The validated payload for the step being submitted.
+
+        Returns:
+            The persisted user, flushed so its id is available to the rest of the step.
+
+        Raises:
+            ValueError: If *data* is not an identity payload, or carries no email. Both are
+                reported against the field so the wizard can mark it rather than showing a
+                bare error: the placeholder promises the email "defaults to your account
+                address", and on a first run that account is what this call is creating.
+        """
+        if not isinstance(data, IdentityPayload):
+            raise ValueError(_NO_ACCOUNT_YET_DETAIL)
+        email = (data.email or "").strip()
+        if not email:
+            raise ValueError(_EMAIL_REQUIRED_DETAIL)
+
+        # The empty profile is created here rather than left to :meth:`_profile`, and that is
+        # not tidiness. ``User.profile`` is ``lazy="selectin"``, which is eager only for a row
+        # that was *loaded*; this one was constructed, so the attribute is unloaded and the
+        # first read of it emits a lazy SELECT from synchronous attribute access — which under
+        # asyncio is a `MissingGreenlet`, not a query. Populating the relationship in memory
+        # means there is nothing left to load.
+        user = User(email=email, full_name=data.full_name)
+        user.profile = UserProfile()
+        self._session.add(user)
+        await self._session.flush()
+        logger.info("onboarding.account_created", user_id=str(user.id))
+        return user
 
     async def _user(self, user_id: uuid.UUID | str) -> User:
         """Load the user, with the eagerly loaded profile attached.

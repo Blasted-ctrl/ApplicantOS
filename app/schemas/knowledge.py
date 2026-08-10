@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 
 from app.models.enums import EntityKind, FactKind, IndexStatus, RelationKind, SourceKind
 from app.schemas.common import Schema
@@ -77,9 +77,21 @@ class SourceCreate(Schema):
     """
 
     kind: SourceKind = Field(description="Which analyzer handles this source.")
-    uri: str = Field(
+    uri: str | None = Field(
+        default=None,
         min_length=1,
-        description="URL, absolute filesystem path, or provider-specific identifier.",
+        description=(
+            "URL, absolute filesystem path, or provider-specific identifier. Supply this or "
+            "`file_id`, not both."
+        ),
+    )
+    file_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "An `UploadedFile` to index instead of a location. The server resolves it to the "
+            "stored path, so a resume, a cover letter or a LinkedIn export can be uploaded "
+            "rather than typed out as an absolute path the user has to go and find."
+        ),
     )
     label: str | None = Field(default=None, description="Human name shown in the app.")
     config: dict[str, Any] = Field(
@@ -97,16 +109,35 @@ class SourceCreate(Schema):
 
     @field_validator("uri")
     @classmethod
-    def _strip_uri(cls, value: str) -> str:
+    def _strip_uri(cls, value: str | None) -> str | None:
         """Trim surrounding whitespace, rejecting a URI that is only whitespace.
 
         The URI is half of a unique key, so a stray trailing space would create a second
         row for the same source.
         """
+        if value is None:
+            return None
         trimmed = value.strip()
         if not trimmed:
             raise ValueError("uri must not be blank")
         return trimmed
+
+    @model_validator(mode="after")
+    def _exactly_one_location(self) -> SourceCreate:
+        """Require exactly one of ``uri`` and ``file_id``.
+
+        Both would be ambiguous about which one identity is keyed on, and neither leaves the
+        indexer with nothing to read.
+
+        Returns:
+            This model, unchanged.
+
+        Raises:
+            ValueError: If both or neither were supplied.
+        """
+        if (self.uri is None) == (self.file_id is None):
+            raise ValueError("supply exactly one of `uri` or `file_id`")
+        return self
 
 
 class SourceRead(Schema):

@@ -33,6 +33,7 @@ import {
   CardHeader,
   Checkbox,
   EmptyState,
+  FileDropzone,
   Field,
   Input,
   Kbd,
@@ -56,7 +57,13 @@ import {
   useUpdateSettings,
 } from '@/hooks';
 import { motionSafe, staggerDelay, T, V, type MotionVariantSet } from '@/lib/motion';
-import type { JsonObject, OnboardingField, OnboardingStep } from '@/lib/api/types';
+import type {
+  DocumentKind,
+  FileRead,
+  JsonObject,
+  OnboardingField,
+  OnboardingStep,
+} from '@/lib/api/types';
 import { cn, formatRelative, indexStatusTone, orDash, sourceKindLabel } from '@/lib/utils';
 import { useSessionStore } from '@/stores/session';
 
@@ -65,6 +72,51 @@ const DECLINE = 'decline_to_self_identify';
 
 /** Human copy for the decline option, whatever the server calls it. */
 const DECLINE_LABEL = 'Decline to self-identify';
+
+/** Extensions the resume parser can actually read. A hint to the picker, never a guarantee. */
+const FILE_ACCEPT = '.pdf,.docx,.doc,.txt,.md,.rtf,.zip';
+
+/** Shown under the prompt when the server supplies no placeholder of its own. */
+const FILE_HINT = 'PDF, DOCX or plain text.';
+
+/**
+ * The `DocumentKind` a wizard file field is uploading.
+ *
+ * Only one step collects a file today and it collects a resume, but the kind drives
+ * retention and which screen lists the upload afterwards — so it is derived from the field
+ * rather than hardcoded at the call site, and a second file field will be right by default
+ * instead of silently filed under `other`.
+ */
+function fileKind(fieldName: string): DocumentKind {
+  return fieldName === 'file_id' ? 'master_resume' : 'other';
+}
+
+/**
+ * Whether a stored step value is an uploaded file rather than a typed string.
+ *
+ * Step values are `unknown` by design — the wizard renders blind from the server's field
+ * descriptors and never holds a per-step schema. This narrows the one case that is an
+ * object.
+ */
+function isFileRead(value: unknown): value is FileRead {
+  return typeof value === 'object' && value !== null && 'id' in value && 'filename' in value;
+}
+
+/**
+ * Reduce a step's local answers to what the API accepts.
+ *
+ * A file field holds the whole catalogue entry while the wizard is open, because the zone
+ * has to show a filename and a size after the upload. The payload model wants only the id —
+ * `master_resume.file_id` is a UUID — so the object is flattened on the way out rather than
+ * being stored flat and leaving the control with nothing to render.
+ */
+function forWire(values: Record<string, unknown>): JsonObject {
+  const out: JsonObject = {};
+  for (const [name, value] of Object.entries(values)) {
+    out[name] = isFileRead(value) ? value.id : (value as JsonObject[string]);
+  }
+  return out;
+}
 
 /** Steps this component adds after the server's, in order. */
 type LocalStep = 'safety' | 'index' | 'review';
@@ -127,7 +179,7 @@ export function OnboardingRoute() {
       return;
     }
     submitStep.mutate(
-      { step: currentServerStep.key, values: values[currentServerStep.key] ?? {} },
+      { step: currentServerStep.key, values: forWire(values[currentServerStep.key] ?? {}) },
       { onSuccess: advance },
     );
   }, [advance, currentServerStep, submitStep, values]);
@@ -520,6 +572,27 @@ function StepField({
             ))}
           </SelectContent>
         </Select>
+      </Field>
+    );
+  }
+
+  if (field.kind === 'file') {
+    return (
+      <Field
+        label={field.label}
+        {...(field.help == null ? {} : { help: field.help })}
+        required={field.required}
+      >
+        <FileDropzone
+          kind={fileKind(field.name)}
+          accept={FILE_ACCEPT}
+          value={isFileRead(value) ? value : null}
+          aria-label={field.label}
+          hint={field.placeholder ?? FILE_HINT}
+          onChange={(uploaded) => {
+            onChange(uploaded);
+          }}
+        />
       </Field>
     );
   }

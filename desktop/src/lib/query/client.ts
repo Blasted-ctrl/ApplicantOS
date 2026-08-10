@@ -132,6 +132,31 @@ export function isPersistable(queryKey: readonly unknown[]): boolean {
   );
 }
 
+/** How many times a genuinely transient failure is retried before it surfaces. */
+const MAX_RETRIES = 2;
+
+/** Client-error statuses that *are* worth retrying: a timeout and a rate limit both pass. */
+const RETRYABLE_CLIENT_STATUSES: ReadonlySet<number> = new Set([408, 429]);
+
+/**
+ * Retry transport failures and server errors; surface client errors immediately.
+ *
+ * A 4xx is the server's considered answer, not a hiccup — asking again produces the same
+ * status three times and delays the real answer by the length of the backoff. That is not
+ * merely wasteful: the first-run redirect in `app.tsx` keys off the 404 from
+ * `GET /onboarding/status`, and under a blanket `retry: 2` the app sat on an empty dashboard
+ * for three seconds before it could know there was no account yet.
+ *
+ * 408 and 429 are the exceptions. Both explicitly mean "try again", so both do.
+ */
+function retryTransientOnly(failureCount: number, error: unknown): boolean {
+  if (failureCount >= MAX_RETRIES) return false;
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== 'number') return true; // network / parse failure — genuinely transient
+  if (status >= 400 && status < 500) return RETRYABLE_CLIENT_STATUSES.has(status);
+  return true;
+}
+
 /**
  * The application's single QueryClient.
  *
@@ -147,7 +172,7 @@ export const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       refetchOnReconnect: true,
       refetchOnMount: true,
-      retry: 2,
+      retry: retryTransientOnly,
       retryDelay: (attempt: number) => Math.min(1000 * 2 ** attempt, 8000),
       networkMode: 'offlineFirst',
       structuralSharing: true,

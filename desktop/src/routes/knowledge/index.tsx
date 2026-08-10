@@ -25,6 +25,7 @@ import {
   DataTable,
   EmptyState,
   Field,
+  FileDropzone,
   Input,
   NoResults,
   ProgressRing,
@@ -53,8 +54,10 @@ import {
 import {
   FACT_KINDS,
   SOURCE_KINDS,
+  type DocumentKind,
   type FactKind,
   type FactRead,
+  type FileRead,
   type GraphNode,
   type SourceKind,
   type SourceRead,
@@ -72,6 +75,50 @@ import {
 import { useSessionStore } from '@/stores/session';
 import { useRowHeight } from '@/stores/ui';
 import { useFiltersStore } from '@/stores/filters';
+
+/**
+ * Source kinds whose "location" is a file the user has on disk rather than somewhere the
+ * indexer can reach on its own.
+ *
+ * These are the three the screen used to be unusable for: a `resume` source wanted an
+ * absolute path, and the file it wants a path *to* is one the user just picked in a file
+ * picker — which does not tell them the path. They upload instead, and the server resolves
+ * the stored file back to a path the analyzer can open.
+ */
+const FILE_SOURCE_KINDS = ['resume', 'cover_letter', 'linkedin_export'] as const;
+
+/** Whether {@link FILE_SOURCE_KINDS} covers a kind. */
+function uploadsAFile(kind: SourceKind): kind is (typeof FILE_SOURCE_KINDS)[number] {
+  return (FILE_SOURCE_KINDS as readonly SourceKind[]).includes(kind);
+}
+
+/** `accept` for each file-backed kind. A hint to the picker, never a guarantee. */
+const FILE_SOURCE_ACCEPT: Record<(typeof FILE_SOURCE_KINDS)[number], string> = {
+  resume: '.pdf,.docx,.doc,.txt,.md,.rtf',
+  cover_letter: '.pdf,.docx,.doc,.txt,.md,.rtf',
+  linkedin_export: '.zip',
+};
+
+/** What to say under each file-backed kind's dropzone. */
+const FILE_SOURCE_HINTS: Record<(typeof FILE_SOURCE_KINDS)[number], string> = {
+  resume: 'PDF, DOCX or plain text. Parsed into facts — it is never edited or re-sent.',
+  cover_letter: 'A letter you have already sent. Read for tone and for claims, not reused.',
+  linkedin_export:
+    'The ZIP LinkedIn emails you (Settings → Data privacy → Get a copy of your data). ' +
+    'LinkedIn is never scraped — this export is the only way in.',
+};
+
+/** How each file-backed source kind is filed in the document catalogue. */
+const FILE_SOURCE_DOCUMENT_KIND: Record<(typeof FILE_SOURCE_KINDS)[number], DocumentKind> = {
+  resume: 'master_resume',
+  cover_letter: 'cover_letter',
+  linkedin_export: 'source_document',
+};
+
+/** The `DocumentKind` an uploaded source is catalogued under. */
+function documentKindFor(kind: (typeof FILE_SOURCE_KINDS)[number]): DocumentKind {
+  return FILE_SOURCE_DOCUMENT_KIND[kind];
+}
 
 /** Graph slice cap. The server caps too; this states the intent at the call site. */
 const GRAPH_LIMIT = 500;
@@ -114,6 +161,7 @@ export function KnowledgeRoute() {
 
   const [newKind, setNewKind] = useState<SourceKind>('github_profile');
   const [newUri, setNewUri] = useState('');
+  const [newFile, setNewFile] = useState<FileRead | null>(null);
   const [newLabel, setNewLabel] = useState('');
 
   const rows = sortSources(sources.data?.items ?? []);
@@ -474,18 +522,21 @@ export function KnowledgeRoute() {
             <Button
               variant="primary"
               loading={createSource.isPending}
-              disabled={newUri.trim() === ''}
+              disabled={uploadsAFile(newKind) ? newFile === null : newUri.trim() === ''}
               onClick={() => {
                 createSource.mutate(
                   {
                     kind: newKind,
-                    uri: newUri.trim(),
+                    ...(uploadsAFile(newKind) && newFile !== null
+                      ? { file_id: newFile.id }
+                      : { uri: newUri.trim() }),
                     ...(newLabel.trim() === '' ? {} : { label: newLabel.trim() }),
                   },
                   {
                     onSuccess: () => {
                       setAddOpen(false);
                       setNewUri('');
+                      setNewFile(null);
                       setNewLabel('');
                     },
                   },
@@ -517,21 +568,33 @@ export function KnowledgeRoute() {
               </Select>
             </Field>
 
-            <Field
-              label="Location"
-              help="A URL, a GitHub handle, or an absolute path on this machine."
-              htmlFor="source-uri"
-            >
-              <Input
-                id="source-uri"
-                mono
-                value={newUri}
-                placeholder="https://example.com  ·  github.com/you  ·  C:\\projects\\thing"
-                onChange={(event) => {
-                  setNewUri(event.target.value);
-                }}
-              />
-            </Field>
+            {uploadsAFile(newKind) ? (
+              <Field label="File" help={FILE_SOURCE_HINTS[newKind]}>
+                <FileDropzone
+                  kind={documentKindFor(newKind)}
+                  accept={FILE_SOURCE_ACCEPT[newKind]}
+                  value={newFile}
+                  aria-label="File to index"
+                  onChange={setNewFile}
+                />
+              </Field>
+            ) : (
+              <Field
+                label="Location"
+                help="A URL, a GitHub handle, or an absolute path on this machine."
+                htmlFor="source-uri"
+              >
+                <Input
+                  id="source-uri"
+                  mono
+                  value={newUri}
+                  placeholder="https://example.com  ·  github.com/you  ·  C:\\projects\\thing"
+                  onChange={(event) => {
+                    setNewUri(event.target.value);
+                  }}
+                />
+              </Field>
+            )}
 
             <Field label="Label" help="Optional. What to call it in this list." htmlFor="source-label">
               <Input

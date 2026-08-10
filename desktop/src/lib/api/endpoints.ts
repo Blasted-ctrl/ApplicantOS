@@ -12,7 +12,7 @@
  * the two apart is what lets a loader and a component share one `queryOptions` object.
  */
 
-import { absoluteUrl, del, get, getBlob, patch, post, put, request } from './client';
+import { absoluteUrl, del, get, getBlob, patch, post, postForm, put, request } from './client';
 import type {
   AnalyticsOverview,
   ApplicationDetail,
@@ -20,6 +20,8 @@ import type {
   ApplicationRead,
   ApplicationUpdate,
   ArtifactRead,
+  DocumentKind,
+  FileRead,
   DiscoverRequest,
   EmailAccountCreate,
   EmailAccountRead,
@@ -113,6 +115,51 @@ export function getReadiness(signal?: AbortSignal): Promise<ReadinessReport> {
     timeoutMs: 5_000,
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// Files
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * `POST /files` — upload bytes and get back the catalogue entry.
+ *
+ * The only multipart call in the client. The returned `id` is what every other endpoint
+ * references a blob by: `master_resume.file_id` on the wizard, a resume knowledge source,
+ * an attachment on a review.
+ */
+export function uploadFile(
+  file: File,
+  kind: DocumentKind = 'other',
+  signal?: AbortSignal,
+): Promise<FileRead> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('kind', kind);
+  return postForm<FileRead>('/files', form, signal);
+}
+
+/** `GET /files` — this user's uploads, newest first. */
+export function listFiles(
+  kind?: DocumentKind,
+  options?: { limit?: number; offset?: number },
+  signal?: AbortSignal,
+): Promise<Page<FileRead>> {
+  return get<Page<FileRead>>(
+    '/files',
+    { ...(kind === undefined ? {} : { kind }), ...options },
+    signal,
+  );
+}
+
+/** `DELETE /files/{id}` — soft-delete one catalogue entry. The bytes are reclaimed later. */
+export function deleteFile(fileId: Uuid, signal?: AbortSignal): Promise<OkResponse> {
+  return del<OkResponse>(`/files/${fileId}`, undefined, signal);
+}
+
+/** Absolute URL for a file's bytes — for `<a download>` and `<img src>`. */
+export function fileContentUrl(fileId: Uuid): Promise<string> {
+  return absoluteUrl(`${API_PREFIX}/files/${fileId}/content`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════

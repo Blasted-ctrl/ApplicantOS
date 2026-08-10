@@ -87,6 +87,10 @@ __all__ = [
 
 logger = structlog.get_logger(__name__)
 
+#: The only backend whose objects an analyzer can open by path. Anything else would
+#: have to be downloaded first, and doing that silently would hide the cost.
+_LOCAL_STORAGE_BACKEND: Final[str] = "local"
+
 #: Hits returned by :meth:`KnowledgeService.search` when the caller does not ask for a
 #: size. Deliberately larger than a screenful: the desktop search panel interleaves four
 #: stores, so a page of ten would often show only facts.
@@ -235,6 +239,11 @@ class KnowledgeService:
         writes ``enabled=True, auto_refresh=True``; this method then applies the payload's
         values, which is the only place those two flags can be set at creation time.
 
+        A payload may name an :class:`~app.models.file.UploadedFile` instead of a location,
+        which is how the desktop app registers a resume, a cover letter or a LinkedIn export:
+        the alternative was asking the user to type the absolute path of a file they had just
+        chosen in a file picker.
+
         Args:
             user_id: Owning user.
             payload: What to register.
@@ -243,12 +252,14 @@ class KnowledgeService:
             The stored source, committed.
 
         Raises:
-            ValueError: If no registered analyzer supports the requested kind. Raised as
+            ValueError: If no registered analyzer supports the requested kind (raised as
                 :class:`~app.knowledge.indexer.UnsupportedSourceError`, whose message lists
-                the kinds that are supported.
+                the kinds that are supported), or if ``file_id`` names a file on a remote
+                backend.
+            LookupError: If ``file_id`` names no file belonging to this user.
         """
-        ref = _payload_to_source_ref(payload)
-        source = await self.indexer.add_source(user_id, ref)
+        resolved = await self._resolve_location(user_id, payload)
+        source = await self.indexer.add_source(user_id, _payload_to_source_ref(resolved))
 
         # `add_source` hard-codes both flags; honour the payload's intent instead.
         changed = False
@@ -268,6 +279,61 @@ class KnowledgeService:
             kind=source.kind.value,
         )
         return SourceRead.model_validate(source)
+
+    async def _resolve_location(self, user_id: uuid.UUID, payload: SourceCreate) -> SourceCreate:
+        """Turn a ``file_id`` payload into an ordinary ``uri`` one.
+
+        Analyzers read filesystem paths, so an uploaded file has to become a path before the
+        indexer sees it. Doing that here rather than in the analyzer keeps source identity
+        honest: ``(user_id, kind, uri)`` is the unique key, and re-uploading the same bytes
+        produces the same content-addressed path, so it updates the one row instead of
+        growing a second copy of the same resume in the graph.
+
+        Args:
+            user_id: Owning user. Part of the lookup, so one profile cannot index another's
+                upload by guessing an id.
+            payload: The incoming source.
+
+        Returns:
+            *payload* unchanged when it already carries a ``uri``, else a copy whose ``uri``
+            is the resolved absolute path.
+
+        Raises:
+            LookupError: If ``file_id`` names no live file belonging to *user_id*.
+            ValueError: If the bytes live on a remote backend. An analyzer reads a path, and
+                silently downloading a bucket object here would hide both the cost and the
+                failure from the caller.
+        """
+        if payload.file_id is None:
+            return payload
+
+        from app.models.file import UploadedFile
+
+        record = await self.session.scalar(
+            select(UploadedFile)
+            .where(
+                UploadedFile.id == payload.file_id,
+                UploadedFile.user_id == user_id,
+                UploadedFile.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        if record is None:
+            raise LookupError(f"uploaded file {payload.file_id} not found")
+        if (record.backend or _LOCAL_STORAGE_BACKEND) != _LOCAL_STORAGE_BACKEND:
+            raise ValueError(
+                f"uploaded file {payload.file_id} lives on the {record.backend!r} backend; "
+                "only local files can be indexed"
+            )
+
+        path = (self.settings.storage_root / record.storage_key).resolve()
+        return payload.model_copy(
+            update={
+                "uri": path.as_posix(),
+                "file_id": None,
+                "label": payload.label or record.filename,
+            }
+        )
 
     async def list_sources(self, user_id: uuid.UUID) -> list[SourceRead]:
         """Return every source the user has registered, newest first.
@@ -990,8 +1056,16 @@ def _payload_to_source_ref(payload: SourceCreate) -> Any:
 
     Returns:
         The equivalent :class:`~app.knowledge.analyzers.base.SourceRef`.
+
+    Raises:
+        ValueError: If the payload still carries a ``file_id`` rather than a ``uri``.
+            :meth:`KnowledgeService._resolve_location` is what turns one into the other, and
+            reaching here without it means an analyzer would be handed nothing to read.
     """
     from app.knowledge.analyzers.base import SourceRef
+
+    if payload.uri is None:  # `_resolve_location` turns every `file_id` into one first
+        raise ValueError("a source needs a `uri`; `file_id` should already have been resolved")
 
     return SourceRef(
         kind=payload.kind,

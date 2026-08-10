@@ -27,11 +27,11 @@ from __future__ import annotations
 from typing import Any, Final
 
 import structlog
-from fastapi import APIRouter, Body, status
+from fastapi import APIRouter, Body, HTTPException, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ValidationError
 
-from app.api.deps import CurrentUser, OnboardingServiceDep
+from app.api.deps import CurrentUser, OnboardingServiceDep, OptionalUser
 from app.api.tasks import TASK_KNOWLEDGE_INDEX_ALL, dispatch
 from app.schemas.common import OkResponse
 from app.schemas.onboarding import (
@@ -83,19 +83,22 @@ def _validate_step_payload(step: str, payload: dict[str, Any]) -> BaseModel:
     summary="Where the user is in the wizard",
 )
 async def onboarding_status(
-    user: CurrentUser,
+    user: OptionalUser,
     service: OnboardingServiceDep,
 ) -> OnboardingStatus:
     """Return completion state, the step to resume at, and per-step progress.
 
+    Answers on a first run too. With no account the honest reply is "not started" — the
+    state the client redirects into the wizard on — not a 404 the client has to interpret.
+
     Args:
-        user: The acting user.
+        user: The acting user, or ``None`` when the install has no account yet.
         service: The onboarding service.
 
     Returns:
-        The wizard's state for this user.
+        The wizard's state for this user, or a zero-progress state on a first run.
     """
-    return await service.status(user.id)
+    return await service.status(None if user is None else user.id)
 
 
 @router.get(
@@ -105,7 +108,7 @@ async def onboarding_status(
     description="Server-driven form descriptors; the client renders whatever it is given.",
 )
 async def onboarding_steps(
-    user: CurrentUser,
+    user: OptionalUser,
     service: OnboardingServiceDep,
 ) -> list[OnboardingStep]:
     """Return every step with its fields and completion state.
@@ -113,14 +116,19 @@ async def onboarding_steps(
     Not a :class:`~app.schemas.common.Page`: the wizard is a fixed, short, ordered
     definition, and paginating it would let a client render half a form.
 
+    **Answers without an account, and must.** This endpoint is the wizard's definition, and
+    the wizard is what creates the account: 404ing here deadlocked first run outright — the
+    client rendered zero steps, so the form that would have created the user could never be
+    filled in, and the app fell back to a dashboard on which every screen 404s.
+
     Args:
-        user: The acting user.
+        user: The acting user, or ``None`` when the install has no account yet.
         service: The onboarding service.
 
     Returns:
-        The steps in presentation order.
+        The steps in presentation order, all incomplete on a first run.
     """
-    return await service.steps(user.id)
+    return await service.steps(None if user is None else user.id)
 
 
 @router.post(
@@ -131,15 +139,19 @@ async def onboarding_steps(
 )
 async def submit_step(
     step: OnboardingStepKey,
-    user: CurrentUser,
+    user: OptionalUser,
     service: OnboardingServiceDep,
     payload: dict[str, Any] = Body(default_factory=dict),
 ) -> OnboardingStatus:
     """Apply one step's answers and return the updated wizard state.
 
+    **This is the endpoint that creates the account.** On a first run there is no user, and
+    the ``identity`` step brings the name and the email a user row needs; any other step
+    submitted first is rejected, because there is nothing yet to write it onto.
+
     Args:
         step: Which step is being submitted.
-        user: The acting user.
+        user: The acting user, or ``None`` when the install has no account yet.
         service: The onboarding service.
         payload: The step's answers, validated against that step's model.
 
@@ -149,10 +161,20 @@ async def submit_step(
 
     Raises:
         RequestValidationError: If the body does not match the step's model.
+        HTTPException: ``422`` when a step other than ``identity`` is submitted before an
+            account exists, or when ``identity`` omits the email one needs.
     """
     model = _validate_step_payload(step, payload)
-    logger.info("api.onboarding_step_submitted", step=step, user_id=str(user.id))
-    return await service.submit_step(user.id, step, model)
+    user_id = None if user is None else user.id
+    logger.info("api.onboarding_step_submitted", step=step, user_id=str(user_id))
+    try:
+        return await service.submit_step(user_id, step, model)
+    except ValueError as exc:
+        if user is not None:
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
 
 
 @router.post(

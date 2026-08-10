@@ -70,12 +70,14 @@ __all__ = [
     "DiscoveryServiceDep",
     "KnowledgeServiceDep",
     "OnboardingServiceDep",
+    "OptionalUser",
     "PaginationDep",
     "PipelineDep",
     "ReviewServiceDep",
     "SessionServiceDep",
     "SettingsDep",
     "get_current_user",
+    "get_optional_user",
     "pagination_params",
 ]
 
@@ -174,6 +176,53 @@ async def get_current_user(
 
 #: The user this request acts as.
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_optional_user(
+    session: DbSession,
+    x_user_id: Annotated[
+        str | None,
+        Header(
+            alias=USER_ID_HEADER,
+            description="Act as this user. Omit in the single-user desktop install.",
+        ),
+    ] = None,
+) -> User | None:
+    """Resolve the acting user, answering ``None`` instead of 404 when there is none.
+
+    For the handful of endpoints that must work *before* an account exists. Exactly one flow
+    qualifies: onboarding, which is what creates the account. Under :data:`CurrentUser` those
+    endpoints deadlocked — the wizard 404'd asking for its own step definitions, so it could
+    never render the form whose submission would have created the user it was being asked
+    for, and a fresh install landed on a dashboard where every screen 404s.
+
+    A malformed or unknown ``X-User-Id`` is still an error. The header is an explicit claim
+    about who you are; "that user does not exist" is a mistake worth reporting, and only the
+    *absence* of any account at all is a first-run state.
+
+    Args:
+        session: The request's database session.
+        x_user_id: Optional user id from the request header.
+
+    Returns:
+        The resolved user, or ``None`` when the install has no account yet.
+
+    Raises:
+        HTTPException: ``400`` when the header is not a UUID, ``404`` when it names nobody.
+    """
+    if x_user_id is not None and x_user_id.strip():
+        return await get_current_user(session, x_user_id)
+    statement = (
+        select(User)
+        .where(User.is_active.is_(True))
+        .order_by(User.created_at.asc(), User.id.asc())
+        .limit(1)
+    )
+    return (await session.execute(statement)).scalars().first()
+
+
+#: The user this request acts as, or ``None`` on a first run with no account. Onboarding only.
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
 
 
 # ======================================================================================

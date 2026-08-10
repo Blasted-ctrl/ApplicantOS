@@ -47,6 +47,9 @@ const USER_ID_HEADER = 'X-User-Id';
  */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** Timeout for an upload. Bounded by disk and network, not by a query plan. */
+const UPLOAD_TIMEOUT_MS = 120_000;
+
 /** Value a query parameter may take before serialisation. */
 export type QueryValue = string | number | boolean | null | undefined | readonly string[];
 
@@ -57,7 +60,13 @@ export type QueryParams = Record<string, QueryValue>;
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   query?: QueryParams;
-  /** Serialised as JSON. `undefined` sends no body; `null` sends a literal `null`. */
+  /**
+   * Serialised as JSON. `undefined` sends no body; `null` sends a literal `null`.
+   *
+   * A `FormData` is the exception and is sent verbatim, with no `Content-Type` header — the
+   * browser has to write that one itself because only it knows the multipart boundary it
+   * generated. Setting it by hand produces a body no server can parse.
+   */
   body?: unknown;
   signal?: AbortSignal;
   /** Overrides {@link DEFAULT_TIMEOUT_MS}. Pass `0` to disable the timeout entirely. */
@@ -250,7 +259,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     ...(actingUserId === null ? {} : { [USER_ID_HEADER]: actingUserId }),
     ...headers,
   };
-  if (body !== undefined) requestHeaders['Content-Type'] = 'application/json';
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  if (body !== undefined && !isFormData) requestHeaders['Content-Type'] = 'application/json';
 
   const timeout = withTimeout(signal, timeoutMs);
   let response: Response;
@@ -259,7 +269,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       method,
       headers: requestHeaders,
       signal: timeout.signal,
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { body: isFormData ? (body as FormData) : JSON.stringify(body) }),
     });
   } catch (cause) {
     const aborted = timeout.signal.aborted;
@@ -329,6 +339,26 @@ export function post<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   return request<T>(`${API_PREFIX}${path}`, { method: 'POST', body, query, signal });
+}
+
+/**
+ * `POST` a multipart body to a path under `/api/v1`.
+ *
+ * Uploads get a longer default timeout than the rest of the API: everything else is a
+ * database round trip measured in milliseconds, and this one is bounded by how fast bytes
+ * move. A 25 MB resume over a slow disk is not a hung request.
+ */
+export function postForm<T>(
+  path: string,
+  form: FormData,
+  signal?: AbortSignal,
+): Promise<T> {
+  return request<T>(`${API_PREFIX}${path}`, {
+    method: 'POST',
+    body: form,
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 /** `PUT` a JSON body to a path under `/api/v1`. */

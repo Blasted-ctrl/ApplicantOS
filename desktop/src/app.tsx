@@ -30,6 +30,7 @@ import { Sidebar } from '@/components/sidebar';
 import { StatusBar } from '@/components/status-bar';
 import { Titlebar } from '@/components/titlebar';
 import { ConfirmDialog } from '@/components/ui';
+import type { ApiError } from '@/lib/api/client';
 import {
   useBackendStatus,
   useDiscoverPostings,
@@ -91,11 +92,32 @@ export function AppShell() {
   const redirected = useRef(false);
   useEffect(() => {
     if (redirected.current) return;
-    if (onboardingStatus.data?.complete === false && pathname === '/') {
+    if (pathname !== '/') return;
+
+    // Two different "you have not started yet" signals, and the second one is the whole
+    // reason this redirect exists.
+    //
+    // `complete === false` covers a half-finished wizard: the account exists, some steps do
+    // not. But on a genuinely fresh install there is no account at all, so
+    // `GET /onboarding/status` answers 404 and `data` stays undefined — the condition never
+    // fired in exactly the case it was written for. The app dropped the user on an empty
+    // dashboard where every screen 404s and there is nothing to attach a résumé or a
+    // knowledge source to, with no route to the wizard that would have created the account.
+    const started = onboardingStatus.data?.complete === false;
+    const noAccountYet =
+      onboardingStatus.isError && (onboardingStatus.error as ApiError | null)?.status === 404;
+
+    if (started || noAccountYet) {
       redirected.current = true;
       void navigate({ to: '/onboarding' });
     }
-  }, [navigate, onboardingStatus.data, pathname]);
+  }, [
+    navigate,
+    onboardingStatus.data,
+    onboardingStatus.isError,
+    onboardingStatus.error,
+    pathname,
+  ]);
 
   const actions = useMemo<AppActions>(
     () => ({

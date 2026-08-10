@@ -67,6 +67,9 @@ from app.schemas.dashboard import (
     TimeseriesPoint,
 )
 
+# -- resumes ------------------------------------------------------------------------------------
+from app.schemas.file import FileRead
+
 # -- knowledge engine -------------------------------------------------------------------
 from app.schemas.knowledge import (
     ChunkRead,
@@ -113,8 +116,6 @@ from app.schemas.posting import (
     PostingRead,
     PostingSummary,
 )
-
-# -- resumes ------------------------------------------------------------------------------------
 from app.schemas.resume import (
     DEFAULT_RENDER_FORMAT,
     DEFAULT_RESUME_TEMPLATE,
@@ -183,6 +184,7 @@ from app.schemas.user import (
 )
 
 __all__ = [
+    "FileRead",
     # -- common -------------------------------------------------------------------
     "DEFAULT_PAGE_LIMIT",
     "ErrorResponse",

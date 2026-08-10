@@ -1698,8 +1698,9 @@ string, which is golden rule #5 working as designed, not decoration.
 
 **Left, with a recommendation each:**
 
-1. **Eight Prometheus collectors have no producer** — `record_posting_discovered`,
-   `record_posting_deduped`, `record_score`, `record_application`, `observe_apply`,
+1. **Eight Prometheus collectors have no producer** — ✅ **closed; see §75-77 below for what
+   the wiring found.** `record_posting_discovered`, `record_posting_deduped`, `record_score`,
+   `record_application`, `observe_apply`,
    `record_document_rendered`, `record_knowledge_document`, `observe_knowledge_index`. The
    *infrastructure* metrics are wired (HTTP via `ObservabilityMiddleware`, cache via
    `app/cache/base.py`, LLM via `app/ai/llm.py`, Celery via `app/workers/__init__.py`, review
@@ -1747,3 +1748,89 @@ string, which is golden rule #5 working as designed, not decoration.
    `MailProvider.signal_source()` produces the three email sources dynamically. These two name
    the channels a third-party tracker would report against — vocabulary for an extension point
    that exists, which is the opposite of item 72's problem. No action.
+
+---
+
+## Phase 10 — G12: wiring the domain metrics
+
+### 75. Where each domain recorder belongs, and the three judgement calls
+
+§74.1 named the eight recorders with no producer. Wiring them raised four questions the
+inventory did not answer.
+
+**`discovered` is a superset of `deduped`, not a sibling.** The obvious reading — increment
+`discovered` on `DedupeService.upsert`'s *created* branch and `deduped` on the other — makes
+the two disjoint, and contradicts the collector's own help text ("Job postings returned by a
+provider, **before** deduplication"). It would also make the Grafana panel unreadable: it plots
+both series together, and two partitions of the same total do not tell you the dedupe rate.
+So `record_posting_discovered` fires once per call at the top of `upsert`, before the tiers
+run, and `record_posting_deduped` fires on both collapse branches (the ordinary match and the
+lost-insert-race one). `discovered = created + deduped` holds by construction.
+
+**`observe_apply` is in a `finally`, not on the success path.** `Pipeline.submit` already timed
+the provider call in a `finally` to compute `elapsed`; the recorder goes in the same block.
+An apply that spends ninety seconds in a browser and then escalates to a human is precisely
+what the histogram exists to surface, and a success-only observation would hide every one of
+them. Cancellation unwinds through it too. A guard that refuses *before* the provider is
+reached records nothing, which is correct — no attempt was made, and timing one would be a lie.
+
+**`record_document_rendered` is a decorator (`_measured`), not a call.** `render_resume` leaves
+by five doors — three returns, the page-limit raise, and whatever the template raised — and the
+failure half is the half a success-only counter silently hides. The decorator covers every door
+by construction, reads the engine off the `RenderResult` on success and off
+`DocumentRenderError.engine` on failure, and counts one sample per *document* rather than one
+per shrink-ladder rung.
+
+**Scoring and knowledge counters are folded before recording.** `score_new` already builds a
+verdict tally and `index_source` already has the document set, so each calls its recorder once
+per label value with an `amount` rather than once per row. Same series, fewer calls on the hot
+path.
+
+### 76. The provider label was `unknown` for the entire pre-submit band
+
+`applicantos_applications_total` is labelled by provider, and the provider lives on
+`Application.posting` — a `lazy="selectin"` relationship, so "just read it" looks safe. It is
+not: a row `ApplicationService.create_or_get` has just inserted was never loaded, and reading
+an unloaded relationship inside a coroutine raises `MissingGreenlet`. Inspecting
+`state.unloaded` first and degrading to `None` fixes the crash but produces `provider="unknown"`
+for every `draft` → `preparing` → `ready` transition, which is worse than it sounds: the
+dashboard panel filters `provider=~"$provider"`, so those samples vanish from the chart rather
+than showing up as an anomaly.
+
+Found by scraping a live container, not by a test. `_resolve_provider` now tries the loaded
+relationship, then the session's **identity map** — where `create_or_get` and
+`Pipeline.prepare` have both already put the `JobPosting` a few lines earlier — and only then
+gives up. Both lookups are pure memory and cannot emit SQL.
+
+### 77. A metric recorded in a Celery worker is scraped by nobody
+
+Discovered while proving G12 end to end, and **not fixed**, because it is a different piece of
+work from wiring producers.
+
+`docker/prometheus/prometheus.yml` scrapes exactly one target, the API, and its header explains
+why the workers are not scraped: *"the worker-side recorders (`track_task`, `observe_apply`,
+`record_application`) write to the same Redis-backed application state the API reads."* That
+sentence is not true. `app.observability.metrics.registry` is an ordinary in-process object —
+`prometheus_client.CollectorRegistry` or the built-in fallback — with no shared backend of any
+kind. A counter incremented in `worker-apply` lives and dies in that process.
+
+The consequence is topological rather than a code defect: `POST /postings/{id}/apply` and
+`POST /postings/discover` **enqueue**, so in the Docker deployment the funnel is produced almost
+entirely inside processes Prometheus never contacts. The API's own `/metrics` shows the domain
+series only for the work the API does in-process — `PATCH /applications/{id}` (a real
+transition) and `POST /resumes/preview` (a real render), both confirmed non-zero on a live
+scrape over TCP.
+
+Three honest options, in ascending cost:
+
+1. **Correct the comment** and accept that the Docker dashboard shows the API's slice. Cheapest,
+   and stops the file claiming a mechanism that does not exist.
+2. **`prometheus_client`'s multiprocess mode** — a shared `PROMETHEUS_MULTIPROC_DIR` volume and
+   a `MultiProcessCollector` on the API's `/metrics`. Works, but only with the real client
+   library installed (the fallback has no equivalent), needs the gauge aggregation modes chosen
+   per series, and leaks files for workers that exit uncleanly.
+3. **Push gateway or a per-worker exporter sidecar.** Most faithful, most moving parts.
+
+Recommended: (1) now, (2) if and when the Grafana dashboard becomes something an operator
+actually watches. The desktop install — one process, API and work in the same interpreter — is
+unaffected either way, and that is the shipping topology.

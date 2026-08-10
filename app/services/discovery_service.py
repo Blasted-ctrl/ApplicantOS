@@ -62,6 +62,7 @@ from app.models.enums import PostingStatus
 from app.models.posting import JobPosting
 from app.models.score import JobScore
 from app.models.user import User, UserPreferences
+from app.observability.metrics import record_score
 from app.services.dedupe_service import DedupeService
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
@@ -587,6 +588,9 @@ class DiscoveryService:
         past scoring — queued, applied, awaiting a human — keeps its status and only has its
         score refreshed.
 
+        Feeds ``applicantos_scores_total{verdict}`` (``docs/CONTRACTS.md`` §16), the third
+        rung of the discovery funnel.
+
         Args:
             user_id: Whose preferences to score against.
             posting_ids: Postings to score. ``None`` means "every posting this user has no
@@ -615,6 +619,12 @@ class DiscoveryService:
             await self._upsert_score(posting, user.id, result)
             self._route(posting, result)
             verdicts[result.verdict] = verdicts.get(result.verdict, 0) + 1
+
+        # ``applicantos_scores_total{verdict}`` (§16), one increment per verdict rather than
+        # one per posting: the tally is already built above, the label set is the same three
+        # bounded values, and folding it keeps the recorder off the per-posting hot path.
+        for verdict, count in verdicts.items():
+            record_score(verdict, count)
 
         await self._session.flush()
         logger.info(

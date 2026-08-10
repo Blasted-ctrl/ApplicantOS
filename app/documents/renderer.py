@@ -34,12 +34,13 @@ that escaping twice is impossible.
 from __future__ import annotations
 
 import abc
+import functools
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final, ParamSpec
 
 import structlog
 
@@ -52,6 +53,11 @@ from app.documents.models import (
     lines_per_page,
 )
 from app.models.enums import DocumentKind, PluginKind
+from app.observability.metrics import (
+    OUTCOME_FAILURE,
+    OUTCOME_SUCCESS,
+    record_document_rendered,
+)
 from app.plugins.base import (
     BasePlugin,
     PluginDisabled,
@@ -916,7 +922,60 @@ _validate_ladder(SHRINK_LADDER)
 # Rendering
 # --------------------------------------------------------------------------------------
 
+#: ``engine`` label used when a render failed before any engine named itself — a template
+#: that cannot emit the requested format, or a plugin that could not be resolved at all.
+#: Bounded, like every other value of this label.
+_UNKNOWN_ENGINE: Final[str] = "unknown"
 
+#: Signature of the two public render entry points, so :func:`_measured` can decorate them
+#: without widening either one to ``(*args, **kwargs)``.
+_RenderParams = ParamSpec("_RenderParams")
+
+
+def _measured(
+    render: Callable[_RenderParams, Awaitable[RenderResult]],
+) -> Callable[_RenderParams, Awaitable[RenderResult]]:
+    """Feed ``applicantos_documents_rendered_total{engine,outcome}`` from one entry point.
+
+    A decorator rather than a line inside each function because both entry points leave by
+    several doors — :func:`render_resume` alone returns from three places and raises from
+    two — and a failed render is exactly the observation worth having. Wrapping the call
+    means every door is covered by construction, including the shrink loop's
+    page-limit-exceeded raise and any cancellation.
+
+    The engine is read from the :class:`RenderResult` on success and from
+    :attr:`DocumentRenderError.engine` on failure; a failure that never reached an engine is
+    labelled :data:`_UNKNOWN_ENGINE`. The recorder itself never raises, so this cannot turn
+    a telemetry problem into a failed application.
+
+    Args:
+        render: The render coroutine function being measured.
+
+    Returns:
+        The same coroutine function, with its signature and docstring intact.
+    """
+
+    @functools.wraps(render)
+    async def wrapper(*args: _RenderParams.args, **kwargs: _RenderParams.kwargs) -> RenderResult:
+        """Render, then record the attempt whichever way it ended."""
+        engine = _UNKNOWN_ENGINE
+        outcome = OUTCOME_FAILURE
+        try:
+            result = await render(*args, **kwargs)
+        except DocumentRenderError as exc:
+            engine = exc.engine or _UNKNOWN_ENGINE
+            raise
+        else:
+            engine = result.engine
+            outcome = OUTCOME_SUCCESS
+            return result
+        finally:
+            record_document_rendered(engine, outcome)
+
+    return wrapper
+
+
+@_measured
 async def render_resume(
     doc: ResumeDocument,
     out: Path,
@@ -941,7 +1000,9 @@ async def render_resume(
     from ``doc.meta["priorities"]`` and default to document order.
 
     Every attempt is logged as ``documents.render_attempt`` with its font size, margin and
-    resulting page count, so an operator can see exactly which lever ran out.
+    resulting page count, so an operator can see exactly which lever ran out, and the call
+    as a whole records one ``applicantos_documents_rendered_total{engine,outcome}`` sample
+    (``docs/CONTRACTS.md`` §16) — one per *document*, not one per ladder rung.
 
     Args:
         doc: The document to render.
@@ -1144,6 +1205,7 @@ def _bullets_to_drop(
     return min(wanted, doc.total_bullets())
 
 
+@_measured
 async def render_cover_letter(
     body: str | CoverLetterDocument,
     contact: Contact | None,
@@ -1156,7 +1218,8 @@ async def render_cover_letter(
 
     No shrink loop: a cover letter is prose, and the honest fix for one that runs long is a
     shorter letter, not 9.5pt type. The page count is still measured and logged so an
-    over-long letter is visible in the run log.
+    over-long letter is visible in the run log, and the attempt is counted in
+    ``applicantos_documents_rendered_total{engine,outcome}`` (``docs/CONTRACTS.md`` §16).
 
     Args:
         body: The letter text, or a fully-populated

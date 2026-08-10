@@ -3,13 +3,24 @@
 # There is exactly one application target: the API's `GET /metrics`, which renders
 # `app.observability.metrics.registry` — every series in docs/CONTRACTS.md §16.
 #
-# **The workers are not scraped, and that is not an oversight.** Celery prefork workers are
-# short-lived child processes with no HTTP surface; a per-worker exporter would need a
-# multiprocess collector directory and would still miss the counters recorded in a child that
-# exited between scrapes. Instead the worker-side recorders (`track_task`, `observe_apply`,
-# `record_application`) write to the same Redis-backed application state the API reads, and
-# the API is the single exposition point. The consequence to know: a metric incremented in a
-# worker appears at the API's next scrape, not instantly.
+# **The workers are not scraped, and you have to know what that costs.** Celery prefork
+# workers are short-lived child processes with no HTTP surface; a per-worker exporter would
+# need a multiprocess collector directory and would still miss the counters recorded in a
+# child that exited between scrapes. So the API is the single exposition point.
+#
+# `app.observability.metrics.registry` is a plain **in-process** registry — there is no shared
+# backend of any kind — so a series incremented inside a Celery worker is scraped by nobody.
+# That matters here because `POST /postings/discover` and `POST /postings/{id}/apply` enqueue
+# rather than execute: in this Compose topology the domain funnel is produced mostly in the
+# workers, and this target sees only the work the API itself does in-process (a status
+# transition through `PATCH /applications/{id}`, a render through `POST /resumes/preview`, and
+# every HTTP, cache and LLM series). The desktop install — one process, API and work in the
+# same interpreter — has no such split, and it is the shipping topology.
+#
+# Closing the gap means `prometheus_client`'s multiprocess mode behind a shared
+# `PROMETHEUS_MULTIPROC_DIR`, or a push gateway. Both are real work with real trade-offs and
+# neither is in place; `docs/OPEN_QUESTIONS.md` §77 weighs them. Until one lands, read this
+# dashboard as "what the API did", not "what the system did".
 #
 # Note that `/metrics` answers **404** when METRICS_ENABLED=false, rather than an empty 200.
 # That is deliberate (see `app/api/routes/health.py`): a scrape failure is visible in

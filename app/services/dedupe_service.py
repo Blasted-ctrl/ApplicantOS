@@ -72,6 +72,7 @@ from app.models.posting import (
     POSTING_TITLE_MAX_LENGTH,
     JobPosting,
 )
+from app.observability.metrics import record_posting_deduped, record_posting_discovered
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -642,6 +643,11 @@ class DedupeService:
         index, the savepoint rolls back alone, the outer transaction survives, and the
         winner's row is refreshed and returned with ``created=False``.
 
+        This is also where the first two rungs of the ``/metrics`` funnel are produced
+        (``docs/CONTRACTS.md`` §16): ``applicantos_postings_discovered_total{provider}`` for
+        every posting that arrives here, and ``applicantos_postings_deduped_total{provider}``
+        for the subset that collapsed onto a row that already existed.
+
         Args:
             raw: The discovered posting.
 
@@ -653,12 +659,19 @@ class DedupeService:
                 found. That combination means the conflict was not the one this method
                 understands, and swallowing it would silently drop a posting.
         """
+        # ``applicantos_postings_discovered_total`` counts what the provider *returned*, so
+        # it is incremented once per call, before the tiers run — every posting that
+        # collapses onto an existing row was still discovered. The deduped counter below is
+        # therefore a subset of this one, which is what makes the funnel panel readable.
+        record_posting_discovered(raw.provider)
+
         company = await self._resolve_company(raw)
 
         existing = await self.find_existing(raw)
         if existing is not None:
             if self._refresh(existing, raw, company):
                 await self._session.flush()
+            record_posting_deduped(raw.provider)
             logger.debug(
                 "dedupe.posting_deduped",
                 provider=raw.provider.value,
@@ -684,6 +697,7 @@ class DedupeService:
                 raise
             if self._refresh(raced, raw, company):
                 await self._session.flush()
+            record_posting_deduped(raw.provider)
             return raced, False
 
         logger.debug(

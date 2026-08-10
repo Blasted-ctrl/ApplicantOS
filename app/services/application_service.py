@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 from sqlalchemy import func, or_, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError, InvalidRequestError
 
 from app.database.types import utcnow
@@ -46,6 +47,7 @@ from app.models.enums import (
     ReviewReason,
 )
 from app.models.posting import JobPosting
+from app.observability.metrics import record_application
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -211,6 +213,49 @@ class InvalidTransition(ValueError):
         self.application_id = application_id
         self.current = current
         self.target = target
+
+
+def _resolve_provider(application: Application, session: AsyncSession) -> str | None:
+    """Return the ATS provider behind *application*, without ever emitting a query.
+
+    ``applicantos_applications_total`` is labelled by provider, and the provider lives on
+    the posting. Two hazards make this more than ``application.posting.provider``:
+
+    * ``posting`` is a ``lazy="selectin"`` relationship, so it is normally populated — but
+      an application this session just *inserted* has never been through a load, and reading
+      an unloaded relationship inside a coroutine raises ``MissingGreenlet``. A telemetry
+      label must never be able to fail a transition.
+    * Reporting ``unknown`` instead is safe but not free: the Grafana panel filters on
+      ``provider=~"$provider"``, so an unlabelled sample drops out of the chart entirely.
+
+    So it tries the loaded relationship, then the session's identity map — where
+    :meth:`Pipeline.prepare`'s own ``JobPosting`` almost always already sits, having been
+    loaded a few lines earlier — and only then gives up. Both lookups are pure memory.
+
+    Args:
+        application: The row being transitioned.
+        session: The unit of work, consulted only for its identity map.
+
+    Returns:
+        The provider's value, or ``None`` when it cannot be read without I/O.
+    """
+    try:
+        if "posting" not in sa_inspect(application).unloaded:
+            posting = application.posting
+            if posting is not None:
+                return str(posting.provider)
+
+        posting_id = application.posting_id
+        if posting_id is None:
+            return None
+        key = sa_inspect(JobPosting).identity_key_from_primary_key((posting_id,))
+        known = session.identity_map.get(key)
+        if known is None or "provider" in sa_inspect(known).unloaded:
+            return None
+        return str(known.provider)
+    except Exception as exc:  # pragma: no cover - defensive; inspection does not raise
+        logger.debug("application.provider_label_unavailable", error=str(exc))
+        return None
 
 
 class ApplicationService:
@@ -416,6 +461,11 @@ class ApplicationService:
           limit — trustworthy no matter which code path did the submitting.
         * An :class:`~app.models.application.ApplicationEvent` is appended, always.
 
+        Being the one chokepoint every status change passes through also makes it the only
+        honest producer of ``applicantos_applications_total{status,provider}``
+        (``docs/CONTRACTS.md`` §16). It is incremented **after** the commit, so the counter
+        only ever reflects state that is durable.
+
         Args:
             application: The row to move. Must belong to this service's session.
             status: The status to move to.
@@ -471,6 +521,8 @@ class ApplicationService:
 
         await self._session.flush()
         await self._session.commit()
+
+        record_application(target, _resolve_provider(application, self._session))
 
         logger.info(
             "application.transitioned",

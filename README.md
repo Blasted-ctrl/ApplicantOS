@@ -161,15 +161,28 @@ print(await retriever.retrieve(user.id, "embedded systems firmware C++"))
 ## Screenshots
 
 Captured from the running app at 1440×900, against the database `python -m scripts.seed` produces
-plus one real pass of the apply pipeline over it. Every number on screen was computed by the code
-that ships — the scores by `Scorer`, the two blocked applications by `Pipeline.run_one` stopping at
-the kill switch. Nothing is mocked and nothing is drawn.
+plus two real runs over it — one that finished and one that was stopped part-way. Every number on
+screen was computed by the code that ships — the scores by `Scorer`, the two blocked applications
+by `Pipeline.run_one` stopping at the kill switch, the run counters by the same
+`SessionService.record` calls the Celery workers make. Nothing is mocked and nothing is drawn.
 
 ### Dashboard
 
-The morning read: what the last run did, what needs a human, what is worth a look next.
+The morning read: what the last run did, what needs a human, what is worth a look next. The run
+finished, submitted nothing — submission is off — and put two applications in front of a human,
+which is what the subtitle says.
 
-![The ApplicantOS dashboard, showing the last run's hero figure, a review-queue card with two blocked applications, the highest-scoring open postings and the discovery-to-offer funnel.](docs/screenshots/dashboard.png)
+![The ApplicantOS dashboard, subtitled "Last run finished 21:00:30 · 29s · 0 applications · 2 need review", showing the last run's hero figure, a review-queue card with two blocked applications, the highest-scoring open postings and the discovery-to-offer funnel.](docs/screenshots/dashboard.png)
+
+### Dashboard, after a run that did not finish
+
+The same screen a few minutes later, after the next run was stopped part-way through. A run that
+was cancelled or failed is reported as exactly that, and it takes over the subtitle when it is the
+most recent thing that happened — being told the run died is the point, and folding it into "last
+run finished · 0 applications" would be indistinguishable from an ordinary quiet night. Both runs
+are in the history on [the runs screen](docs/screenshots/sessions.png).
+
+![The same dashboard, subtitled "Last run was cancelled 21:03:02 after 9s · 0 applications submitted before it stopped". Every other panel is unchanged.](docs/screenshots/dashboard-failed-run.png)
 
 ### Review queue
 

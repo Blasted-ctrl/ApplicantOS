@@ -133,6 +133,19 @@ async def _record_session(session_id: str | None, **deltas: int) -> None:
 def _session_deltas(result: dict[str, Any]) -> dict[str, int]:
     """Translate a pipeline verdict into run-session counter increments.
 
+    ``blocked`` is read through the application's resulting *status*, not through the verdict
+    alone, because one verdict covers two outcomes that differ in exactly the way this counter
+    measures. The daily cap blocks an application and leaves it ``ready`` for tomorrow — no
+    human is involved. The kill switch blocks it and calls ``mark_needs_review`` — the
+    application is now in the queue, which is what ``manual_review`` is documented to count
+    ("applications routed to a human rather than guessed at"). Counting neither made a run
+    that stopped every application at the kill switch — the shipped default — report
+    ``0 need review`` beside a review queue it had just filled.
+
+    The status is only consulted for ``blocked``. A ``skipped`` verdict also carries whatever
+    status the application already had, so an application left over in ``needs_review`` from
+    an earlier run would otherwise be re-counted by every run that passed over it.
+
     Args:
         result: A serialised :class:`~app.services.pipeline.PipelineResult`.
 
@@ -140,7 +153,9 @@ def _session_deltas(result: dict[str, Any]) -> dict[str, int]:
         Counter increments; empty for verdicts that change nothing (a skip costs the run
         nothing and must not inflate its failure count).
     """
+    from app.models.enums import ApplicationStatus
     from app.services.pipeline import (
+        VERDICT_BLOCKED,
         VERDICT_FAILED,
         VERDICT_NEEDS_REVIEW,
         VERDICT_SUBMITTED,
@@ -153,6 +168,9 @@ def _session_deltas(result: dict[str, Any]) -> dict[str, int]:
         return {_REVIEW_COUNTER: 1}
     if verdict == VERDICT_FAILED:
         return {_FAILURE_COUNTER: 1}
+    if verdict == VERDICT_BLOCKED:
+        escalated = result.get("status") == ApplicationStatus.NEEDS_REVIEW.value
+        return {_REVIEW_COUNTER: 1} if escalated else {}
     return {}
 
 

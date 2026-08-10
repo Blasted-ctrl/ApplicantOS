@@ -81,6 +81,7 @@ from app.models.posting import JobPosting
 from app.models.resume import Resume, ResumeVersion
 from app.models.score import JobScore
 from app.models.user import User
+from app.observability.metrics import observe_apply
 from app.services.application_service import ApplicationService, InvalidTransition
 from app.services.dedupe_service import DedupeService
 from app.services.discovery_service import DiscoveryService
@@ -820,6 +821,11 @@ class Pipeline:
         anything is loaded, resolved or opened, so no amount of failure further down can skip
         it.
 
+        Produces ``applicantos_apply_duration_seconds{provider}`` (``docs/CONTRACTS.md``
+        §16) around the provider call itself — on every exit from it, not only the
+        successful one. A guard that refuses before a provider is ever reached records
+        nothing, which is correct: no attempt was made.
+
         Args:
             application_id: The application to submit.
 
@@ -997,6 +1003,13 @@ class Pipeline:
                 result = await provider.apply(context)
             finally:
                 elapsed = time.monotonic() - attempt_started
+                # ``applicantos_apply_duration_seconds{provider}`` (§16) measures the real
+                # attempt, so it is observed in the ``finally`` and not on the success
+                # path: an apply that spends ninety seconds in a browser and then escalates
+                # to a human is exactly the shape this histogram exists to show. The
+                # cancellation, provider-error and unexpected-exception handlers below all
+                # unwind through here.
+                observe_apply(provider_name, elapsed)
         except asyncio.CancelledError:
             # Golden rule #8. `transition(SUBMITTING)` has already committed, so without this
             # the row is durably `submitting` with no path out — and the caller cannot tell

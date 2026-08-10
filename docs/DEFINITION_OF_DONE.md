@@ -31,6 +31,9 @@ From the brief: *"When this project is 'done', it should…"*
 
 ## Open gaps
 
+**None remain open.** Every gap below is recorded closed, with what closing it revealed. The
+last one, **G12**, closed on 2026-08-09.
+
 ### In flight (workflow `wire-and-close`)
 
 - **G3 — Three subsystems had no caller** — ✅ **closed.** `ApplicationVerifier` at
@@ -123,8 +126,8 @@ From the brief: *"When this project is 'done', it should…"*
      `types.ts` and asserts values *and order* per enum, plus that the mapping table covers
      every declared `StrEnum` — so an enum added without a mirror fails. 23 tests, all 22 enums
      pass.
-  2. **Eight domain metrics have no producer** — filed as **G12**, and the reason the sweep was
-     worth running: it is the `ApplicationVerifier` pattern one layer up.
+  2. **Eight domain metrics have no producer** — filed as **G12** and since closed, and the
+     reason the sweep was worth running: it is the `ApplicationVerifier` pattern one layer up.
 
   Also swept clean: no dead `Settings` keys. Four smaller findings — `StatusSource.PIPELINE`
   never written (a provenance defect: pipeline submissions are stamped `manual`), five
@@ -293,6 +296,31 @@ From the brief: *"When this project is 'done', it should…"*
     with blanks would erase a name, a location and a citizenship. Needs a `value` on
     `OnboardingField`.
 
+  **Re-captured 2026-08-09**, because `fix(dashboard): a cancelled or failed run is not a
+  finished run` invalidated the shipped `dashboard.png` — it read *"Last run finished 17:05:09 ·
+  15s · 0 applications · 0 need review"* over a run `sessions.png` showed as **Cancelled**, which
+  is the defect in the photograph. The database now carries both cases so the screenshots prove
+  the fix rather than avoid it: a completed run and, three minutes later, a cancelled one. Both
+  were produced by the shipping code — `SessionService.start` / `finish` for the rows,
+  `apply.run_one` for the work, `SessionService.record` for the counters — and both dashboards
+  and the runs screen were re-verified in a real Chromium at 1440×900: zero `console.error`s,
+  zero unhandled rejections, zero skeletons, no truncated subtitle. `dashboard.png` now reads
+  *"Last run finished 21:00:30 · 29s · 0 applications · 2 need review"*, and the new
+  `dashboard-failed-run.png` reads *"Last run was cancelled 21:03:02 after 9s · 0 applications
+  submitted before it stopped"* over an otherwise identical screen — the A/B of the fix.
+
+  Seeding the completed case found a fifth defect, of the same family as the one being
+  photographed: **a run reported `0 need review` beside the review queue it had just filled.**
+  `_session_deltas` mapped three of the six pipeline verdicts, and the shipped default produces a
+  fourth — both safety switches closed means `Pipeline.submit` calls
+  `mark_needs_review(POLICY_BLOCK)` and returns `blocked`, so *every* application a default
+  install escalates was invisible to `manual_review`. Fixed by reading the resulting application
+  **status** for `blocked` alone: the daily cap also returns `blocked` but leaves the application
+  `ready` for tomorrow with no human involved, and `skipped` carries whatever status the row
+  already had, so a run passing over a waiting application must not re-count it.
+  `tests/test_session_counters.py` covers all six verdicts (10 tests); deleting the new branch
+  fails exactly one.
+
 ### Not yet started
 
 - **G4 — Docker images had never been built or run** — ✅ **closed.** All 10 services up and
@@ -305,13 +333,58 @@ From the brief: *"When this project is 'done', it should…"*
   Fixed en route: the worker healthcheck's outer timeout (15s) was shorter than the probe it
   runs (~6s Celery import + 1s broker + 10s ping), so all four workers reported unhealthy while
   consuming their queues perfectly. Now 40s, and all four go healthy in 45s.
-- **G12 — every domain metric has no producer.** Found by the G10 decoration sweep. The
-  infrastructure metrics are wired (HTTP, cache, LLM, Celery, review-queue and session gauges),
-  but `record_posting_discovered`, `record_posting_deduped`, `record_score`,
-  `record_application`, `observe_apply`, `record_document_rendered`,
-  `record_knowledge_document` and `observe_knowledge_index` have **zero call sites** — so the
-  funnel this product exists to run is flat zero on `/metrics` forever. Same shape as G3's
-  `ApplicationVerifier`, one layer up. Call sites are named in `docs/OPEN_QUESTIONS.md` §74.1.
+- **G12 — every domain metric had no producer** — ✅ **closed.** All eight recorders now have
+  exactly one owning call site, and the whole funnel comes back non-zero from a real
+  `GET /metrics`:
+
+  | Recorder | Producer |
+  |---|---|
+  | `record_posting_discovered` / `record_posting_deduped` | `DedupeService.upsert` |
+  | `record_score` | `DiscoveryService.score_new` |
+  | `record_application` | `ApplicationService.transition` |
+  | `observe_apply` | `Pipeline.submit`, in the `finally` around `provider.apply()` |
+  | `record_document_rendered` | `render_resume` / `render_cover_letter`, via `@_measured` |
+  | `record_knowledge_document` / `observe_knowledge_index` | `KnowledgeIndexer.index_source` |
+
+  Three decisions worth stating. **Discovered counts every posting, deduped counts the subset
+  that collapsed** — the declared help text is "returned by a provider, *before*
+  deduplication", so the two are nested rather than disjoint and the Grafana panel reads as a
+  funnel. **`observe_apply` sits in a `finally`**, so a ninety-second attempt that then
+  escalates is measured; the success-only alternative would have hidden exactly the slow
+  failures the histogram exists for. **`record_document_rendered` is a decorator**, because
+  `render_resume` leaves by five doors and one of them is the page-limit raise.
+
+  Verified by scrape, not by grep. A fresh API container serves the eight families with **zero
+  series**; after driving dedupe → score → prepare → submit → index against the real
+  PostgreSQL, `GET /metrics` returns
+  `applicantos_postings_discovered_total{provider="lever"} 2`,
+  `applicantos_postings_deduped_total{provider="lever"} 1`,
+  `applicantos_scores_total{verdict="apply"} 1`,
+  four `applicantos_applications_total{provider="greenhouse",status=…}` series,
+  `applicantos_apply_duration_seconds_count{provider="greenhouse"} 1` (sum 1.20s),
+  `applicantos_documents_rendered_total` for both `markdown/success` and `unknown/failure`,
+  `applicantos_knowledge_documents_total{kind="manual_entry"} 1`, and
+  `applicantos_knowledge_index_duration_seconds` for four analyzers. `tests/test_metrics.py`
+  adds 35 tests; `record_application` and `observe_apply` were mutation-tested by deleting the
+  call (4 and 5 failures respectively).
+
+  What it revealed:
+
+  1. **The provider label was `unknown` for half the lifecycle.** `Application.posting` is
+     `lazy="selectin"`, but a row `create_or_get` just inserted has never been through a load,
+     and reading the relationship inside a coroutine raises `MissingGreenlet`. Degrading to
+     `unknown` is safe but quietly wrong — the dashboard filters on `provider=~"$provider"`, so
+     every `draft`/`preparing`/`ready` sample dropped out of the chart. Caught on a live scrape,
+     not in a test. `_resolve_provider` now falls back to the session's **identity map**, where
+     the `JobPosting` almost always already sits; both lookups are pure memory.
+  2. **`docker/prometheus/prometheus.yml` documents an exposition path that does not exist.**
+     Its header claims worker-side recorders "write to the same Redis-backed application state
+     the API reads". They do not: `registry` is a per-process object with no shared backend, so
+     a counter incremented in a Celery worker is never scraped by anyone. The API is the only
+     target, and the API only *enqueues* discovery and apply — so in the Docker topology the
+     funnel is produced almost entirely in processes nothing scrapes. Recorded as
+     `docs/OPEN_QUESTIONS.md` §77; not fixed here, because a multiprocess collector is a
+     different piece of work from wiring the producers.
 
 ---
 
@@ -322,7 +395,7 @@ These must be green at all times, not just once:
 ```
 ruff check .                 # target: clean            (clean ✅)
 mypy app                     # target: clean            (clean ✅ — 173 files, 2026-08-09)
-pytest                       # target: all pass         (643 passed, 37 deselected ✅)
+pytest                       # target: all pass         (688 passed, 37 deselected ✅)
 python -m scripts.smoke_test --start   # 85/0/0 ✅  (--start applies SQLITE_MODE;
                              #          bare, it resolves the Postgres URL and skips)
 cd desktop && npm run typecheck && npm run lint && npm run build   # ✅

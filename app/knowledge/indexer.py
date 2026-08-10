@@ -53,6 +53,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -87,6 +88,7 @@ from app.models.knowledge import (
     KnowledgeFact,
     KnowledgeSource,
 )
+from app.observability.metrics import observe_knowledge_index, record_knowledge_document
 from app.plugins.base import PluginNotFound
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
@@ -166,6 +168,11 @@ FINGERPRINT_PROBE_TTL_SECONDS: Final[int] = 30
 #: Longest ``last_error`` written to a source. The column is unbounded ``TEXT``; a traceback
 #: repr from a badly behaved dependency is not worth storing in full.
 MAX_ERROR_CHARS: Final[int] = 2000
+
+#: ``analyzer`` label used when a pass failed before an analyzer could be resolved — an
+#: unsupported source kind, or a plugin that is not installed. Bounded, like every other
+#: value this label takes.
+_UNKNOWN_ANALYZER: Final[str] = "unknown"
 
 #: Multiple of ``settings.knowledge_reindex_interval_minutes`` after which a source still
 #: marked ``indexing`` is presumed abandoned — the process died mid-pass — and becomes
@@ -753,6 +760,11 @@ class KnowledgeIndexer:
         See the module docstring for the eight steps and why step 3 is the one that makes
         continuous indexing affordable.
 
+        Produces both knowledge series of ``docs/CONTRACTS.md`` §16:
+        ``applicantos_knowledge_documents_total{kind}``, one increment per document
+        upserted at step 5, and ``applicantos_knowledge_index_duration_seconds{analyzer}``
+        over the whole pass, recorded however it ends.
+
         Args:
             source_id: The source to index.
             force: Re-analyze, re-chunk and re-embed even when nothing changed. Also
@@ -782,6 +794,10 @@ class KnowledgeIndexer:
             kind=ref.kind.value,
             uri=ref.uri,
         )
+        # Labels ``applicantos_knowledge_index_duration_seconds`` in the ``finally`` below.
+        # Rebound as soon as step 2 resolves the plugin; a pass that fails before that is
+        # still worth timing, and reports itself as the unknown analyzer.
+        analyzer_name = _UNKNOWN_ANALYZER
 
         try:
             # 1 -- claim the source ------------------------------------------------------
@@ -791,6 +807,7 @@ class KnowledgeIndexer:
 
             # 2 -- resolve the analyzer --------------------------------------------------
             analyzer = analyzer_for(ref)
+            analyzer_name = analyzer.name
             await self._emit(STAGE_RESOLVE, source_id=str(source_id), analyzer=analyzer.name)
 
             # 3 -- cheap change probe ----------------------------------------------------
@@ -839,6 +856,14 @@ class KnowledgeIndexer:
             # 5 -- documents -------------------------------------------------------------
             documents, pending = await self._upsert_documents(source, result.documents, force=force)
             report.documents = len(documents)
+            # ``applicantos_knowledge_documents_total{kind}`` (§16): one increment per
+            # document this pass upserted, grouped so the recorder is called once per kind
+            # rather than once per document. The kind is the document's own — an analyzer
+            # may refine it away from the source's declared kind.
+            for document_kind, kind_count in Counter(
+                row.kind for row in documents.values()
+            ).items():
+                record_knowledge_document(document_kind, kind_count)
             await self._emit(
                 STAGE_DOCUMENTS,
                 source_id=str(source_id),
@@ -907,6 +932,13 @@ class KnowledgeIndexer:
             await self._emit(STAGE_FAILED, source_id=str(source_id), error=message)
             log.warning("knowledge.index_failed", error=message, exc_info=True)
             return report
+        finally:
+            # ``applicantos_knowledge_index_duration_seconds{analyzer}`` (§16) spans the
+            # whole analyze-through-embed pass. In the ``finally`` because every exit
+            # matters: a fingerprint skip is the millisecond case the bucket ladder was
+            # built for, and a pass that failed after five minutes is the one an operator
+            # most wants to see.
+            observe_knowledge_index(analyzer_name, time.perf_counter() - started)
 
     @staticmethod
     def _source_ref(source: KnowledgeSource) -> SourceRef:

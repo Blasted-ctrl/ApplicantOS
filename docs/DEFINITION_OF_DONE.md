@@ -406,7 +406,7 @@ talks to third parties:
 
 ```
 pytest -m integration            # target: all pass     (37 passed ✅ 2026-08-09)
-python -m scripts.validate_boards  # target: 0 dead     (156/156 live ✅ 2026-08-09)
+python -m scripts.validate_boards  # 156/156 live ✅  # target: 0 dead     (156/156 live ✅ 2026-08-09)
 ```
 
 Plus, from a genuinely fresh clone: `pip install -e ".[dev]"` → `alembic upgrade head` →

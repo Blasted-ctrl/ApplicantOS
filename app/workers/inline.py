@@ -44,6 +44,7 @@ from __future__ import annotations
 import contextlib
 import queue
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -70,6 +71,12 @@ _STOP: Final[object] = object()
 #: Seconds a drain thread waits on the queue before looking at the stop flag again. Short
 #: enough that shutdown is prompt, long enough that an idle executor is not a spin loop.
 _POLL_SECONDS: Final[float] = 0.5
+
+#: How often to say that a job is still running. Chosen against the pipeline's own longest
+#: legitimate step: `APPLY_SOFT_TIME_LIMIT_SECONDS` gives a browser submission 45 minutes, and
+#: a discovery pass across three providers measured just under 13. Five minutes is therefore
+#: noisy for nothing on a normal job and early enough to be useful on a stuck one.
+_OVERRUN_WARN_SECONDS: Final[float] = 300.0
 
 #: Seconds to wait for in-flight work at shutdown. A submission in progress deserves the
 #: chance to finish and record itself; one that overruns is abandoned rather than hanging
@@ -243,16 +250,17 @@ class InlineExecutor:
             return
 
         logger.info("inline.executing", task=job.task)
-        try:
-            result = registered.apply(args=list(job.args), kwargs=job.kwargs)
-        except Exception as exc:  # a failure inside apply() itself, not inside the task
-            logger.error(
-                "inline.execute_crashed",
-                task=job.task,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            return
+        with _overrun_watch(job.task, self.depth):
+            try:
+                result = registered.apply(args=list(job.args), kwargs=job.kwargs)
+            except Exception as exc:  # a failure inside apply() itself, not inside the task
+                logger.error(
+                    "inline.execute_crashed",
+                    task=job.task,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                return
 
         if result.successful():
             logger.info("inline.executed", task=job.task)
@@ -263,6 +271,60 @@ class InlineExecutor:
             error=str(result.result),
             error_type=type(result.result).__name__,
         )
+
+
+@contextlib.contextmanager
+def _overrun_watch(task: str, depth: int) -> Iterator[None]:
+    """Log loudly, on a timer, while a job runs longer than any job should.
+
+    Celery's ``task_time_limit`` and ``task_soft_time_limit`` are enforced by the *worker*
+    around a delivered message; they do not apply to ``task.apply()``, which is a plain
+    function call. So an inline job has no timeout, and on SQLite — where the pool is one
+    thread by necessity — a single wedged ``apply.submit`` stops every other job in the
+    process indefinitely.
+
+    A Python thread cannot be killed from outside, so this does not pretend to enforce a
+    limit. What it removes is the *silence*: a run that has stopped making progress looks
+    exactly like a run that is working, which is the failure this whole module exists to
+    end. The timer keeps firing, so the log says how long it has been stuck and how much
+    work is queued behind it.
+
+    The real ceilings still apply underneath — Playwright's own ``playwright_timeout_ms``
+    bounds each browser step, and the pipeline checkpoints, so an abandoned job resumes
+    rather than restarts (golden rule #8).
+
+    Args:
+        task: The task name, for the log line.
+        depth: Jobs waiting behind this one.
+
+    Yields:
+        Nothing; the timer is cancelled on exit.
+    """
+    state: dict[str, Any] = {"elapsed": _OVERRUN_WARN_SECONDS, "timer": None}
+
+    def _warn() -> None:
+        logger.warning(
+            "inline.job_overrunning",
+            task=task,
+            seconds=round(float(state["elapsed"])),
+            queued_behind=depth,
+        )
+        state["elapsed"] = float(state["elapsed"]) + _OVERRUN_WARN_SECONDS
+        _arm()
+
+    def _arm() -> None:
+        timer = threading.Timer(_OVERRUN_WARN_SECONDS, _warn)
+        timer.daemon = True
+        state["timer"] = timer
+        timer.start()
+
+    _arm()
+    try:
+        yield
+    finally:
+        pending = state["timer"]
+        if pending is not None:
+            pending.cancel()
 
 
 #: Set once the task modules have been imported into the registry.

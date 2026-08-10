@@ -25,7 +25,7 @@ import type {
   ApplicationUpdate,
   Uuid,
 } from '@/lib/api/types';
-import { notifyError, notifyUndo } from '@/lib/notify';
+import { notifyError, notifyUndo, notifyIfNotStarted } from '@/lib/notify';
 import { qk } from '@/lib/query/keys';
 import {
   applicationArtifactsOptions,
@@ -214,6 +214,13 @@ export function useRetryApplication() {
         status: 'preparing',
         last_error: null,
       });
+    },
+
+    onSuccess: (response) => {
+      // `onMutate` already moved this row to `preparing` on screen. If nothing is running
+      // the retry, that status is a claim the system cannot keep, and the row sits there
+      // looking busy forever.
+      notifyIfNotStarted(response, 'The retry');
     },
 
     onError: (error, id) => {

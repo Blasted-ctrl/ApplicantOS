@@ -19,7 +19,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import * as api from '@/lib/api/endpoints';
 import type { OnboardingStatus } from '@/lib/api/types';
-import { notifyError } from '@/lib/notify';
+import { notifyError, notifyIfNotStarted } from '@/lib/notify';
 import { qk } from '@/lib/query/keys';
 import { onboardingStatusOptions, onboardingStepsOptions } from '@/lib/query/options';
 
@@ -70,7 +70,13 @@ export function useCompleteOnboarding() {
 
   return useMutation({
     mutationFn: () => api.completeOnboarding(),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      // The exact path that produced the reported symptom: the wizard ended with "3
+      // knowledge source(s) queued for indexing" while nothing indexed them, and the user
+      // was left with an empty graph and no reason to doubt it. A résumé cannot be
+      // generated from knowledge that was never built, so this is the last moment where
+      // saying so is cheap.
+      notifyIfNotStarted(response, 'Indexing your sources');
       void queryClient.invalidateQueries({ queryKey: qk.onboarding() });
       void queryClient.invalidateQueries({ queryKey: qk.settingsAll(), refetchType: 'active' });
       void queryClient.invalidateQueries({ queryKey: qk.knowledge(), refetchType: 'active' });

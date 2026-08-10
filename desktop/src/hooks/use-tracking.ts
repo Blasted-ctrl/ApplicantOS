@@ -29,7 +29,7 @@ import type {
   SyncRequest,
   Uuid,
 } from '@/lib/api/types';
-import { notifyError } from '@/lib/notify';
+import { notifyError, notifyIfNotStarted } from '@/lib/notify';
 import { qk } from '@/lib/query/keys';
 import {
   emailAccountsOptions,
@@ -107,6 +107,9 @@ export function useTestEmailAccount() {
 export function useRunSync() {
   return useMutation({
     mutationFn: (body: SyncRequest = {}) => api.runSync(body),
+    onSuccess: (response) => {
+      notifyIfNotStarted(response, 'The mailbox sync');
+    },
     onError: (error) => {
       notifyError('Could not start the sync', error);
     },

@@ -310,6 +310,7 @@ keeps adding a job board from touching the pipeline.
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | All 87 settings — what each does and when to change it |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Healthchecks, metrics, draining workers, replaying a failure, backup/restore |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Honest status of the twelve completeness items, then what's next |
+| [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) | **Start here** — using it on your own job hunt, in about 20 minutes |
 | [`docs/CONTRACTS.md`](docs/CONTRACTS.md) | Every module boundary — the spec the whole thing is built against |
 | [`docs/UI.md`](docs/UI.md) | Design system for the desktop app, including the performance budget |
 | [`docs/SAFETY.md`](docs/SAFETY.md) | The safety envelope, in one place |

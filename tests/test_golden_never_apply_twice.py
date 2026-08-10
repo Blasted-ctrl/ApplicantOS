@@ -281,3 +281,66 @@ async def test_review_states_are_not_silently_resubmitted(
 
     assert spy.calls == 0
     assert result.submitted is False
+
+
+async def test_two_concurrent_claims_cannot_both_win(
+    session, user, make_application, posting
+) -> None:
+    """The status ladder alone does not stop a *concurrent* second submission.
+
+    Every other test in this file exercises the sequential case: a row that is already
+    ``submitted`` is refused. That guard is a read of ``application.status`` on an object
+    loaded earlier, and in :meth:`~app.services.pipeline.Pipeline.submit` the résumé render
+    and PDF sit between that read and the write — seconds during which a second executor
+    reads the same ``READY`` and proceeds. Both would then stamp ``SUBMITTING`` and both
+    would drive a browser to the employer.
+
+    ``claim`` closes it with a conditional ``UPDATE ... WHERE status = :expected``, so the
+    affected row count decides the winner no matter how the two runs interleave. This test
+    asserts the property directly: two claims against one ``READY`` row, exactly one wins.
+    """
+    from app.services.application_service import ApplicationService
+
+    application = await make_application(posting, status=ApplicationStatus.READY)
+    service = ApplicationService(session)
+
+    first = await service.claim(
+        application,
+        expected=ApplicationStatus.READY,
+        target=ApplicationStatus.SUBMITTING,
+        message="first",
+    )
+    second = await service.claim(
+        application,
+        expected=ApplicationStatus.READY,
+        target=ApplicationStatus.SUBMITTING,
+        message="second",
+    )
+
+    assert [first, second] == [True, False], "both runs claimed the same application"
+    assert application.status is ApplicationStatus.SUBMITTING
+
+
+async def test_a_lost_claim_writes_nothing(session, user, make_application, posting) -> None:
+    """The loser must leave no trace — no status change, and no event claiming one.
+
+    A losing claim that still appended an ``ApplicationEvent`` would put two "Submitting via
+    …" lines in the timeline for one submission, which is exactly the evidence a user would
+    read as "it applied twice".
+    """
+    from app.services.application_service import ApplicationService
+
+    application = await make_application(posting, status=ApplicationStatus.SUBMITTED)
+    service = ApplicationService(session)
+    before = len(application.events)
+
+    won = await service.claim(
+        application,
+        expected=ApplicationStatus.READY,
+        target=ApplicationStatus.SUBMITTING,
+        message="should not happen",
+    )
+
+    assert won is False
+    assert application.status is ApplicationStatus.SUBMITTED, "a lost claim moved the row"
+    assert len(application.events) == before, "a lost claim wrote an event"

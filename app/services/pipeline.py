@@ -989,12 +989,28 @@ class Pipeline:
                 knowledge=self._retriever(),
             )
 
-            await self._applications.transition(
+            # Golden rule #1, enforced against a *concurrent* twin rather than only a
+            # sequential one. Guard 1 above read `application.status` from memory, and the
+            # résumé render and PDF between there and here take seconds — long enough for a
+            # second executor to have read the same `READY` and be standing exactly where
+            # this one is. The claim is a conditional UPDATE, so precisely one of them sees a
+            # row affected and the other is turned away before a browser opens.
+            claimed = await self._applications.claim(
                 application,
-                ApplicationStatus.SUBMITTING,
+                expected=ApplicationStatus.READY,
+                target=ApplicationStatus.SUBMITTING,
                 message=f"Submitting via {provider_name}.",
                 payload={"provider": provider_name, "score": value},
             )
+            if not claimed:
+                log.warning("pipeline.submit_lost_claim", application_id=str(application.id))
+                return self._result(
+                    VERDICT_ALREADY_APPLIED,
+                    _STAGE_GUARD,
+                    application,
+                    started,
+                    message="Another run is already submitting this application.",
+                )
 
             submitting_committed = True
 

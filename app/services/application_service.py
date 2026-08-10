@@ -37,7 +37,9 @@ from typing import TYPE_CHECKING, Any, Final
 import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError, InvalidRequestError
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.database.types import utcnow
 from app.models.application import Application
@@ -436,6 +438,108 @@ class ApplicationService:
         if current is target:
             return True
         return target in ALLOWED_TRANSITIONS.get(current, set())
+
+    async def claim(
+        self,
+        application: Application,
+        *,
+        expected: ApplicationStatus,
+        target: ApplicationStatus,
+        message: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """Atomically move *application* from *expected* to *target*, or refuse.
+
+        The difference from :meth:`transition` is one ``WHERE`` clause, and it is the
+        difference between golden rule #1 holding and merely appearing to.
+        :meth:`transition` sets an attribute on an object that was loaded earlier; the guards
+        in :meth:`~app.services.pipeline.Pipeline.submit` read that same in-memory status.
+        Between the read and the write sit a résumé render and a PDF — seconds — so two
+        executors that both read ``READY`` both proceed, both stamp ``SUBMITTING``, and both
+        drive a browser to the employer. The status ladder closes every *sequential*
+        double-run and none of the concurrent ones.
+
+        This issues ``UPDATE ... WHERE id = :id AND status = :expected`` and treats the
+        affected row count as the claim: exactly one caller can see 1, whatever else is
+        racing it and whichever process it lives in. The loser is told to stand down, which
+        the caller reports as "already applied" rather than as a failure.
+
+        Args:
+            application: The row to claim. Must belong to this service's session.
+            expected: The status the row must still be in for the claim to succeed.
+            target: The status to move it to.
+            message: Human-readable one-liner for the desktop timeline.
+            payload: Structured context for the event.
+
+        Returns:
+            ``True`` when this caller won the claim and the move is committed. ``False``
+            when the row had already moved on — nothing was written.
+
+        Raises:
+            InvalidTransition: If ``expected -> target`` is not an allowed move.
+        """
+        from sqlalchemy import update
+
+        if not self.can_transition(expected, target):
+            raise InvalidTransition(expected, target, application_id=application.id)
+
+        # Read before the UPDATE: on the losing path the row is untouched, but keeping the
+        # id in a local means the failure can always be logged without touching the ORM.
+        identifier = str(application.id)
+
+        stamp = utcnow()
+        values: dict[str, Any] = {"status": target, "review_reason": None}
+        if target in APPLICATION_POST_SUBMIT_STATES:
+            # Matches `transition`: stamped on first entry to a post-submit state, which is
+            # what makes `daily_count` and therefore the daily cap trustworthy.
+            values["submitted_at"] = stamp
+
+        result: CursorResult[Any] = await self._session.execute(  # type: ignore[assignment]
+            update(Application)
+            .where(Application.id == application.id, Application.status == expected)
+            .values(**values)
+        )
+        if result.rowcount != 1:
+            # No rollback. The UPDATE matched nothing, so there is nothing of this claim to
+            # undo — and rolling back would discard whatever else the caller's session was
+            # holding, then expire every attribute on `application`, so that even reading its
+            # id to log the loss becomes a lazy load from synchronous code.
+            logger.info(
+                "application.claim_lost",
+                application_id=identifier,
+                expected=expected.value,
+                target=target.value,
+            )
+            return False
+
+        # The UPDATE bypassed the ORM, so the in-memory row is stale. `set_committed_value`
+        # rather than plain assignment or `refresh`: assignment would mark the attributes
+        # dirty and have the next flush write them a second time, and `refresh` expires the
+        # *whole* object — including the loaded `events` collection, which `add_event` then
+        # lazy-loads from a synchronous attribute access and raises `MissingGreenlet`.
+        # This records the values as already-persisted, which is exactly what they are.
+        set_committed_value(application, "status", target)
+        set_committed_value(application, "review_reason", None)
+        if "submitted_at" in values:
+            set_committed_value(application, "submitted_at", values["submitted_at"])
+
+        event_payload = dict(payload or {})
+        event_payload["from"] = expected.value
+        event_payload["to"] = target.value
+        application.add_event(target.value, message=message, payload=event_payload)
+
+        await self._session.flush()
+        await self._session.commit()
+
+        record_application(target, _resolve_provider(application, self._session))
+        logger.info(
+            "application.claimed",
+            application_id=identifier,
+            user_id=str(application.user_id),
+            expected=expected.value,
+            target=target.value,
+        )
+        return True
 
     async def transition(
         self,

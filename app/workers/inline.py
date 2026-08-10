@@ -458,6 +458,22 @@ def _concurrency_for(settings: Settings) -> int:
         if configured > 1:
             logger.info("inline.serialised_for_sqlite", configured=configured)
         return 1
+
+    # Not the posture this is designed for, and worth saying out loud. Each drain thread
+    # runs its own event loop, while the engine's connection pool is process-wide — and an
+    # asyncpg connection is bound to the loop that opened it. A pooled connection handed
+    # from one loop to another produces protocol errors that read as database flakiness
+    # rather than as a configuration mistake. A PostgreSQL deployment is expected to run
+    # real Celery workers; reaching here means none was consuming the queues.
+    logger.warning(
+        "inline.on_non_sqlite_database",
+        workers=configured,
+        detail=(
+            "Background work is running inside the API process against a non-SQLite "
+            "database. Start a Celery worker, or set TASK_EXECUTION=worker to make the "
+            "absence of one an error instead."
+        ),
+    )
     return configured
 
 

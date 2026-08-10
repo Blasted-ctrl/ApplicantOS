@@ -27,7 +27,7 @@ import type {
   SourceCreate,
   Uuid,
 } from '@/lib/api/types';
-import { notifyError } from '@/lib/notify';
+import { notifyError, notifyIfNotStarted } from '@/lib/notify';
 import { qk } from '@/lib/query/keys';
 import {
   entitiesOptions,
@@ -115,6 +115,11 @@ export function useReindex() {
   return useMutation({
     mutationFn: ({ sourceId, force = false }: { sourceId?: Uuid; force?: boolean }) =>
       sourceId === undefined ? api.reindexAll(force) : api.reindexSource(sourceId, force),
+    onSuccess: (response) => {
+      // The failure this covers is the one that left three sources at `pending` with zero
+      // facts and no indication anything was wrong.
+      notifyIfNotStarted(response, 'Indexing');
+    },
     onError: (error) => {
       notifyError('Could not start indexing', error);
     },

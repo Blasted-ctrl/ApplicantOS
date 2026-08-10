@@ -17,7 +17,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import * as api from '@/lib/api/endpoints';
 import type { PageParams, SessionRead, SessionStartRequest, Uuid } from '@/lib/api/types';
-import { notifyError } from '@/lib/notify';
+import { notifyError, notifyIfNotStarted } from '@/lib/notify';
 import { qk } from '@/lib/query/keys';
 import { sessionDetailOptions, sessionListOptions } from '@/lib/query/options';
 import { useSessionStore } from '@/stores/session';
@@ -52,7 +52,10 @@ export function useStartSession() {
 
   return useMutation({
     mutationFn: (body: SessionStartRequest = {}) => api.startSession(body),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      // The run row exists either way; whether anything is *driving* it is the part the
+      // server reports and the user cannot otherwise see.
+      notifyIfNotStarted(response, 'The run');
       void queryClient.invalidateQueries({ queryKey: qk.sessions(), refetchType: 'active' });
     },
     onError: (error) => {

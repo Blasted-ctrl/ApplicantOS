@@ -204,7 +204,22 @@ async def complete_onboarding(
     """
     source_ids = await service.complete(user.id)
     outcome = await dispatch(TASK_KNOWLEDGE_INDEX_ALL, str(user.id))
+
+    # The message tracks the outcome rather than asserting success. This endpoint is the last
+    # thing a new user sees, and it used to end the wizard with "3 knowledge source(s) queued
+    # for indexing" whether or not anything would ever index them — which is precisely how an
+    # install ends up with three sources at `pending`, zero facts, and a user who was told it
+    # worked. A resume cannot be generated from a graph that was never built.
+    count = len(source_ids)
+    message = (
+        f"Onboarding complete. {count} knowledge source(s) queued for indexing."
+        if not outcome.degraded
+        else (
+            f"Onboarding complete, but the {count} knowledge source(s) have not started "
+            "indexing: no background worker is available. Re-run it from the Knowledge screen."
+        )
+    )
     return OkResponse(
-        message=f"Onboarding complete. {len(source_ids)} knowledge source(s) queued for indexing.",
+        message=message,
         data={"source_ids": [str(identifier) for identifier in source_ids], **outcome.as_dict()},
     )

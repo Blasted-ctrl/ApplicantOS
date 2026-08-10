@@ -22,7 +22,7 @@ import {
   type PostingRead,
   type Uuid,
 } from '@/lib/api/types';
-import { notifyError } from '@/lib/notify';
+import { notifyError, notifyIfNotStarted } from '@/lib/notify';
 import { qk } from '@/lib/query/keys';
 import { postingDetailOptions, postingListOptions } from '@/lib/query/options';
 import { cancelFor, patchListRow } from '@/lib/query/optimistic';
@@ -65,6 +65,11 @@ export function canAutoApply(posting: PostingRead): boolean {
 export function useDiscoverPostings() {
   return useMutation({
     mutationFn: (body: DiscoverRequest = {}) => api.discoverPostings(body),
+    onSuccess: (response) => {
+      // Fans out one task per provider, so this reads every outcome rather than the first:
+      // one provider failing to start is worth saying even when the others did.
+      notifyIfNotStarted(response, 'Discovery');
+    },
     onError: (error) => {
       notifyError('Could not start discovery', error);
     },
@@ -99,7 +104,8 @@ export function useApplyToPosting() {
       void queryClient.invalidateQueries({ queryKey: qk.postings() });
     },
 
-    onSuccess: () => {
+    onSuccess: (response) => {
+      notifyIfNotStarted(response, 'The application');
       // The application row is created server-side and arrives as `application.created`;
       // the list is invalidated so a user already on `/applications` sees it appear.
       void queryClient.invalidateQueries({

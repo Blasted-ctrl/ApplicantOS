@@ -204,6 +204,23 @@ class Settings(BaseSettings):
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
 
+    # -- how background work actually executes ---------------------------------------
+    #
+    # ``auto`` is the desktop posture and the default: dispatch to a Celery worker when one
+    # is genuinely *consuming the target queue*, and otherwise run the task in this process.
+    # The distinction matters because publishing to a broker succeeds whether or not anyone
+    # is listening — an install pointed at a stray Redis will accept every task and execute
+    # none of them, which reads as "the app is working" and is not.
+    #
+    # ``worker`` is the deployed posture: always dispatch, and report degradation when the
+    # broker is unreachable. ``inline`` never touches a broker at all.
+    task_execution: Literal["auto", "worker", "inline"] = "auto"
+
+    # Clamped to 1 on SQLite regardless of this value — SQLite has one writer, and a second
+    # one does not run slower, it loses work. See ``app.workers.inline._concurrency_for``.
+    inline_task_workers: int = 2
+    inline_task_queue_size: int = 512
+
     # -- cache ---------------------------------------------------------------------
     cache_backend: Literal["memory", "disk", "redis"] = "redis"
     cache_dir: str = "./var/cache"

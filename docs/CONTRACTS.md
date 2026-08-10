@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
 
+    # how background work executes
+    task_execution: Literal["auto","worker","inline"] = "auto"
+    inline_task_workers: int = 2        # clamped to 1 on SQLite
+    inline_task_queue_size: int = 512
+
     # cache
     cache_backend: Literal["memory","disk","redis"] = "redis"
     cache_dir: str = "./var/cache"
@@ -802,6 +807,22 @@ Every long operation writes a `Checkpoint` so a crash resumes rather than restar
 | events | `GET /ws` (WebSocket) — live event stream |
 
 Every list endpoint returns `Page[T] = {items, total, limit, offset}`.
+
+**Background work runs somewhere, and the response says where.** Every endpoint that
+triggers work returns `202` with a `Dispatch` in `data`:
+
+    {task, queue, mode: "worker"|"inline"|"none", dispatched: bool, degraded: bool, reason?, task_id?}
+
+`mode` is the field to branch on. `degraded` is true **only** for `"none"` — work running in
+the API process is running, not degraded. `POST /postings/discover` fans out and nests an
+array of these under `data.tasks`; every other endpoint spreads one at the top level.
+
+The routing decision is made once, in `app.api.tasks.dispatch`, so a task goes to exactly one
+executor and golden rule #1 never depends on a race. Under `task_execution="auto"` the choice
+is made by asking whether a worker *consumes* the target queue (`worker_serves`), not by
+whether the broker accepted the publish — those differ, and the gap was a real outage: the
+default broker URL is the default Redis port, so an install pointed at an unrelated container
+published every task successfully and executed none.
 
 **Three onboarding endpoints answer without an account.** `GET /onboarding/status`,
 `GET /onboarding/steps` and `POST /onboarding/steps/{step}` resolve the user through

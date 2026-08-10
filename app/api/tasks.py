@@ -14,12 +14,22 @@ Two reasons, and both are structural rather than stylistic:
 2. **Celery is optional at runtime.** The desktop install runs with no broker at all. The
    import is lazy and the failure path is a first-class outcome, not an exception.
 
-**A missing broker is a 202, never a 500.** ``docs/CONTRACTS.md`` §14 endpoints that trigger
-work return ``202 Accepted``; when the broker is unreachable they still return 202, with
-:attr:`Dispatch.degraded` set and a reason the desktop app can show ("queued work could not
-be started — the background worker is not running"). The alternative — a 500 — tells the user
-their request failed when in fact the *request* was fine and the *system* is partly down, and
-it makes a perfectly usable read-only install look broken.
+**Where the work goes is decided here, once.** :func:`dispatch` picks exactly one executor —
+a Celery worker, or this process via :mod:`app.workers.inline` — and never both, which is
+what keeps golden rule #1 (*never apply twice*) from depending on a race.
+
+Under the default ``task_execution="auto"`` the choice is made by asking the workers whether
+anyone is *consuming* the target queue (:func:`worker_serves`), not by whether the broker
+accepted the publish. Those are different questions, and the gap between them was a real
+outage: ``redis_url`` defaults to ``redis://localhost:6379/0``, the default port for every
+Redis on a machine, so an install pointed at an unrelated container published successfully,
+reported ``degraded: false``, and executed nothing. Every task the user started vanished.
+
+**Work that did not start is a 202 with ``degraded``, never a 500.** ``docs/CONTRACTS.md``
+§14 endpoints that trigger work return ``202 Accepted`` either way; the body carries
+:attr:`Dispatch.degraded` and a reason the desktop app shows. A 500 would tell the user their
+request failed when in fact the *request* was fine and the *system* is partly down. Note that
+running inline is **not** degraded — the work is running, it is simply running here.
 
 Task names and queue routing mirror ``docs/CONTRACTS.md`` §15 exactly. They are constants
 here so that a typo is a failed import rather than a task that vanishes into a queue nobody
@@ -31,7 +41,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import structlog
 
@@ -61,9 +71,13 @@ __all__ = [
     "TASK_SYNC_ON_LAUNCH",
     "TASK_SYNC_POLL_ACCOUNT",
     "TASK_SYNC_POLL_ALL",
+    "WORKER_PROBE_TIMEOUT_SECONDS",
+    "WORKER_PROBE_TTL_SECONDS",
     "Dispatch",
     "dispatch",
     "reset_dispatcher",
+    "reset_worker_probe",
+    "worker_serves",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -161,6 +175,23 @@ _REASON_NO_BROKER: Final[str] = (
     "yet. Start the worker (or Redis) and try again."
 )
 
+#: Reason reported when the in-process executor is saturated. Distinct from a broker
+#: failure: the system is working, it is simply already busy.
+_REASON_INLINE_FULL: Final[str] = (
+    "ApplicantOS is already running as much background work as it can hold. This request was "
+    "not started; try again once the current run has caught up."
+)
+
+#: Seconds to wait for workers to answer a liveness probe. Separate from — and shorter than
+#: — the publish timeout: this runs on the way *in* to a request the user is watching, and a
+#: silent broker must cost a fraction of a second, not three.
+WORKER_PROBE_TIMEOUT_SECONDS: Final[float] = 0.75
+
+#: How long a liveness answer is trusted. Workers do not appear and vanish between two
+#: clicks, and re-probing per dispatch would put a broker round trip in front of every
+#: button press.
+WORKER_PROBE_TTL_SECONDS: Final[float] = 15.0
+
 
 # ======================================================================================
 # The result of an enqueue attempt
@@ -169,38 +200,61 @@ _REASON_NO_BROKER: Final[str] = (
 
 @dataclass(slots=True, frozen=True)
 class Dispatch:
-    """The outcome of one attempt to enqueue background work.
+    """The outcome of one attempt to start background work.
+
+    ``mode`` is the field that matters, and it exists because the original two-state version
+    could not express the state the system was actually in. ``dispatched`` answered "did a
+    broker accept the bytes", which is not the same question as "will this run" — an install
+    pointed at a stray Redis answers yes to the first and no to the second. There are three
+    real outcomes and they need three names.
 
     Attributes:
-        task: The task name that was (or would have been) sent.
+        task: The task name that was (or would have been) started.
         queue: The queue it routes to.
-        dispatched: Whether the broker accepted it.
-        task_id: Celery's id for the enqueued task, when there is one.
-        reason: Why it was not dispatched, phrased for a user. ``None`` on success.
+        mode: ``"worker"`` — handed to a Celery worker that is consuming this queue.
+            ``"inline"`` — running in this process. ``"none"`` — not started at all.
+        task_id: Celery's id, when it went to a worker.
+        reason: Why it did not start, phrased for a user. ``None`` unless ``mode`` is
+            ``"none"``.
     """
 
     task: str
     queue: str
-    dispatched: bool
+    mode: Literal["worker", "inline", "none"]
     task_id: str | None = None
     reason: str | None = None
 
     @property
+    def dispatched(self) -> bool:
+        """Whether the work was started anywhere.
+
+        Kept as a property rather than a field so the twelve call sites that read it keep
+        working, and so it can never disagree with :attr:`mode`.
+        """
+        return self.mode != "none"
+
+    @property
     def degraded(self) -> bool:
-        """Whether the caller should tell the user the work has not actually started."""
-        return not self.dispatched
+        """Whether the caller must tell the user the work has not actually started.
+
+        Note that ``inline`` is **not** degraded. The work is running; it is simply running
+        here. Reporting it as degradation would train the user to ignore the warning that
+        matters.
+        """
+        return self.mode == "none"
 
     def as_dict(self) -> dict[str, Any]:
         """Render the outcome for an :class:`~app.schemas.common.OkResponse` body.
 
         Returns:
-            A JSON-ready mapping. ``degraded`` is always present so a client can branch on
-            one key rather than inferring from the absence of ``task_id``.
+            A JSON-ready mapping. ``degraded`` and ``mode`` are always present, so a client
+            can both branch on one boolean and say *where* the work went.
         """
         payload: dict[str, Any] = {
             "task": self.task,
             "queue": self.queue,
             "dispatched": self.dispatched,
+            "mode": self.mode,
             DEGRADED_KEY: self.degraded,
         }
         if self.task_id is not None:
@@ -262,6 +316,96 @@ def reset_dispatcher() -> None:
         _client = None
 
 
+#: Memoised ``queue -> (answered_at, is_served)`` from the last liveness probe.
+_probe_cache: dict[str, tuple[float, bool]] = {}
+
+#: Guards :data:`_probe_cache`.
+_probe_lock: Final[Lock] = Lock()
+
+
+def _inspect_queues(client: Any) -> set[str]:
+    """Return every queue name some live worker reports consuming. Runs on a worker thread.
+
+    Args:
+        client: The Celery application.
+
+    Returns:
+        The union of all responding workers' queues. Empty when nobody answers.
+    """
+    replies = client.control.inspect(timeout=WORKER_PROBE_TIMEOUT_SECONDS).active_queues()
+    if not replies:
+        return set()
+    served: set[str] = set()
+    for queues in replies.values():
+        for entry in queues or ():
+            name = entry.get("name") if isinstance(entry, dict) else None
+            if name:
+                served.add(str(name))
+    return served
+
+
+async def worker_serves(queue: str) -> bool:
+    """Whether a live Celery worker is consuming *queue*.
+
+    This is the question the old code never asked. ``send_task`` succeeding proves a broker
+    accepted a message, not that anything will ever read it — and the default broker URL,
+    ``redis://localhost:6379/0``, is the default port for every Redis on the machine. An
+    install pointed at an unrelated container accepts every task and runs none, while the
+    API cheerfully reports success. Asking the workers directly is the only check that can
+    tell the two apart.
+
+    Answers are cached for :data:`WORKER_PROBE_TTL_SECONDS`, and every failure mode — no
+    Celery, no broker, a broker that hangs — resolves to ``False``, which routes the work
+    inline rather than dropping it.
+
+    Args:
+        queue: The queue name to look for.
+
+    Returns:
+        ``True`` when some worker reports consuming *queue*.
+    """
+    import time
+
+    now = time.monotonic()
+    with _probe_lock:
+        cached = _probe_cache.get(queue)
+        if cached is not None and (now - cached[0]) < WORKER_PROBE_TTL_SECONDS:
+            return cached[1]
+
+    client = _celery_client()
+    served: set[str] = set()
+    if client is not None:
+        try:
+            served = await asyncio.wait_for(
+                asyncio.to_thread(_inspect_queues, client),
+                # The inspect call has its own timeout; this one bounds the whole thing in
+                # case the transport hangs below it, which a dead TCP peer can do.
+                timeout=WORKER_PROBE_TIMEOUT_SECONDS * 2,
+            )
+        except Exception as exc:  # includes TimeoutError; every failure means "no worker"
+            logger.debug("api.worker_probe_failed", error_type=type(exc).__name__)
+            served = set()
+
+    stamp = time.monotonic()
+    with _probe_lock:
+        # One probe answers for every queue, so cache them all rather than re-probing per
+        # queue on the next dispatch to a different one.
+        for known in TASK_QUEUES.values():
+            _probe_cache[known] = (stamp, known in served)
+        _probe_cache[queue] = (stamp, queue in served)
+    return queue in served
+
+
+def reset_worker_probe() -> None:
+    """Forget cached liveness answers so the next dispatch re-probes.
+
+    For tests, and for the moment a user starts a worker and does not want to wait out the
+    TTL before the app notices.
+    """
+    with _probe_lock:
+        _probe_cache.clear()
+
+
 def _send(
     client: Any,
     task: str,
@@ -286,13 +430,51 @@ def _send(
     return str(identifier) if identifier is not None else None
 
 
+def _run_here(
+    task: str,
+    target_queue: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Dispatch:
+    """Hand one task to the in-process executor.
+
+    Args:
+        task: The task name.
+        target_queue: The queue it would have gone to, kept for reporting.
+        args: Positional arguments.
+        kwargs: Keyword arguments.
+
+    Returns:
+        ``mode="inline"`` when queued, ``mode="none"`` when the executor is saturated.
+    """
+    # Lazy, and only on this branch: the API process does not import the pipeline — with
+    # Playwright and every renderer behind it — unless it has been asked to *be* the worker.
+    from app.workers.inline import submit_inline
+
+    if submit_inline(task, args, kwargs):
+        logger.info("api.executing_inline", task=task, queue=target_queue)
+        return Dispatch(task=task, queue=target_queue, mode="inline")
+
+    logger.warning("api.inline_queue_full", task=task, queue=target_queue)
+    return Dispatch(task=task, queue=target_queue, mode="none", reason=_REASON_INLINE_FULL)
+
+
 async def dispatch(
     task: str,
     *args: Any,
     queue: str | None = None,
     **kwargs: Any,
 ) -> Dispatch:
-    """Enqueue one Celery task by name, reporting rather than raising on failure.
+    """Start one task by name — on a worker if one is listening, otherwise in this process.
+
+    The routing decision is made **here and only here**, which is what keeps golden rule #1
+    intact: a task goes to exactly one executor, never both, so an application cannot be
+    submitted twice by a race between a worker and the API.
+
+    Under ``task_execution="auto"`` (the desktop default) the choice is made by asking the
+    workers whether anyone consumes the target queue — see :func:`worker_serves` — rather
+    than by whether a broker accepts the publish, which is a question that returns "yes" for
+    an install pointed at an unrelated Redis.
 
     The blocking ``send_task`` call runs on a worker thread and is bounded by
     :data:`BROKER_TIMEOUT_SECONDS`, so an unreachable broker costs the request three seconds
@@ -300,20 +482,31 @@ async def dispatch(
 
     Args:
         task: One of the ``TASK_*`` constants.
-        *args: Positional arguments for the task. Must be JSON-serialisable — they cross a
-            process boundary, so pass ids, never ORM rows.
+        *args: Positional arguments for the task. Must be JSON-serialisable — they may cross
+            a process boundary, so pass ids, never ORM rows.
         queue: Override the queue :data:`TASK_QUEUES` routes this task to.
         **kwargs: Keyword arguments for the task, with the same serialisability rule.
 
     Returns:
-        The outcome. Callers return ``202`` either way and surface
-        :attr:`Dispatch.degraded` to the user.
+        The outcome. Callers return ``202`` regardless and surface
+        :attr:`Dispatch.degraded` — which is now true only when the work really did not
+        start anywhere.
     """
     target_queue = queue or TASK_QUEUES.get(task, QUEUE_MAINTENANCE)
+    mode = get_settings().task_execution
+
+    if mode == "inline":
+        return _run_here(task, target_queue, args, kwargs)
 
     client = _celery_client()
     if client is None:
-        return Dispatch(task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_CELERY)
+        if mode == "auto":
+            return _run_here(task, target_queue, args, kwargs)
+        return Dispatch(task=task, queue=target_queue, mode="none", reason=_REASON_NO_CELERY)
+
+    if mode == "auto" and not await worker_serves(target_queue):
+        logger.info("api.no_worker_for_queue", task=task, queue=target_queue)
+        return _run_here(task, target_queue, args, kwargs)
 
     try:
         task_id = await asyncio.wait_for(
@@ -322,7 +515,9 @@ async def dispatch(
         )
     except TimeoutError:
         logger.warning("api.dispatch_timed_out", task=task, queue=target_queue)
-        return Dispatch(task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_BROKER)
+        if mode == "auto":
+            return _run_here(task, target_queue, args, kwargs)
+        return Dispatch(task=task, queue=target_queue, mode="none", reason=_REASON_NO_BROKER)
     except Exception as exc:
         logger.warning(
             "api.dispatch_failed",
@@ -331,7 +526,9 @@ async def dispatch(
             error_type=type(exc).__name__,
             error=str(exc),
         )
-        return Dispatch(task=task, queue=target_queue, dispatched=False, reason=_REASON_NO_BROKER)
+        if mode == "auto":
+            return _run_here(task, target_queue, args, kwargs)
+        return Dispatch(task=task, queue=target_queue, mode="none", reason=_REASON_NO_BROKER)
 
     logger.info("api.dispatched", task=task, queue=target_queue, task_id=task_id)
-    return Dispatch(task=task, queue=target_queue, dispatched=True, task_id=task_id)
+    return Dispatch(task=task, queue=target_queue, mode="worker", task_id=task_id)

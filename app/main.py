@@ -133,8 +133,24 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     finally:
         bus.close()
         reset_dispatcher()
+        _stop_inline_executor()
         await dispose_engine()
         logger.info("app.stopped")
+
+
+def _stop_inline_executor() -> None:
+    """Stop the in-process task executor, if this install ever started one.
+
+    Imported here rather than at module scope to preserve the property that a process which
+    only serves JSON never pulls the pipeline in: an install that dispatches to a real Celery
+    worker never touches :mod:`app.workers.inline`, and must not import it just to shut it
+    down.
+    """
+    try:
+        from app.workers.inline import shutdown_executor
+    except ImportError:  # pragma: no cover - the module is part of the package
+        return
+    shutdown_executor()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

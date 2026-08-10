@@ -26,7 +26,7 @@ import type {
   ReviewResolve,
   Uuid,
 } from '@/lib/api/types';
-import { notifyError } from '@/lib/notify';
+import { notifyError, notifyIfNotStarted } from '@/lib/notify';
 import { qk } from '@/lib/query/keys';
 import { reviewListOptions } from '@/lib/query/options';
 import { cancelFor, patchListRow } from '@/lib/query/optimistic';
@@ -80,6 +80,13 @@ export function useResolveReview() {
       notifyError('Could not submit this review', error);
       void queryClient.invalidateQueries({ queryKey: qk.applicationDetail(id) });
       void queryClient.invalidateQueries({ queryKey: qk.reviews() });
+    },
+
+    onSuccess: (response) => {
+      // The optimistic write above moved the row to `submitting`. If nothing is running
+      // `apply.submit`, that status is a claim the system cannot keep — and this is the one
+      // place in the product where a stuck row means "the employer never heard from you".
+      notifyIfNotStarted(response, 'The submission');
     },
 
     onSettled: () => {

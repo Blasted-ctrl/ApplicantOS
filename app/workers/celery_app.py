@@ -44,6 +44,7 @@ The configuration below is deliberate rather than defaulted:
 from __future__ import annotations
 
 from datetime import timedelta
+from threading import Event
 from typing import Any, Final
 
 import structlog
@@ -53,6 +54,7 @@ from celery.signals import (
     setup_logging,
     worker_process_init,
     worker_process_shutdown,
+    worker_ready,
     worker_shutdown,
 )
 
@@ -74,6 +76,15 @@ from app.api.tasks import (
 )
 from app.config.settings import get_settings
 from app.workers import shutdown_loop
+
+#: Set once this process is a running Celery worker.
+#:
+#: ``app.workers.celery_app`` is imported by the API too — the in-process executor resolves
+#: tasks through its registry — so "was this module imported" says nothing about what the
+#: process *is*. Only the ``worker_ready`` signal does, and :func:`_executing_inline` needs
+#: the distinction: inside a real worker a fan-out must go back to the broker so the whole
+#: pool shares it, while in an API process that has adopted the work it must stay here.
+_IN_CELERY_WORKER: Final[Event] = Event()
 
 __all__ = [
     "APPLY_HARD_TIME_LIMIT_SECONDS",
@@ -293,6 +304,23 @@ def enqueue(task: str, *args: Any, queue: str | None = None, **kwargs: Any) -> s
         The new task's id, or ``None`` when the broker refused it.
     """
     target = queue or TASK_QUEUES.get(task, QUEUE_MAINTENANCE)
+
+    # A chain is only as good as its weakest hop. `jobs.poll_all` fans out to one
+    # `jobs.poll_provider` per provider, each of which fans out to `jobs.score_posting`, and
+    # so on to `apply.prepare`. If the entry point runs in-process but the children are
+    # published to a broker nobody reads, the run stops one step in — discovery completes,
+    # scoring never starts, and the result looks like a pipeline that quietly gave up. So
+    # the same routing decision is made here, from inside the worker, as the API makes at
+    # the front door.
+    if _executing_inline():
+        from app.workers.inline import submit_inline
+
+        if submit_inline(task, tuple(args), dict(kwargs)):
+            logger.debug("workers.enqueued_inline", task=task, queue=target)
+            return None
+        logger.warning("workers.inline_queue_full", task=task, queue=target)
+        return None
+
     try:
         result = celery_app.send_task(task, args=list(args), kwargs=kwargs, queue=target)
     except Exception as exc:
@@ -307,6 +335,25 @@ def enqueue(task: str, *args: Any, queue: str | None = None, **kwargs: Any) -> s
     identifier = getattr(result, "id", None)
     logger.debug("workers.enqueued", task=task, queue=target, task_id=str(identifier))
     return str(identifier) if identifier is not None else None
+
+
+def _executing_inline() -> bool:
+    """Whether this process runs its own background work rather than publishing it.
+
+    True under ``task_execution="inline"``, and under ``"auto"`` when the current process is
+    *not* a Celery worker. The worker check is what keeps a real deployment correct: inside
+    ``celery worker`` the fan-out must go back to the broker so the pool shares it, and only
+    an API process that has adopted the work should keep it.
+
+    Returns:
+        Whether children of the running task should execute in this process.
+    """
+    mode = get_settings().task_execution
+    if mode == "worker":
+        return False
+    if mode == "inline":
+        return True
+    return not _IN_CELERY_WORKER.is_set()
 
 
 # ======================================================================================
@@ -327,6 +374,17 @@ def _configure_worker_logging(**_kwargs: Any) -> None:
 
     configure_logging(get_settings())
     logger.debug("workers.logging_configured")
+
+
+@worker_ready.connect
+def _mark_celery_worker(**_kwargs: Any) -> None:
+    """Record that this process is a Celery worker, not an API process.
+
+    Set on ``worker_ready`` rather than at import, because importing this module is exactly
+    what the API does to reach the task registry.
+    """
+    _IN_CELERY_WORKER.set()
+    logger.debug("workers.identified_as_worker")
 
 
 @worker_process_init.connect

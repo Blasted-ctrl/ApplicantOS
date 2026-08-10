@@ -38,6 +38,7 @@ from pydantic import Field
 
 from app import __version__
 from app.api.deps import SettingsDep
+from app.config.settings import Settings
 from app.database.session import check_database
 from app.observability.metrics import render_metrics
 from app.schemas.common import Schema
@@ -245,10 +246,65 @@ async def ready(settings: SettingsDep, response: Response) -> ReadinessReport:
             detail=f"Not in use: cache_backend is {settings.cache_backend!r}.",
         )
 
+    checks["task_execution"] = await _probe_task_execution(settings)
+
     is_ready = all(check.ok for check in checks.values() if check.required)
     if not is_ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return ReadinessReport(ready=is_ready, checks=checks)
+
+
+async def _probe_task_execution(settings: Settings) -> DependencyStatus:
+    """Report whether anything is actually able to run background work.
+
+    The check this endpoint most needed and did not have. ``ready: true`` used to mean "the
+    database answered", which it did happily on an install where every queued task went to a
+    broker no worker consumed — so the probe designed to catch a half-down system reported
+    full health while nothing could run at all.
+
+    Args:
+        settings: Runtime configuration.
+
+    Returns:
+        Which executor will pick up the next task, and whether one exists.
+    """
+    from app.api.tasks import QUEUE_APPLY, QUEUE_DISCOVERY, worker_serves
+
+    mode = settings.task_execution
+
+    if mode == "inline":
+        return DependencyStatus(
+            ok=True,
+            required=True,
+            detail="Background work runs in this process (task_execution='inline').",
+        )
+
+    # The two queues that carry the work a user waits on. A pool serving only maintenance
+    # is not a pool that will run a discovery poll.
+    served = [queue for queue in (QUEUE_DISCOVERY, QUEUE_APPLY) if await worker_serves(queue)]
+
+    if len(served) == 2:
+        return DependencyStatus(
+            ok=True, required=True, detail="A Celery worker is consuming the work queues."
+        )
+
+    if mode == "auto":
+        missing = "no worker is" if not served else f"no worker serves {QUEUE_APPLY!r}, so it is"
+        return DependencyStatus(
+            ok=True,
+            required=True,
+            detail=f"Background work runs in this process: {missing} consuming the queues.",
+        )
+
+    return DependencyStatus(
+        ok=False,
+        required=True,
+        detail=(
+            "No Celery worker is consuming the work queues, and task_execution='worker' "
+            "forbids running it here — queued work will never start. Start a worker, or set "
+            "TASK_EXECUTION=auto."
+        ),
+    )
 
 
 @router.get(

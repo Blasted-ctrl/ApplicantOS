@@ -94,14 +94,33 @@ MODELS_PACKAGE: Final[str] = "app.models"
 #: URL fragments that identify an in-memory SQLite database.
 _IN_MEMORY_SQLITE_MARKERS: Final[tuple[str, ...]] = (":memory:", "mode=memory")
 
+#: How long a blocked SQLite writer waits for the lock before giving up, in milliseconds.
+#:
+#: Generous because the thing being waited on is generous: a discovery pass upserts hundreds
+#: of postings in one transaction, and a knowledge index writes documents, chunks and facts
+#: together. Ten seconds is far longer than either holds the write lock, and the alternative
+#: to waiting is not "go faster" — it is losing the work.
+SQLITE_BUSY_TIMEOUT_MS: Final[int] = 10_000
+
 #: PRAGMAs applied to every new SQLite connection, in order.
+#:
 #: ``foreign_keys`` is mandatory (SQLite defaults it OFF, silently voiding every cascade);
 #: WAL plus ``NORMAL`` synchronous is the standard durability/throughput trade for a
 #: single-user desktop database.
+#:
+#: ``busy_timeout`` is the one that is easy to omit and expensive to omit. WAL lets readers
+#: and a writer coexist, but it does **not** let two writers coexist — and SQLite's default
+#: busy timeout is *zero*, so the second writer does not wait, it fails immediately with
+#: "database is locked". ApplicantOS has two writers whenever background work runs beside the
+#: API: the in-process executor's threads, or a Celery worker sharing the file. Without this
+#: line a discovery pass loses whole providers to lock contention — measured at 79 failed
+#: statements in a single run — and each one surfaces as a ``PendingRollbackError`` several
+#: frames away from the actual cause, which reads like an ORM bug and is not one.
 SQLITE_PRAGMAS: Final[tuple[str, ...]] = (
     "PRAGMA foreign_keys=ON",
     "PRAGMA journal_mode=WAL",
     "PRAGMA synchronous=NORMAL",
+    f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}",
 )
 
 

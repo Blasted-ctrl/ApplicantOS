@@ -19,6 +19,9 @@
  * it — and it costs one line of small mono text.
  */
 
+import { degradedReason, isDegraded } from '@/lib/api/dispatch';
+import type { OkResponse } from '@/lib/api/types';
+
 import { toast } from 'sonner';
 
 import { ApiError } from '@/lib/api/client';
@@ -100,4 +103,27 @@ export function notifyFileWritten(filename: string, onReveal?: () => void): void
  */
 export function notifyWarning(message: string, description?: string): void {
   toast.warning(message, description === undefined ? {} : { description });
+}
+
+/**
+ * Warn when a triggered action did not actually start anywhere.
+ *
+ * The one case a user must never be left to infer. `POST /sessions/start` and its siblings
+ * answer `202` whether or not anything will execute the work, and a UI that shows only the
+ * happy path turns "nothing is running this" into a spinner that never resolves. The backend
+ * supplies the sentence; this puts it on screen.
+ *
+ * Silent when the work is running — including when it runs inside the desktop backend rather
+ * than on a Celery worker, which is the normal posture and not a degradation.
+ *
+ * @param response - The `OkResponse` returned by the triggering endpoint.
+ * @param action - What the user just did, e.g. `"The run"`. Used as the message subject.
+ */
+export function notifyIfNotStarted(response: OkResponse | undefined | null, action: string): void {
+  if (!isDegraded(response)) return;
+  notifyWarning(
+    `${action} has not started`,
+    degradedReason(response) ??
+      'No background worker is available, so nothing is driving this yet.',
+  );
 }

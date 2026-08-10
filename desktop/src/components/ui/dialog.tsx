@@ -87,49 +87,68 @@ export const DialogContent = forwardRef<
             />
           </DialogPrimitive.Overlay>
 
-          <DialogPrimitive.Content ref={ref} asChild forceMount {...props}>
-            <motion.div
-              className={cn(
-                'accent-hairline fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] flex-col overflow-hidden',
-                'rounded-xl border border-strong bg-overlay shadow-dialog',
-                'w-[calc(100vw-96px)]',
-                className,
-              )}
-              style={{ maxWidth: WIDTHS[size], transformOrigin: 'center' }}
-              initial={{ ...variants.initial, x: '-50%', y: '-50%' }}
-              animate={{ ...variants.animate, x: '-50%', y: '-50%' }}
-              exit={{ ...variants.exit, x: '-50%', y: '-50%' }}
-              transition={T.dialog}
-            >
-              <div className="flex items-start justify-between gap-3 p-5 pb-3">
-                <div className="min-w-0">
-                  <DialogPrimitive.Title className="font-display text-md font-semibold text-primary">
-                    {title}
-                  </DialogPrimitive.Title>
-                  {description !== undefined && (
-                    <DialogPrimitive.Description className="mt-1 text-sm text-secondary">
-                      {description}
-                    </DialogPrimitive.Description>
+          {/*
+            Centring is done by this wrapper, not by a transform, and that is the whole point.
+
+            The dialog used to sit at `left-1/2 top-1/2` and rely on `x: '-50%', y: '-50%'` in
+            the motion props to pull itself back. But `V.dialog` animates a full `transform`
+            string (`scale(0.97)`) for the WAAPI fast path, and when Framer Motion is handed
+            both a `transform` string and `x`/`y`, the string wins — the translate was silently
+            dropped, so every dialog in the app rendered with its top-left corner at the centre
+            of the screen and hung off the bottom edge.
+
+            Baking `translate(-50%, -50%)` into the string would fix the animated case and
+            break the reduced-motion one, because `withoutTransform` strips `transform`
+            entirely — those users would lose the centring instead.
+
+            A flex wrapper is immune to both: position and animation stop sharing a channel.
+            `pointer-events-none` here keeps click-outside-to-close working on the scrim
+            underneath, and the panel re-enables them for itself.
+          */}
+          <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-6">
+            <DialogPrimitive.Content ref={ref} asChild forceMount {...props}>
+              <motion.div
+                className={cn(
+                  'accent-hairline pointer-events-auto flex max-h-[80vh] w-full flex-col overflow-hidden',
+                  'rounded-xl border border-strong bg-overlay shadow-dialog',
+                  className,
+                )}
+                style={{ maxWidth: WIDTHS[size], transformOrigin: 'center' }}
+                initial={variants.initial}
+                animate={variants.animate}
+                exit={variants.exit}
+                transition={T.dialog}
+              >
+                <div className="flex items-start justify-between gap-3 p-5 pb-3">
+                  <div className="min-w-0">
+                    <DialogPrimitive.Title className="font-display text-md font-semibold text-primary">
+                      {title}
+                    </DialogPrimitive.Title>
+                    {description !== undefined && (
+                      <DialogPrimitive.Description className="mt-1 text-sm text-secondary">
+                        {description}
+                      </DialogPrimitive.Description>
+                    )}
+                  </div>
+                  {!hideClose && (
+                    <DialogPrimitive.Close asChild>
+                      <Button variant="ghost" size="sm" icon aria-label="Close">
+                        <X aria-hidden="true" />
+                      </Button>
+                    </DialogPrimitive.Close>
                   )}
                 </div>
-                {!hideClose && (
-                  <DialogPrimitive.Close asChild>
-                    <Button variant="ghost" size="sm" icon aria-label="Close">
-                      <X aria-hidden="true" />
-                    </Button>
-                  </DialogPrimitive.Close>
+
+                <div className="scroll-region min-h-0 flex-1 px-5 pb-5">{children}</div>
+
+                {footer !== undefined && (
+                  <div className="flex items-center justify-end gap-2 border-t border-state-divider p-4">
+                    {footer}
+                  </div>
                 )}
-              </div>
-
-              <div className="scroll-region min-h-0 flex-1 px-5 pb-5">{children}</div>
-
-              {footer !== undefined && (
-                <div className="flex items-center justify-end gap-2 border-t border-state-divider p-4">
-                  {footer}
-                </div>
-              )}
-            </motion.div>
-          </DialogPrimitive.Content>
+              </motion.div>
+            </DialogPrimitive.Content>
+          </div>
         </DialogPrimitive.Portal>
       )}
     </AnimatePresence>

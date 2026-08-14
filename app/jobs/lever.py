@@ -72,6 +72,7 @@ from app.jobs.base import (
     ProviderError,
     RawPosting,
     SearchQuery,
+    fair_share,
 )
 from app.jobs.seeds import boards_from_query
 from app.models.enums import (
@@ -966,67 +967,86 @@ class LeverProvider(ATSProvider):
             self.logger.warning("lever.no_companies", extra_keys=sorted(q.extra))
             return
 
-        log = self.logger.bind(companies=len(companies), limit=q.limit)
+        share = fair_share(q.limit, len(companies))
+        log = self.logger.bind(companies=len(companies), limit=q.limit, fair_share=share)
         log.info("lever.search_started")
 
+        # Two passes: the first caps every company at its fair share so the tail of the list
+        # is reached at all, the second lifts the cap and spends what is left. Without it a
+        # shared budget is consumed in list order and a company added specifically because it
+        # posts internships can contribute nothing, because discovery stopped before it.
+        # Pagination is cached, so the second pass re-reads rather than re-fetches.
         yielded = 0
         empty_boards = 0
-        for company in companies:
+        seen: set[str] = set()
+        reported_empty: set[str] = set()
+        for cap in (share, q.limit):
             if yielded >= q.limit:
                 break
+            for company in companies:
+                if yielded >= q.limit:
+                    break
 
-            from_company = 0
-            scanned = 0
-            try:
-                # ``aclosing`` matters here: breaking out of the loop at ``q.limit`` leaves
-                # the pagination generator suspended, and closing it deterministically is
-                # what releases the page it is holding rather than waiting for a collection.
-                async with aclosing(
-                    self.paginate(
-                        self._pager(company),
-                        page_size=PAGE_SIZE,
-                        max_pages=MAX_PAGES_PER_COMPANY,
+                from_company = 0
+                scanned = 0
+                try:
+                    # ``aclosing`` matters here: breaking out of the loop at ``q.limit`` leaves
+                    # the pagination generator suspended, and closing it deterministically is
+                    # what releases the page it is holding rather than waiting for a collection.
+                    async with aclosing(
+                        self.paginate(
+                            self._pager(company),
+                            page_size=PAGE_SIZE,
+                            max_pages=MAX_PAGES_PER_COMPANY,
+                        )
+                    ) as pages:
+                        async for job in pages:
+                            scanned += 1
+                            if not self._accepts(job, q):
+                                continue
+                            raw = self._to_raw(job, company)
+                            if q.remote_only and raw.work_arrangement is not WorkArrangement.REMOTE:
+                                continue
+                            if raw.external_id in seen:  # already yielded on the first pass
+                                continue
+                            seen.add(raw.external_id)
+                            self._remember(raw.external_id, company)
+                            yielded += 1
+                            from_company += 1
+                            yield raw
+                            if yielded >= q.limit or from_company >= cap:
+                                break
+                except ProviderError as exc:
+                    log.warning(
+                        "lever.company_failed",
+                        company=company,
+                        status_code=exc.status_code,
+                        transient=exc.transient,
+                        error=str(exc),
                     )
-                ) as pages:
-                    async for job in pages:
-                        scanned += 1
-                        if not self._accepts(job, q):
-                            continue
-                        raw = self._to_raw(job, company)
-                        if q.remote_only and raw.work_arrangement is not WorkArrangement.REMOTE:
-                            continue
-                        self._remember(raw.external_id, company)
-                        yielded += 1
-                        from_company += 1
-                        yield raw
-                        if yielded >= q.limit:
-                            break
-            except ProviderError as exc:
-                log.warning(
-                    "lever.company_failed",
-                    company=company,
-                    status_code=exc.status_code,
-                    transient=exc.transient,
-                    error=str(exc),
-                )
-                continue
+                    continue
 
-            if scanned == 0:
-                empty_boards += 1
-                log.warning(
-                    EVENT_BOARD_EMPTY,
-                    company=company,
-                    board_url=JOB_URL_TEMPLATE.format(company=company, job_id="").rstrip("/"),
-                    reason=(
-                        "the feed answered with no postings — the company token may not be a "
-                        "Lever board, or the board may have nothing published"
-                    ),
-                )
-                continue
+                # A board is empty once, however many passes visit it. Keyed on the company
+                # rather than on the pass, because `fair_share` returns the whole limit when
+                # there is a single source — so `cap == share` on both passes and a
+                # pass-based guard silently stops guarding exactly when the list is shortest.
+                if scanned == 0 and company not in reported_empty:
+                    reported_empty.add(company)
+                    empty_boards += 1
+                    log.warning(
+                        EVENT_BOARD_EMPTY,
+                        company=company,
+                        board_url=JOB_URL_TEMPLATE.format(company=company, job_id="").rstrip("/"),
+                        reason=(
+                            "the feed answered with no postings — the company token may not be a "
+                            "Lever board, or the board may have nothing published"
+                        ),
+                    )
+                    continue
 
-            log.debug(
-                "lever.company_scanned", company=company, scanned=scanned, yielded=from_company
-            )
+                log.debug(
+                    "lever.company_scanned", company=company, scanned=scanned, yielded=from_company
+                )
 
         log.info("lever.search_finished", yielded=yielded, empty_boards=empty_boards)
 

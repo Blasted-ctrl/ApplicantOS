@@ -61,6 +61,7 @@ from app.jobs.base import (
     ProviderError,
     RawPosting,
     SearchQuery,
+    fair_share,
 )
 from app.jobs.seeds import boards_from_query
 from app.models.enums import (
@@ -889,43 +890,57 @@ class AshbyProvider(ATSProvider):
             self.logger.warning("ashby.no_boards", extra_keys=sorted(q.extra))
             return
 
-        log = self.logger.bind(boards=len(boards), limit=q.limit)
+        share = fair_share(q.limit, len(boards))
+        log = self.logger.bind(boards=len(boards), limit=q.limit, fair_share=share)
         log.info("ashby.search_started")
 
+        # Two passes: fair share first so every board is reached, then uncapped to spend
+        # what is left. See `app.jobs.base.fair_share` for why a single shared budget
+        # starves the tail of the board list. Board feeds are cached, so the second pass
+        # re-reads them rather than re-fetching.
         yielded = 0
-        for board in boards:
+        seen: set[str] = set()
+        for cap in (share, q.limit):
             if yielded >= q.limit:
                 break
-
-            try:
-                jobs = await self._board_jobs(board)
-            except ProviderError as exc:
-                log.warning(
-                    "ashby.board_failed",
-                    board=board,
-                    status_code=exc.status_code,
-                    transient=exc.transient,
-                    error=str(exc),
-                )
-                continue
-
-            candidates = self._candidates(jobs, q)
-            log.debug(
-                "ashby.board_scanned",
-                board=board,
-                postings=len(jobs),
-                candidates=len(candidates),
-            )
-
-            for job, _published_at in candidates:
+            for board in boards:
                 if yielded >= q.limit:
                     break
-                raw = self._to_raw(job, board)
-                if q.remote_only and raw.work_arrangement is not WorkArrangement.REMOTE:
+
+                try:
+                    jobs = await self._board_jobs(board)
+                except ProviderError as exc:
+                    log.warning(
+                        "ashby.board_failed",
+                        board=board,
+                        status_code=exc.status_code,
+                        transient=exc.transient,
+                        error=str(exc),
+                    )
                     continue
-                self._remember(raw.external_id, board)
-                yielded += 1
-                yield raw
+
+                candidates = self._candidates(jobs, q)
+                log.debug(
+                    "ashby.board_scanned",
+                    board=board,
+                    postings=len(jobs),
+                    candidates=len(candidates),
+                )
+
+                from_board = 0
+                for job, _published_at in candidates:
+                    if yielded >= q.limit or from_board >= cap:
+                        break
+                    raw = self._to_raw(job, board)
+                    if q.remote_only and raw.work_arrangement is not WorkArrangement.REMOTE:
+                        continue
+                    if raw.external_id in seen:  # already yielded on the first pass
+                        continue
+                    seen.add(raw.external_id)
+                    self._remember(raw.external_id, board)
+                    from_board += 1
+                    yielded += 1
+                    yield raw
 
         log.info("ashby.search_finished", yielded=yielded)
 

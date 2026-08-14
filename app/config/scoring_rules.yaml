@@ -50,6 +50,13 @@
 # Three consequences shape every number below, and each replaced something that was
 # actively wrong for this search:
 #
+# 0. **Two gates, not one.** `not_an_internship` (-60) and `not_software_engineering`
+#    (-50) both fire on the *title*, and together they are what make this a search rather
+#    than a ranking. Gating only on intern-ness put "Graphic Design, Video & Motion
+#    Graphics Intern" and "Human Resources Intern" at a normalised 100 with verdict
+#    `apply` — they are genuinely internships, genuinely remote, and their bodies mention
+#    enough tooling to stack points. An auto-apply run would have applied to them.
+#
 # 1. **Internship is the axis, not a bonus.** A posting's intern-ness outweighs any single
 #    technology match, because a perfect Python role that wants six years of experience is
 #    not a near-miss — it is unreachable. `internship_title` is the largest positive in the
@@ -527,6 +534,37 @@ rules:
   # ===================================================================================
   # Hard negatives — the reasons an internship search must skip a posting
   # ===================================================================================
+
+  - key: "not_software_engineering"
+    label: "Not a software engineering role"
+    points: -50
+    field: "title"
+    any_of: []
+    all_of: []
+    # Every term here must be unambiguously about building software. Bare "development"
+    # was not: it cleared "Policy Development & Support Intern" to a normalised 95, and
+    # would equally clear Business, Fund and Talent Development. "technical" and
+    # "technology" went the same way — "Technical Writer Intern" is not this search.
+    none_of:
+      - "software"
+      - "engineer"
+      - "developer"
+      - "software development"
+      - "web development"
+      - "application development"
+      - "swe"
+      - "programmer"
+      - "computer science"
+      - "data scien"
+      - "machine learning"
+      - "coding"
+      - "full stack"
+      - "fullstack"
+      - "backend"
+      - "frontend"
+      - "devops"
+      - "site reliability"
+    regex: null
 
   - key: "not_an_internship"
     label: "Not an internship or co-op"

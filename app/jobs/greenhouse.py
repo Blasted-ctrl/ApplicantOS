@@ -63,6 +63,7 @@ from app.jobs.base import (
     ProviderError,
     RawPosting,
     SearchQuery,
+    fair_share,
 )
 from app.jobs.seeds import boards_from_query
 from app.models.enums import ATSProviderName, PluginKind, WorkArrangement
@@ -857,44 +858,59 @@ class GreenhouseProvider(ATSProvider):
             self.logger.warning("greenhouse.no_boards", extra_keys=sorted(q.extra))
             return
 
-        log = self.logger.bind(boards=len(boards), limit=q.limit)
+        share = fair_share(q.limit, len(boards))
+        log = self.logger.bind(boards=len(boards), limit=q.limit, fair_share=share)
         log.info("greenhouse.search_started")
 
+        # Two passes over the same board list. The first caps every board at its fair share
+        # so the tail of the list is reached at all; the second lifts the cap and spends
+        # whatever budget is left on whoever still has matches. The second pass is nearly
+        # free because `_board_jobs` is cached for `BOARD_FEED_TTL_SECONDS`, so it re-reads
+        # the same feeds without re-fetching them.
         yielded = 0
-        for board in boards:
+        seen: set[str] = set()
+        for cap in (share, q.limit):
             if yielded >= q.limit:
                 break
-
-            try:
-                jobs = await self._board_jobs(board)
-            except ProviderError as exc:
-                log.warning(
-                    "greenhouse.board_failed",
-                    board=board,
-                    status_code=exc.status_code,
-                    transient=exc.transient,
-                    error=str(exc),
-                )
-                continue
-
-            candidates = self._candidates(jobs, q)
-            log.debug(
-                "greenhouse.board_scanned",
-                board=board,
-                postings=len(jobs),
-                candidates=len(candidates),
-            )
-
-            for job, _updated_at in candidates:
+            for board in boards:
                 if yielded >= q.limit:
                     break
-                company = await self._company_for(job, board)
-                raw = self._to_raw(job, board, company)
-                if q.remote_only and raw.work_arrangement is not WorkArrangement.REMOTE:
+
+                try:
+                    jobs = await self._board_jobs(board)
+                except ProviderError as exc:
+                    log.warning(
+                        "greenhouse.board_failed",
+                        board=board,
+                        status_code=exc.status_code,
+                        transient=exc.transient,
+                        error=str(exc),
+                    )
                     continue
-                self._remember(raw.external_id, board)
-                yielded += 1
-                yield raw
+
+                candidates = self._candidates(jobs, q)
+                log.debug(
+                    "greenhouse.board_scanned",
+                    board=board,
+                    postings=len(jobs),
+                    candidates=len(candidates),
+                )
+
+                from_board = 0
+                for job, _updated_at in candidates:
+                    if yielded >= q.limit or from_board >= cap:
+                        break
+                    company = await self._company_for(job, board)
+                    raw = self._to_raw(job, board, company)
+                    if q.remote_only and raw.work_arrangement is not WorkArrangement.REMOTE:
+                        continue
+                    if raw.external_id in seen:  # already yielded on the first pass
+                        continue
+                    seen.add(raw.external_id)
+                    self._remember(raw.external_id, board)
+                    from_board += 1
+                    yielded += 1
+                    yield raw
 
         log.info("greenhouse.search_finished", yielded=yielded)
 

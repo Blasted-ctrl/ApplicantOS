@@ -95,6 +95,7 @@ __all__ = [
     "SearchQuery",
     "UnsupportedFlowError",
     "UserProfileDTO",
+    "fair_share",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -182,6 +183,33 @@ DEFAULT_SEARCH_LIMIT: Final[int] = 100
 
 #: Items requested per page by :meth:`ATSProvider.paginate` when the caller does not choose.
 DEFAULT_PAGE_SIZE: Final[int] = 100
+
+
+def fair_share(limit: int, sources: int) -> int:
+    """Per-source ceiling for the first pass of a multi-board search.
+
+    Every provider here polls a *list* of employer boards and spends one shared budget
+    across them, in list order. That starves the tail: with 52 Greenhouse boards and a
+    limit of 200, the first few boards can fill the budget on their own and the rest are
+    never fetched at all. The symptom is silent and looks like the employer has nothing
+    open — a board added specifically because it posts internships contributed nothing,
+    because discovery stopped four boards earlier.
+
+    Splitting the budget evenly first means every board is represented before any board is
+    allowed a second helping. A caller that asks for fewer results than there are boards
+    still gets one from each until the budget runs out, which is why the floor is 1 rather
+    than 0: a share of zero would skip every board and return nothing.
+
+    Args:
+        limit: Total postings the caller asked for.
+        sources: Number of boards, companies or tenants about to be polled.
+
+    Returns:
+        The most any single source may contribute on the first pass.
+    """
+    if sources <= 1:
+        return limit
+    return max(1, limit // sources)
 
 #: Hard ceiling on pages fetched in one :meth:`ATSProvider.paginate` call. A feed that never
 #: reports exhaustion — because it echoes the last page forever, or because a cursor loops —

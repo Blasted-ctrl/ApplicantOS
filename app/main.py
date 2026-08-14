@@ -128,14 +128,39 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         dry_run=settings.dry_run,
     )
 
+    _start_scheduler(settings)
+
     try:
         yield
     finally:
+        await _stop_scheduler()
         bus.close()
         reset_dispatcher()
         _stop_inline_executor()
         await dispose_engine()
         logger.info("app.stopped")
+
+
+def _start_scheduler(settings: Settings) -> None:
+    """Start the periodic scheduler for an install with no ``celery beat``.
+
+    Imported lazily for the same reason as the executor: an install that dispatches to a
+    real worker never touches the scheduler module.
+    """
+    try:
+        from app.workers.scheduler import start_scheduler
+    except ImportError:  # pragma: no cover - the module is part of the package
+        return
+    start_scheduler(settings)
+
+
+async def _stop_scheduler() -> None:
+    """Stop the periodic scheduler, if this install started one."""
+    try:
+        from app.workers.scheduler import stop_scheduler
+    except ImportError:  # pragma: no cover - the module is part of the package
+        return
+    await stop_scheduler()
 
 
 def _stop_inline_executor() -> None:

@@ -170,6 +170,14 @@ CONSTRAINED_KINDS: Final[frozenset[FieldKind]] = frozenset(
     {FieldKind.SELECT, FieldKind.RADIO, FieldKind.MULTISELECT, FieldKind.CHECKBOX}
 )
 
+#: Kinds a model may answer when the label reads as a question. Plain text plus the
+#: constrained controls — a yes/no radio asking about the applicant's experience is a
+#: question about evidence, and the answer is still forced back onto the offered options by
+#: :meth:`FieldAnswerer.coerce_to_options`. Demographic questions never reach here.
+_MODEL_ANSWERABLE_KINDS: Final[frozenset[FieldKind]] = frozenset(
+    {FieldKind.TEXT, FieldKind.SELECT, FieldKind.RADIO, FieldKind.MULTISELECT}
+)
+
 #: Affirmative and negative answers, and the option texts that mean them. Yes/no questions are
 #: the most common constrained fields on a form and rarely spell the words the same way twice.
 _AFFIRMATIVE: Final[tuple[str, ...]] = ("yes", "y", "true", "i am", "i do", "affirmative")
@@ -1117,11 +1125,27 @@ class FieldAnswerer:
     def _is_free_text(field: FormField, label: str) -> bool:
         """Return whether this field is a genuine question rather than a data entry box.
 
-        A textarea always is. A single-line ``text`` field is only treated as one when it
-        carries no options and its label reads as a question — long enough, or ending in a
-        question mark. Everything else (selects, radios, dates, numbers, files, URLs) is
-        answered deterministically or not at all, because a model cannot improve on a profile
-        lookup and can only introduce a fabrication.
+        A textarea always is. A ``text`` field is one when its label reads as a question —
+        long enough, or ending in a question mark.
+
+        **A constrained field can be a question too**, and excluding all of them cost real
+        answers. The original rule was "a model cannot improve on a profile lookup and can
+        only introduce a fabrication", which was true when a profile lookup was the only
+        other source. It is not any more: the answerer is handed a
+        :class:`~app.knowledge.retrieval.KnowledgeRetriever`, so "Do you have experience
+        working with front-end languages such as HTML, CSS, and JavaScript?" is a question
+        about *evidence in the knowledge graph* — indexed from the applicant's own repositories
+        — rather than an invitation to guess. Observed on a live Lever form, seven such
+        questions went to a human while the facts that answer them sat indexed and unread.
+
+        Three things keep golden rule #2 intact on that path, and none of them are new:
+        demographic questions return before this is ever called and can never reach the model;
+        :meth:`coerce_to_options` forces the answer to be one of the offered options verbatim
+        or drops it; and the model's confidence is capped at :data:`MAX_LLM_CONFIDENCE` and
+        still has to clear ``settings.min_answer_confidence`` to be typed rather than asked.
+
+        Controls that are not questions at all — dates, numbers, files, URLs — stay
+        deterministic, because there is nothing for a model to reason about.
 
         Args:
             field: The discovered input.
@@ -1130,11 +1154,9 @@ class FieldAnswerer:
         Returns:
             Whether the model path applies.
         """
-        if field.options:
-            return False
         if field.kind is FieldKind.TEXTAREA:
             return True
-        if field.kind is not FieldKind.TEXT:
+        if field.kind not in _MODEL_ANSWERABLE_KINDS:
             return False
         return field.label.strip().endswith("?") or len(label.split()) >= LLM_MIN_QUESTION_WORDS
 

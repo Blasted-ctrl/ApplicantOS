@@ -71,6 +71,25 @@ MAX_TOKENS_REJECTION_MARKERS: Final[tuple[str, ...]] = (
 UNUSED_API_KEY: Final[str] = "not-needed"
 
 
+#: Model-name prefixes whose families accept only their default sampling temperature.
+#: Matched as prefixes rather than exact ids so a dated snapshot (``gpt-5-2025-08-07``) and a
+#: size variant (``gpt-5-mini``) are covered without a release-by-release list to maintain.
+_FIXED_TEMPERATURE_PREFIXES: Final[tuple[str, ...]] = ("gpt-5", "o1", "o3", "o4")
+
+
+def _supports_temperature(model: str) -> bool:
+    """Whether *model* accepts an explicit ``temperature``.
+
+    Args:
+        model: The model id about to be requested.
+
+    Returns:
+        ``False`` for families that reject anything but their default.
+    """
+    name = (model or "").strip().lower()
+    return not name.startswith(_FIXED_TEMPERATURE_PREFIXES)
+
+
 @plugin
 class OpenAIModel(GuardedModelPlugin):
     """GPT models via the official ``openai`` async SDK.
@@ -198,8 +217,14 @@ class OpenAIModel(GuardedModelPlugin):
         request: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": temperature,
         }
+        # `temperature` is not universal. The reasoning-model families reject any value but
+        # their default and answer `400 unsupported_value` — so sending the 0.0 this codebase
+        # uses for determinism made every call fail, on every retry, for the whole family.
+        # Omitting the key is the correct request for those models, not a degradation: they
+        # are deterministic enough for this workload without being asked.
+        if _supports_temperature(model):
+            request["temperature"] = temperature
         if wants_json:
             request["response_format"] = dict(JSON_OBJECT_RESPONSE_FORMAT)
 

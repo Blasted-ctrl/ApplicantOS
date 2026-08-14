@@ -34,7 +34,13 @@ from pathlib import Path
 
 import pytest
 
-from app.browser.apply import SCREENSHOT_FORM_LOADED, plan_documents, run_apply
+from app.browser.apply import (
+    SCREENSHOT_FORM_FILLED,
+    SCREENSHOT_FORM_LOADED,
+    plan_documents,
+    run_apply,
+)
+from app.browser.selectors import PACKS, SelectorPack
 from app.browser.verification import DEFAULT_EVIDENCE_NAME
 from app.jobs.base import ApplyContext, ApplyResult, FormField, JobPostingDTO, UserProfileDTO
 from app.models.enums import (
@@ -218,9 +224,12 @@ async def test_a_confirmed_submit_reaches_confirmed_with_an_id_and_proof(
     # The confirmation id is what app.tracking later matches the employer's email against.
     assert result.confirmation_id == "GH-4417-22"
     assert "Thank you for applying" in (result.confirmation_text or "")
-    # Proof of submission: the two captures §12 invariant 3 requires, plus the verifier's.
+    # Proof of submission: the two captures §12 invariant 3 requires, plus the filled form
+    # (captured before the unanswered-required check can divert, so a review item always
+    # shows what the form actually looked like) and the verifier's own evidence shot.
     assert session.screenshots == [
         SCREENSHOT_FORM_LOADED,
+        SCREENSHOT_FORM_FILLED,
         "before_submit",
         "after_submit",
         DEFAULT_EVIDENCE_NAME,
@@ -729,3 +738,54 @@ async def test_the_browser_log_records_the_verification_step(
     verify = result.browser_log[-1]
     assert verify["confirmed"] is True
     assert verify["confirmation_id"] == "GH-4417-22"
+
+
+# ======================================================================================
+# Scoping — the property that keeps a click on the control and off the form
+# ======================================================================================
+
+
+def test_scoping_crosses_every_root_with_every_target() -> None:
+    """Both sides are selector lists, so scoping is a cross product, not a prefix."""
+    pack = SelectorPack(
+        name="fake",
+        form_root="#a, form.b",
+        field_container="",
+        label="",
+        input="",
+        file_input="input[type='file'], .dropzone input",
+        submit="",
+        success_markers=(),
+        error_markers=(),
+        next_step="",
+        cookie_banner="",
+        captcha_markers=(),
+    )
+
+    assert pack.scoped(pack.file_input).split(", ") == [
+        "#a input[type='file']",
+        "#a .dropzone input",
+        "form.b input[type='file']",
+        "form.b .dropzone input",
+    ]
+
+
+def test_no_scoped_alternative_is_ever_a_bare_form_root() -> None:
+    """The regression this file exists to prevent, checked across every shipped pack.
+
+    A prefix-only scoping of ``"#a, form.b"`` + ``"input[type='file']"`` produces
+    ``"#a, form.b input[type='file']"``, whose *first* alternative is the form itself.
+    ``locator(...).first`` then resolves to the ``<form>``, and Playwright uploads to — or
+    clicks — the wrong element. Every alternative must therefore name something inside a
+    root, never a root.
+    """
+    for pack in PACKS.values():
+        roots = {part.strip() for part in pack.form_root.split(",") if part.strip()}
+        if not roots:
+            continue
+        for selector in (pack.input, pack.file_input, pack.submit, pack.field_container):
+            if not selector:
+                continue
+            for alternative in pack.scoped(selector).split(", "):
+                assert alternative not in roots, f"{pack.name}: {alternative!r} is a bare root"
+                assert " " in alternative, f"{pack.name}: {alternative!r} is not scoped"

@@ -218,18 +218,35 @@ class SelectorPack:
         Args:
             selector: A selector relative to the form, possibly a comma-separated list.
 
+        Both sides may be comma-separated lists, and both must be split before joining. CSS
+        gives ``,`` lower precedence than descendant combination, so prefixing a multi-root
+        string onto each target — ``"#form, form.app input[type='file']"`` — yields a list
+        whose leading alternatives are *the form roots themselves*. ``.first`` on that
+        resolves to the ``<form>`` element, and a caller that then uploads a file or clicks
+        submit acts on the form rather than on the control. The full cross product is the
+        only form that means "this control, inside any of these roots".
+
+        Args:
+            selector: A selector relative to the form, possibly a comma-separated list.
+
         Returns:
-            The scoped selector; *selector* unchanged when the pack declares no form root.
-            Each alternative in a comma-separated list is scoped individually, because CSS
-            gives ``,`` lower precedence than descendant combination and a naive prefix
-            would scope only the first.
+            ``"<root> <target>"`` for every combination of root and target alternative,
+            joined into one selector list; *selector* unchanged when the pack declares no
+            form root.
+
+        Example:
+            >>> GREENHOUSE.scoped("input[type='file']").split(", ")[0]
+            "#application_form input[type='file']"
         """
-        root = self.form_root.strip()
-        target = (selector or "").strip()
-        if not root or not target:
-            return target
-        alternatives = [part.strip() for part in target.split(_CSS_LIST_SEPARATOR) if part.strip()]
-        return ", ".join(f"{root} {alternative}" for alternative in alternatives)
+        targets = [
+            part.strip() for part in (selector or "").split(_CSS_LIST_SEPARATOR) if part.strip()
+        ]
+        if not targets:
+            return ""
+        roots = [part.strip() for part in self.form_root.split(_CSS_LIST_SEPARATOR) if part.strip()]
+        if not roots:
+            return ", ".join(targets)
+        return ", ".join(f"{root} {target}" for root in roots for target in targets)
 
     def matches_success_text(self, text: str) -> str | None:
         """Return the success marker found in *text*, if any.
@@ -325,6 +342,17 @@ _COMMON_CAPTCHA_MARKERS: Final[tuple[str, ...]] = (
     "iframe[src*='challenges.cloudflare.com']",
     ".cf-turnstile",
     "#cf-challenge-running",
+    # Greenhouse's own human check, which is plain HTML rather than a vendor widget: after a
+    # valid submit it replaces the button with "A verification code was sent to <email>.
+    # To submit your application, enter the 8-character code to confirm you're a human."
+    # Observed live on a complete, correctly-filled application — every field accepted, the
+    # résumé attached, and the submission held behind a code only the applicant can read.
+    # Without these markers the attempt reported `verification_failed` ("neither a
+    # confirmation nor an error"), which is true but useless: the actionable fact is that a
+    # code is sitting in the applicant's inbox.
+    "verification code was sent",
+    "confirm you're a human",
+    "confirm you are a human",
 )
 
 #: Consent banners, which render above the form and eat the first click. The two managed

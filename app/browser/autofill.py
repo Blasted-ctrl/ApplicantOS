@@ -101,6 +101,24 @@ __all__ = [
 
 logger = structlog.get_logger(__name__)
 
+#: ARIA role marking a text input that is really a listbox-backed choice control.
+_ROLE_COMBOBOX: Final[str] = "combobox"
+
+#: Milliseconds to let a combobox's listbox filter before committing the highlighted option.
+#: These widgets filter asynchronously, so pressing Enter immediately commits whatever was
+#: highlighted before the typing was processed — usually nothing.
+_COMBOBOX_SETTLE_MS: Final[int] = 350
+
+#: Milliseconds between keystrokes when typing into a combobox. Real key events are what
+#: make the menu appear at all, and a widget that filters per keystroke needs them spaced.
+_COMBOBOX_KEY_DELAY_MS: Final[int] = 40
+
+#: The option nodes a listbox-backed combobox renders. `react-select` — which Greenhouse and
+#: most modern ATS forms use — names them `*__option`; the ARIA role covers the rest.
+_COMBOBOX_OPTION_SELECTOR: Final[str] = (
+    "div[class*='__option']:visible, [role='listbox'] [role='option']:visible"
+)
+
 
 # ======================================================================================
 # Constants
@@ -1605,9 +1623,80 @@ class AutoFiller:
                 characters=len(value),
                 limit=field.max_length,
             )
-        await self.page.locator(field.selector).fill(text)
+        locator = self.page.locator(field.selector)
+        combobox = await self._is_combobox(locator)
+        if combobox:
+            # `fill()` sets the value through the DOM, which never opens the menu — the
+            # widget's options are rendered in response to real input events. Clicking and
+            # typing is what makes the list appear, and without a list there is nothing to
+            # commit.
+            await locator.click()
+            await locator.type(text, delay=_COMBOBOX_KEY_DELAY_MS)
+        else:
+            await locator.fill(text)
+
+        # A combobox is a choice dressed as a text box, and setting its value changes nothing.
+        # Greenhouse renders Country as `<input type="text" role="combobox">` backed by a
+        # react-select listbox: the characters land, no option is selected, the field stays
+        # empty as far as the form is concerned, and the submit fails validation with the
+        # control marked `aria-invalid`. Observed live — a complete application was rejected
+        # on Country alone while every visible box looked filled.
+        #
+        # Committing the highlighted option is what a person does: type, wait for the list to
+        # narrow, press Enter. Failure here is deliberately not fatal — the value is typed
+        # either way, and verification catches a form that still refuses.
+        if combobox:
+            await self._commit_combobox(field, locator)
+
         logger.debug("autofill.text_filled", label=field.label, characters=len(text))
         return True
+
+    async def _is_combobox(self, locator: Any) -> bool:
+        """Whether this control is a listbox-backed combobox rather than a plain text box.
+
+        Args:
+            locator: The control's locator.
+
+        Returns:
+            ``True`` when the element declares ``role="combobox"``.
+        """
+        try:
+            role = await locator.get_attribute("role")
+        except Exception:  # a detached or exotic control is simply not a combobox
+            return False
+        return (role or "").strip().lower() == _ROLE_COMBOBOX
+
+    async def _commit_combobox(self, field: FormField, locator: Any) -> None:
+        """Select the option a combobox is currently offering.
+
+        Clicking the option is what works; pressing Enter is not. Measured against
+        Greenhouse's country control, ``Enter`` left the widget on its placeholder and the
+        form rejected the submission, while clicking the filtered option committed it. These
+        widgets bind their commit to a pointer event on the option node rather than to a key
+        event on the input, so the keystroke goes nowhere.
+
+        Args:
+            field: The field being filled, for logging.
+            locator: The combobox input's locator.
+        """
+        try:
+            await self.page.wait_for_timeout(_COMBOBOX_SETTLE_MS)
+            options = self.page.locator(_COMBOBOX_OPTION_SELECTOR)
+            if await options.count():
+                await options.first.click()
+                logger.debug("autofill.combobox_committed", label=field.label, via="option")
+                return
+            # No visible menu — some widgets commit on Enter, so it is still worth trying
+            # rather than leaving the control on its placeholder.
+            await locator.press("Enter")
+            logger.debug("autofill.combobox_committed", label=field.label, via="enter")
+        except Exception as exc:
+            logger.info(
+                "autofill.combobox_not_committed",
+                label=field.label,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     async def _write_date(self, field: FormField, value: str) -> bool:
         """Type a date, in the format the control expects, or refuse."""
@@ -1965,29 +2054,18 @@ def _css_escape(value: str) -> str:
 def _scoped_submit(pack: SelectorPack) -> str:
     """Return the pack's submit selector, correctly scoped inside its form.
 
-    :meth:`~app.browser.selectors.SelectorPack.scoped` prefixes each alternative of the
-    *selector* with the whole ``form_root`` string. When the root is itself a comma-separated
-    list — as it is for Greenhouse, Lever and Ashby — the result is a selector list whose
-    leading alternatives are the *form roots themselves*, so ``.first`` can resolve to the
-    ``<form>`` element instead of to the submit button. On any other selector that is a
-    curiosity; on this one it is the difference between pressing submit and pressing nothing,
-    so the cross product is built explicitly here.
+    The scoping itself belongs to the pack — :meth:`SelectorPack.scoped` builds the root ×
+    target cross product that §12 rule 4 depends on. This wrapper exists to keep the submit
+    selector's construction named at its call site, because it is the one selector whose
+    mis-scoping would mean clicking the ``<form>`` element instead of the submit button.
 
     Args:
         pack: The provider's selector pack.
 
     Returns:
-        ``"<root> <submit>"`` for every combination of root and submit alternative, joined
-        into one selector list; the bare submit selector when the pack declares no root; and
-        ``""`` when it declares no submit control.
+        The scoped submit selector; ``""`` when the pack declares no submit control.
     """
-    targets = [part.strip() for part in pack.submit.split(",") if part.strip()]
-    if not targets:
-        return ""
-    roots = [part.strip() for part in pack.form_root.split(",") if part.strip()]
-    if not roots:
-        return ", ".join(targets)
-    return ", ".join(f"{root} {target}" for root in roots for target in targets)
+    return pack.scoped(pack.submit)
 
 
 def _kind_for(raw: Mapping[str, Any]) -> FieldKind:

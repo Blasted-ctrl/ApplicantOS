@@ -106,6 +106,7 @@ __all__ = [
     "VERDICT_FAILED",
     "VERDICT_NEEDS_REVIEW",
     "VERDICT_PREPARED",
+    "VERDICT_REHEARSED",
     "VERDICT_SKIPPED",
     "VERDICT_SUBMITTED",
     "Pipeline",
@@ -128,6 +129,11 @@ VERDICT_NEEDS_REVIEW: Final[str] = "needs_review"
 #: Policy said no: the kill switch, dry run, or the daily cap.
 VERDICT_BLOCKED: Final[str] = "blocked"
 
+#: A dry run finished: the real form was filled and deliberately not submitted. Distinct
+#: from ``blocked`` (nothing happened) and from ``submitted`` (the employer has it), because
+#: conflating a rehearsal with either is how a user ends up trusting the wrong thing.
+VERDICT_REHEARSED: Final[str] = "rehearsed"
+
 #: Nothing was wrong and nothing was done — the score was too low, or the application was
 #: not in a state a submission could start from.
 VERDICT_SKIPPED: Final[str] = "skipped"
@@ -147,6 +153,12 @@ _STAGE_GUARD: Final[str] = "guard"
 _STAGE_SCORE: Final[str] = "score"
 _STAGE_PREPARE: Final[str] = "prepare"
 _STAGE_SUBMIT: Final[str] = "submit"
+
+#: Stage reported by a rehearsal. Named for what happened rather than for what was skipped.
+_STAGE_APPLY: Final[str] = "apply"
+
+#: Timeline event kind written when a dry run fills a real form without submitting it.
+_EVENT_KIND_REHEARSED: Final[str] = "rehearsed"
 
 #: Directory under ``settings.data_path`` holding the rendered files an apply flow uploads
 #: from. Temporary by construction: everything in it can be rebuilt from
@@ -939,9 +951,27 @@ class Pipeline:
             )
 
         # -- 5. the kill switch (golden rule #3) --------------------------------------------
-        if not self._settings.is_submission_allowed:
+        #
+        # Two switches, but they do not mean the same thing, and collapsing them into one
+        # test cost the product its most useful safety feature. `is_submission_allowed` is
+        # `auto_apply_enabled and not dry_run`, so testing it alone refused the whole attempt
+        # whenever `dry_run` was on — the browser never opened. Meanwhile `docs/SAFETY.md`
+        # and the onboarding copy both promise that a dry run "fills every field it can
+        # answer and stops at the button", which is exactly how a user is supposed to build
+        # confidence before arming anything. That rehearsal was unreachable.
+        #
+        # So the switches are read separately:
+        #
+        #   auto_apply_enabled=False           nothing happens at all — the master switch
+        #   auto_apply_enabled, dry_run=True   rehearse: fill, screenshot, never click
+        #   auto_apply_enabled, dry_run=False  really submit
+        #
+        # Golden rule #3 is unchanged: a real submission still requires both switches. What
+        # changes is that the safe combination now *does something the user can inspect*
+        # rather than refusing at the door.
+        if not self._settings.auto_apply_enabled:
             payload = {
-                "auto_apply_enabled": bool(self._settings.auto_apply_enabled),
+                "auto_apply_enabled": False,
                 "dry_run": bool(self._settings.dry_run),
                 "provider": provider_name,
                 "apply_url": posting.apply_url or posting.url,
@@ -962,6 +992,14 @@ class Pipeline:
                     "dry_run must be false."
                 ),
                 payload=payload,
+            )
+
+        rehearsal = not self._settings.is_submission_allowed
+        if rehearsal:
+            log.info(
+                "pipeline.submit_rehearsing",
+                provider=provider_name,
+                apply_url=posting.apply_url or posting.url,
             )
 
         # -- 6. attempt ---------------------------------------------------------------------
@@ -995,24 +1033,30 @@ class Pipeline:
             # second executor to have read the same `READY` and be standing exactly where
             # this one is. The claim is a conditional UPDATE, so precisely one of them sees a
             # row affected and the other is turned away before a browser opens.
-            claimed = await self._applications.claim(
-                application,
-                expected=ApplicationStatus.READY,
-                target=ApplicationStatus.SUBMITTING,
-                message=f"Submitting via {provider_name}.",
-                payload={"provider": provider_name, "score": value},
-            )
-            if not claimed:
-                log.warning("pipeline.submit_lost_claim", application_id=str(application.id))
-                return self._result(
-                    VERDICT_ALREADY_APPLIED,
-                    _STAGE_GUARD,
+            # A rehearsal never claims. Claiming would move the row to SUBMITTING, and a
+            # SUBMITTING row is one that guard 3 will refuse to submit later — so a single
+            # dry run would permanently consume the application's one chance at being sent
+            # for real. The row stays READY, which is precisely what makes a rehearsal
+            # repeatable and what lets the real submission follow it.
+            if not rehearsal:
+                claimed = await self._applications.claim(
                     application,
-                    started,
-                    message="Another run is already submitting this application.",
+                    expected=ApplicationStatus.READY,
+                    target=ApplicationStatus.SUBMITTING,
+                    message=f"Submitting via {provider_name}.",
+                    payload={"provider": provider_name, "score": value},
                 )
+                if not claimed:
+                    log.warning("pipeline.submit_lost_claim", application_id=str(application.id))
+                    return self._result(
+                        VERDICT_ALREADY_APPLIED,
+                        _STAGE_GUARD,
+                        application,
+                        started,
+                        message="Another run is already submitting this application.",
+                    )
 
-            submitting_committed = True
+                submitting_committed = True
 
             attempt_started = time.monotonic()
             try:
@@ -1066,8 +1110,100 @@ class Pipeline:
         except Exception as exc:
             return await self._failed_result(application, exc, started, score=value)
 
+        if rehearsal:
+            return await self._finalize_rehearsal(
+                application, result, elapsed, started, score=value, provider=provider_name
+            )
+
         return await self._finalize(
             application, result, elapsed, started, score=value, provider=provider_name
+        )
+
+    async def _finalize_rehearsal(
+        self,
+        application: Application,
+        result: ApplyResult,
+        elapsed: float,
+        started: float,
+        *,
+        score: int | None,
+        provider: str,
+    ) -> PipelineResult:
+        """Record a dry run without letting it look like a submission.
+
+        A rehearsal produces exactly the evidence a real attempt does — screenshots of the
+        filled form, the browser log, the questions the answerer could not answer — and none
+        of the state. The application stays ``READY``: it was not sent, so nothing about it
+        is post-submit, and the real submission is still ahead of it.
+
+        The unanswered fields are the point of the exercise. They are what the review queue
+        would have asked about, surfaced *before* anything was committed to an employer, and
+        they are the honest answer to "what would this actually have done".
+
+        Args:
+            application: The application that was rehearsed.
+            result: What the provider reported from the dry run.
+            elapsed: Wall-clock seconds the provider call took.
+            started: Monotonic start of the whole :meth:`submit` call.
+            score: The posting's normalised score, for the returned result.
+            provider: The board that was rehearsed against.
+
+        Returns:
+            A :data:`VERDICT_REHEARSED` result carrying the artifacts.
+        """
+        screenshots = await self._store_screenshots(application, result.screenshot_paths)
+
+        application.duration_seconds = float(result.duration_seconds or elapsed)
+        # Reassigned wholesale: JSON columns are not change tracked.
+        application.browser_log = [dict(entry) for entry in result.browser_log]
+        await self._session.flush()
+
+        payload: dict[str, Any] = {
+            "provider": provider,
+            "dry_run": True,
+            "screenshots": [str(file.id) for file in screenshots],
+            "duration_seconds": round(application.duration_seconds or 0.0, 3),
+            "reported_status": str(result.status),
+        }
+        if result.unanswered_fields:
+            payload["unanswered_fields"] = [
+                _field_payload(field_) for field_ in result.unanswered_fields
+            ]
+        if result.error:
+            payload["error"] = result.error
+
+        # An event rather than a transition. The status is unchanged on purpose, and the
+        # timeline still has to show that a rehearsal happened and what it found.
+        application.add_event(
+            _EVENT_KIND_REHEARSED,
+            message=(
+                f"Dry run against {provider}: the form was filled and nothing was submitted."
+            ),
+            payload=payload,
+        )
+        await self._session.flush()
+        await self._session.commit()
+
+        unanswered = len(result.unanswered_fields or ())
+        logger.info(
+            "pipeline.rehearsed",
+            application_id=str(application.id),
+            provider=provider,
+            screenshots=len(screenshots),
+            unanswered_fields=unanswered,
+            duration_seconds=application.duration_seconds,
+        )
+        return self._result(
+            VERDICT_REHEARSED,
+            _STAGE_APPLY,
+            application,
+            started,
+            score=score,
+            message=(
+                f"Dry run complete: the {provider} form was filled and left unsubmitted"
+                + (f", with {unanswered} question(s) unanswered." if unanswered else ".")
+            ),
+            payload=payload,
         )
 
     async def _finalize(

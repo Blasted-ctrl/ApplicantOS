@@ -1890,7 +1890,34 @@ class AutoFiller:
             logger.debug("autofill.group_without_options", name=name)
             return None
 
-        label = _str(first.get("heading")) or _str(first.get("ariaLabelledBy")) or name
+        # A group's question is never one of its own answers. The heading walk looks inside
+        # the question's container for the first label-shaped element, and on a form that
+        # wraps each radio in its own `<label>` that finds the *first option* — so a
+        # graduation-date group came back labelled "December 2026", a timezone group "PT",
+        # and four separate yes/no questions all came back labelled "Yes".
+        #
+        # Answering against a label like that is worse than not answering: the answerer is
+        # being asked a different question from the one on screen, and golden rule #2 says
+        # the honest outcome is to hand it to a human. So a heading that collides with an
+        # option is discarded rather than trusted, and the next candidate is tried.
+        offered = {option.strip().casefold() for option in options}
+        candidates = (
+            _str(first.get("heading")),
+            _str(first.get("ariaLabelledBy")),
+            _str(first.get("legend")),
+        )
+        label = next(
+            (text for text in candidates if text and text.strip().casefold() not in offered),
+            "",
+        )
+        if not label:
+            logger.info(
+                "autofill.group_label_is_an_option",
+                name=name,
+                rejected=[text for text in candidates if text],
+                options=options[:6],
+            )
+            label = name
         self._choice_targets[group_selector] = targets
         return FormField(
             selector=group_selector,

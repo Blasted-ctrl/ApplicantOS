@@ -141,6 +141,12 @@ SOURCE_EXPLICIT: Final[str] = "explicit"
 SOURCE_PROFILE: Final[str] = "profile"
 SOURCE_EEO: Final[str] = "eeo_profile"
 SOURCE_DECLINED: Final[str] = "eeo_declined"
+
+#: Sources that identify a plan as answering a demographic question. Option coercion treats
+#: these specially: a value that matches no offered option falls back to the form's decline
+#: option rather than to a human, because declining is always a valid answer here and the
+#: applicant already answered this during onboarding.
+_EEO_SOURCES: Final[frozenset[str]] = frozenset({SOURCE_EEO, SOURCE_DECLINED})
 SOURCE_LLM: Final[str] = "llm"
 SOURCE_NONE: Final[str] = "unanswered"
 
@@ -186,6 +192,13 @@ DECLINE_MARKERS: Final[tuple[str, ...]] = (
     "i dont wish to answer",
     "do not wish to answer",
     "dont wish to answer",
+    # "want" as well as "wish": CALSTART's Lever form offers "I do not want to answer",
+    # which the wish-only list missed, so a question with a perfectly good decline option
+    # went to a human instead.
+    "i do not want to answer",
+    "i dont want to answer",
+    "do not want to answer",
+    "dont want to answer",
     "i decline to answer",
     "decline to answer",
     "choose not to disclose",
@@ -1493,6 +1506,35 @@ class FieldAnswerer:
                 options=list(field.options)[:12],
                 source=plan.source,
             )
+            # A demographic question always has an honest answer available, and it is the
+            # form's own decline option — never a human's time. `_eeo_plan` already knows
+            # that, but its work was being undone here: a stated value that does not match
+            # the offered wording is a *vocabulary* mismatch, not an unanswerable question.
+            #
+            # Observed on a live Lever form: the profile said "I AM NOT A VETERAN" and the
+            # control offered "I am not a protected veteran". Too dissimilar to match, so
+            # the field was escalated — asking the applicant to hand-answer a question they
+            # had already answered during onboarding, on a form where declining is
+            # explicitly voluntary and explicitly offered.
+            if plan.source in _EEO_SOURCES:
+                decline = self._decline_option(field.options)
+                if decline is not None:
+                    logger.info(
+                        "field_answer.eeo_declined_after_mismatch",
+                        label=field.label,
+                        stated=plan.value,
+                        option=decline,
+                    )
+                    return AnswerPlan(
+                        field=field,
+                        value=decline,
+                        confidence=KNOWN_CONFIDENCE,
+                        source=SOURCE_DECLINED,
+                        reasoning=(
+                            "The stated value does not match any option this form offers, "
+                            "and demographic questions are never inferred; declining."
+                        ),
+                    )
             return plan.declined()
 
         if match != plan.value:

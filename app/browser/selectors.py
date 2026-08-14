@@ -412,7 +412,15 @@ GREENHOUSE: Final[SelectorPack] = SelectorPack(
 LEVER: Final[SelectorPack] = SelectorPack(
     name=ATSProviderName.LEVER.value,
     form_root="form#application-form, form[action*='/apply'], .application-form",
-    field_container=".application-question, .application-field, li.application-question",
+    # `.application-field` is deliberately absent. `closest()` returns the *nearest*
+    # matching ancestor, whichever branch of the selector it matched, so a radio input
+    # resolved to `.application-field` — the wrapper around the options alone. The question
+    # text lives one level up, in `.application-question`, and inside `.application-field`
+    # the only label-shaped elements are the options themselves. That is how a graduation
+    # date group came back labelled "December 2026" and four different yes/no questions all
+    # came back labelled "Yes". Climbing to `.application-question` puts both the question
+    # and its options in the same container, which is what the label walk expects.
+    field_container="li.application-question, .application-question",
     label=".application-label, label",
     input=_FILLABLE_CONTROLS,
     file_input="input[type='file'][name='resume'], input[type='file']",

@@ -82,6 +82,7 @@ from app.models.enums import ApplicationStatus, FieldKind, ReviewReason
 __all__ = [
     "COVER_LETTER_HINTS",
     "RESUME_HINTS",
+    "SCREENSHOT_FORM_FILLED",
     "SCREENSHOT_FORM_LOADED",
     "DocumentPlan",
     "plan_documents",
@@ -100,6 +101,11 @@ logger = structlog.get_logger(__name__)
 #: :meth:`~app.browser.autofill.AutoFiller.submit`; this one is what a human looks at when a
 #: review item says "a required field could not be answered".
 SCREENSHOT_FORM_LOADED: Final[str] = "form_loaded"
+
+#: Artifact name for the capture taken once every answerable field has been filled and
+#: before the run can return. This is the one a human actually wants: it shows what would be
+#: submitted, which is the entire point of a dry run and the fastest way to resolve a review.
+SCREENSHOT_FORM_FILLED: Final[str] = "form_filled"
 
 #: Label fragments that mark a file input as wanting the cover letter. Checked **before**
 #: :data:`RESUME_HINTS` because "Cover letter (PDF or DOC, in place of a resume)" contains
@@ -696,6 +702,15 @@ async def _drive(ctx: ApplyContext, session: Any, pack: SelectorPack) -> ApplyRe
         needs_review=len(unanswered),
         blockers=sorted(filler.blockers) or None,
     )
+
+    # The filled form, captured before anything can return. Every existing capture is taken
+    # either before typing or around the submit click, so a run that stops at an unanswered
+    # field — and *every* dry run — produced a single screenshot of an empty form. That is
+    # the wrong half: a rehearsal exists to show what would be sent, and a review item saying
+    # "a required field could not be answered" is far easier to resolve next to a picture of
+    # the eleven fields that *were*.
+    await attempt.capture(SCREENSHOT_FORM_FILLED)
+
     if unanswered:
         # §12 invariant 2: any field below the confidence line — required or not — is a
         # question for a human. An optional question answered wrongly is still an answer

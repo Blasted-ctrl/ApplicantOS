@@ -126,15 +126,46 @@ letter generation and field answering.
 
 ---
 
+## Proven: one real application, accepted by the employer
+
+**Software Engineering Intern — Instead**, `job-boards.greenhouse.io/instead/jobs/7761472003`,
+application `daa3aed2-5ad1-41eb-a2bb-64c67ca02b0d`, scored 100 / verdict `apply`, submitted
+2026-08-14 with `AUTO_APPLY_ENABLED=true DRY_RUN=false RESUME_SOURCE=master`.
+
+```
+filled  First Name / Last Name / Preferred First Name / Email / Phone
+        LinkedIn URL / "Which computer type do you use; Mac, Linux or PC?"
+autofill.combobox_committed   label=Country via=option
+autofill.uploaded             filename='Ali F Resume (1).pdf' selector=#resume
+autofill.submit_clicked       pack=greenhouse
+[challenge] email code prompt is up
+[RESULT] CONFIRMED via 'Thank you for applying'
+URL: https://job-boards.greenhouse.io/instead/jobs/7761472003/confirmation
+```
+
+Proof is archived under `var/screenshots/instead-7761472003/`: the filled form, the page
+after the first submit, the code entered, and the confirmation page reading *"Thank you for
+applying! Your application has been received."*
+
+One step needed a human, by the employer's design. Greenhouse held the completed application
+behind an 8-character code emailed to the applicant — the anti-bot check now detected by name
+(`app/browser/selectors.py`, `_COMMON_CAPTCHA_MARKERS`) rather than reported as an
+inconclusive page. Each submit attempt invalidates every earlier code, so clearing it requires
+a session that is still open at the prompt when the code arrives. Reading the code out of the
+mailbox and typing it was scripted here; **that loop is not in the product yet** — the pipeline
+still stops at `NEEDS_REVIEW`, which is the correct default and the honest state of the code.
+
+---
+
 ## Not yet proven
 
 Listed with what is missing, not with an excuse.
 
 | Item | State | What is missing |
 |---|---|---|
-| **Real submission** | Never executed | Every run so far has been a rehearsal. No application has been sent to an employer. |
 | Injection chokepoints 4 and 5 | Partial | Wired into 3 of the 5 sites the contract names. Website/portfolio extraction and job-posting ingestion are not screened. |
-| Gmail / Outlook OAuth | Unproven | Code exists; no real account has been authorised. Credentials-in-keychain and read-only scope are unverified. |
+| Gmail / Outlook OAuth | Unproven **in-product** | An authorised Gmail account was read during the submission above, but through an external connector, not through `app/tracking/`. Credentials-in-keychain and read-only scope remain unverified. |
+| Resuming a review item with a supplied answer | Absent | A challenge escalates to `NEEDS_REVIEW`; nothing can hand an answer back to a live browser session and continue. This is what would make the emailed-code flow unattended. |
 | macOS / Linux sidecars | Absent | Only `applicantos-server-x86_64-pc-windows-msvc.exe` is built. |
 | Signed installers, release CI, updater | Absent | `ci.yml` and `integration.yml` exist; there is no `release.yml`, no signing, no updater. |
 | Performance CI (Playwright + CDP) | Absent | The budget is documented in `docs/UI.md` and not enforced anywhere. |

@@ -292,6 +292,13 @@ class Settings(BaseSettings):
     resume_max_pages: int = 1
     resume_template: str = "modern"
 
+    # Which document a submission actually uploads. ``generated`` renders a tailored view
+    # over the knowledge graph; ``master`` submits the résumé the user uploaded, untouched.
+    # The second exists because generation quality and submission capability are separate
+    # problems, and a user whose knowledge graph still needs work should not be unable to
+    # apply with the document they already trust.
+    resume_source: Literal["generated", "master"] = "generated"
+
     # -- api / desktop -------------------------------------------------------------------
     api_host: str = "127.0.0.1"
     api_port: int = 8000

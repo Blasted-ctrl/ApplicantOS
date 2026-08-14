@@ -157,6 +157,31 @@ _STAGE_SUBMIT: Final[str] = "submit"
 #: Stage reported by a rehearsal. Named for what happened rather than for what was skipped.
 _STAGE_APPLY: Final[str] = "apply"
 
+#: ``settings.resume_source`` value that submits the applicant's own uploaded résumé.
+_RESUME_SOURCE_MASTER: Final[str] = "master"
+
+#: Characters kept in an uploaded document's filename. A stored filename is user-supplied
+#: and reaches the filesystem here, so it is reduced to something that cannot traverse or
+#: surprise a shell while still reading as the document the applicant recognises.
+_SAFE_NAME_CHARS: Final[str] = " ._-()"
+
+
+def _safe_upload_name(filename: str | None, fallback_suffix: str) -> str:
+    """Return a filesystem-safe version of an uploaded document's display name.
+
+    Args:
+        filename: The name the applicant uploaded it under.
+        fallback_suffix: Extension to use when the name carries none.
+
+    Returns:
+        A non-empty basename safe to write next to the render output.
+    """
+    raw = (filename or "").replace("\\", "/").split("/")[-1].strip()
+    cleaned = "".join(c for c in raw if c.isalnum() or c in _SAFE_NAME_CHARS).strip()
+    if not cleaned:
+        cleaned = f"resume{fallback_suffix or '.pdf'}"
+    return cleaned
+
 #: Timeline event kind written when a dry run fills a real form without submitting it.
 _EVENT_KIND_REHEARSED: Final[str] = "rehearsed"
 
@@ -1848,6 +1873,49 @@ class Pipeline:
             (FALLBACK_TEMPLATE, FALLBACK_RENDER_FORMAT),
         )
 
+    async def _master_resume_path(self, application: Application) -> Path | None:
+        """Return the applicant's own uploaded résumé, if there is one on disk.
+
+        Args:
+            application: The application being submitted, for its owning user.
+
+        Returns:
+            The path to the most recent live ``master_resume`` upload, or ``None`` when the
+            user has not uploaded one or the bytes are gone.
+        """
+        from app.models.enums import DocumentKind
+        from app.models.file import UploadedFile
+
+        record = await self._session.scalar(
+            select(UploadedFile)
+            .where(
+                UploadedFile.user_id == application.user_id,
+                UploadedFile.kind == DocumentKind.MASTER_RESUME,
+                UploadedFile.deleted_at.is_(None),
+            )
+            .order_by(UploadedFile.created_at.desc())
+            .limit(1)
+        )
+        if record is None:
+            return None
+        stored = (self._settings.storage_root / record.storage_key).resolve()
+        if not stored.is_file():
+            return None
+
+        # Copy it out under the name the applicant gave it. Storage keys are content
+        # addresses, so uploading the blob directly attaches
+        # `6c76e991f289a908a089841aa8bbc5fa8605ffbf0251edbf4b21293728d870b1.pdf` — which is
+        # what the employer sees in their inbox, next to the applicant's name. The bytes are
+        # identical either way; only the label a human reads changes.
+        import shutil
+
+        directory = self._render_dir(application.id)
+        directory.mkdir(parents=True, exist_ok=True)
+        named = directory / _safe_upload_name(record.filename, stored.suffix)
+        if not named.is_file() or named.stat().st_size != stored.stat().st_size:
+            shutil.copyfile(stored, named)
+        return named
+
     async def _materialize_documents(
         self,
         application: Application,
@@ -1874,6 +1942,31 @@ class Pipeline:
         directory = self._render_dir(application.id)
         resume_path: Path | None = None
         cover_path: Path | None = None
+
+        # `resume_source="master"` submits the résumé the applicant uploaded, untouched,
+        # instead of the generated view. Golden rule #6 is about where *knowledge* lives —
+        # facts, not a master document — and it is unaffected: the graph is still the source
+        # of truth for everything generated. This is the applicant choosing to send their own
+        # document, which cannot fabricate anything about them by construction.
+        #
+        # It exists because generation quality and submission capability are independent
+        # problems, and being blocked on the first is a poor reason to be unable to do the
+        # second. A user whose knowledge graph is still being cleaned up can apply today with
+        # the document they already trust.
+        if self._settings.resume_source == _RESUME_SOURCE_MASTER:
+            master = await self._master_resume_path(application)
+            if master is not None:
+                logger.info(
+                    "pipeline.using_master_resume",
+                    application_id=str(application.id),
+                    path=str(master),
+                )
+                return master, None
+            logger.warning(
+                "pipeline.master_resume_missing",
+                application_id=str(application.id),
+                detail="falling back to the generated résumé",
+            )
 
         version: ResumeVersion | None = None
         if application.resume_version_id is not None:

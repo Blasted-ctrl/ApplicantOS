@@ -482,6 +482,34 @@ def _json_serializer(payload: Any, **kwargs: Any) -> str:
     return json.dumps(payload, default=str, **kwargs)
 
 
+def _utf8_stdout() -> Any:
+    """Return ``sys.stdout``, reconfigured to survive non-ASCII log lines.
+
+    Windows is a first-class target here, and a Python process whose stdout is redirected to
+    a file gets the legacy ANSI code page rather than UTF-8. A log line then only has to
+    mention a character that code page lacks for the *logging call itself* to raise. Seen on
+    2026-08-14: a Lever form marks its required fields with "✱" (U+2731), the field label was
+    logged, and ``UnicodeEncodeError`` propagated out of the log call and aborted a real job
+    application mid-submission. Logging must never be able to fail the work it describes.
+
+    ``errors="replace"`` is deliberate: a lost glyph in a log line is a cosmetic problem, and
+    a raised exception is not.
+
+    Returns:
+        The reconfigured stream, or ``sys.stdout`` untouched when it cannot be reconfigured
+        (a captured or wrapped stream under test, for instance).
+    """
+    stream = sys.stdout
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return stream
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):  # pragma: no cover - stream already detached or in use
+        logging.getLogger(__name__).debug("logging.stdout_not_reconfigurable")
+    return stream
+
+
 def _supports_color() -> bool:
     """Return whether the console renderer should emit ANSI colour codes."""
     stream = sys.stdout
@@ -569,7 +597,7 @@ def configure_logging(settings: Settings | None = None) -> None:
         ],
     )
 
-    handler = logging.StreamHandler(stream=sys.stdout)
+    handler = logging.StreamHandler(stream=_utf8_stdout())
     handler.setFormatter(formatter)
 
     root = logging.getLogger()

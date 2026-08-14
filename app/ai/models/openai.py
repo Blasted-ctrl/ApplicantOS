@@ -83,8 +83,11 @@ _FIXED_TEMPERATURE_PREFIXES: Final[tuple[str, ...]] = ("gpt-5", "o1", "o3", "o4"
 #: impressive thing you've built" under a 768-token cap returned nothing at all, and the
 #: application escalated to a human for a question the model could answer perfectly well.
 #: The floor cannot make a reply longer than it wants to be — the model still stops when
-#: done — it only stops the reasoning from crowding the answer out.
-_REASONING_MIN_COMPLETION_TOKENS: Final[int] = 4096
+#: done — it only stops the reasoning from crowding the answer out. It is set well above the
+#: reasoning seen in practice (1,728 tokens for a one-paragraph answer, and more for résumé
+#: tailoring, which starved at 4,096) because the cost of being wrong is asymmetric: too high
+#: costs nothing, and too low costs the whole answer.
+_REASONING_MIN_COMPLETION_TOKENS: Final[int] = 16384
 
 
 def _completion_budget(model: str, requested: int) -> int:

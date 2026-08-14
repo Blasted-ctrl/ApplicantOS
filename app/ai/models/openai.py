@@ -76,6 +76,39 @@ UNUSED_API_KEY: Final[str] = "not-needed"
 #: size variant (``gpt-5-mini``) are covered without a release-by-release list to maintain.
 _FIXED_TEMPERATURE_PREFIXES: Final[tuple[str, ...]] = ("gpt-5", "o1", "o3", "o4")
 
+#: Smallest completion allowance to give a reasoning model, whatever the caller asked for.
+#: These models spend hidden reasoning tokens out of the *same* allowance as the visible
+#: reply, so a caller's sensible-looking cap can be consumed entirely by thinking and return
+#: an empty message. Measured on 2026-08-14: gpt-5 answering "Describe the single most
+#: impressive thing you've built" under a 768-token cap returned nothing at all, and the
+#: application escalated to a human for a question the model could answer perfectly well.
+#: The floor cannot make a reply longer than it wants to be — the model still stops when
+#: done — it only stops the reasoning from crowding the answer out.
+_REASONING_MIN_COMPLETION_TOKENS: Final[int] = 4096
+
+
+def _completion_budget(model: str, requested: int) -> int:
+    """Return the completion cap to send for *model*, given what the caller *requested*.
+
+    Args:
+        model: The model name.
+        requested: The caller's cap, which is sized for visible output alone.
+
+    Returns:
+        *requested* for a conventional model; at least
+        :data:`_REASONING_MIN_COMPLETION_TOKENS` for a reasoning model, whose hidden
+        reasoning is billed against the same allowance.
+
+    Example:
+        >>> _completion_budget("gpt-4o", 768)
+        768
+        >>> _completion_budget("gpt-5", 768)
+        4096
+    """
+    if _supports_temperature(model):
+        return requested
+    return max(requested, _REASONING_MIN_COMPLETION_TOKENS)
+
 
 def _supports_temperature(model: str) -> bool:
     """Whether *model* accepts an explicit ``temperature``.
@@ -228,7 +261,9 @@ class OpenAIModel(GuardedModelPlugin):
         if wants_json:
             request["response_format"] = dict(JSON_OBJECT_RESPONSE_FORMAT)
 
-        response = await self._create_with_token_limit(request, max_tokens)
+        response = await self._create_with_token_limit(
+            request, _completion_budget(model, max_tokens)
+        )
         return LLMResponse(
             text=self._extract_text(response),
             input_tokens=self._usage_of(response, ("prompt_tokens", "input_tokens")),

@@ -1332,10 +1332,35 @@ class GuardedModelPlugin(ModelPlugin, abc.ABC):
 
         payload = await get_cache().get_or_set(key, factory, ttl=LLM_CACHE_TTL_SECONDS)
         if fresh is not None:
+            if not fresh.text.strip():
+                # An empty reply is a failure wearing a success's clothes, and caching one
+                # makes a transient failure permanent: every retry, for the whole TTL, is
+                # served the same empty string and cannot possibly parse. Seen on 2026-08-14
+                # — a reasoning model spent its entire completion allowance on hidden
+                # reasoning, returned nothing, and the empty result was cached, so the same
+                # question failed identically on every later run and the application
+                # escalated to a human each time. Rule #9 says cache aggressively and
+                # invalidate precisely; a non-answer is not a thing to keep.
+                await get_cache().delete(key)
+                logger.warning("llm.empty_reply_not_cached", model=model, key=key)
             return fresh
+        served = LLMResponse.from_cache_payload(payload, model=model)
+        if not served.text.strip():
+            # A poisoned entry written before the check above, or by an older build. Drop it
+            # and answer for real rather than replaying the emptiness.
+            await get_cache().delete(key)
+            logger.warning("llm.empty_reply_evicted", model=model, key=key)
+            return await self._call(
+                model=model,
+                system=system,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                json_schema=json_schema,
+            )
         record_llm_request(model, OUTCOME_CACHE_HIT)
         logger.debug("llm.cache_hit", model=model, key=key)
-        return LLMResponse.from_cache_payload(payload, model=model)
+        return served
 
     def _caching_enabled(self, temperature: float) -> bool:
         """Return whether a call at *temperature* may be served from, and written to, cache.

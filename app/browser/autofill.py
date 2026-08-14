@@ -107,6 +107,29 @@ _ROLE_COMBOBOX: Final[str] = "combobox"
 #: Milliseconds to let a combobox's listbox filter before committing the highlighted option.
 #: These widgets filter asynchronously, so pressing Enter immediately commits whatever was
 #: highlighted before the typing was processed — usually nothing.
+#: How long to keep looking for the form root before calling it absent. A single-page
+#: application renders after the document is ready, so the first look can find nothing.
+_FORM_ROOT_WAIT_SECONDS: Final[float] = 20.0
+
+#: Gap between those looks. Short enough that a fast board loses no measurable time.
+_FORM_ROOT_POLL_SECONDS: Final[float] = 0.5
+
+#: Labels that are a widget's instruction to the user rather than a question about them.
+#: Matched only on controls the form does not require, so a real question that happens to be
+#: phrased this way can never be silently skipped.
+PLACEHOLDER_LABELS: Final[frozenset[str]] = frozenset(
+    {
+        "start typing...",
+        "start typing",
+        "select...",
+        "select",
+        "search",
+        "search...",
+        "choose...",
+        "type to search",
+    }
+)
+
 _COMBOBOX_SETTLE_MS: Final[int] = 350
 
 #: Milliseconds between keystrokes when typing into a combobox. Real key events are what
@@ -1037,22 +1060,43 @@ class AutoFiller:
         self._toggles.clear()
         self._date_formats.clear()
 
-        payload = await self._evaluate(
-            DISCOVERY_SCRIPT,
-            {
-                "root": self.pack.form_root,
-                "container": self.pack.field_container,
-                "label": self.pack.label,
-            },
-        )
+        arguments = {
+            "root": self.pack.form_root,
+            "container": self.pack.field_container,
+            "label": self.pack.label,
+        }
+        started = time.monotonic()
+        payload = await self._evaluate(DISCOVERY_SCRIPT, arguments)
+        # A single-page application renders its form after the document is ready, so the
+        # first look can legitimately find nothing. Measured against a live Ashby posting on
+        # 2026-08-14, the container appeared 3.6s after `domcontentloaded` — and Ashby builds
+        # its form out of divs, so the pack's `form` fallback never rescues it either. Every
+        # Ashby application in that run escalated to a human for a form that was merely still
+        # arriving. Poll until the root matches or the deadline passes; an unmatched root is
+        # then a real absence rather than a race.
+        while (
+            isinstance(payload, Mapping)
+            and not _int(payload.get("matched"))
+            and time.monotonic() - started < _FORM_ROOT_WAIT_SECONDS
+        ):
+            await asyncio.sleep(_FORM_ROOT_POLL_SECONDS)
+            payload = await self._evaluate(DISCOVERY_SCRIPT, arguments)
+        waited = time.monotonic() - started
         if isinstance(payload, Mapping) and not _int(payload.get("matched")):
             logger.warning(
                 "autofill.form_root_unmatched",
                 pack=self.pack.name,
                 form_root=self.pack.form_root,
                 url=page_url(self.session) or None,
+                waited_seconds=round(waited, 1),
             )
             return []
+        if waited >= _FORM_ROOT_POLL_SECONDS:
+            logger.info(
+                "autofill.form_root_late",
+                pack=self.pack.name,
+                waited_seconds=round(waited, 1),
+            )
         controls = self._controls_from(payload)
         if not controls:
             logger.warning(
@@ -1902,7 +1946,17 @@ class AutoFiller:
         """
         if raw.get("hidden") or raw.get("disabled") or raw.get("readOnly"):
             return True
-        return _str(raw.get("type")) in SKIPPED_INPUT_TYPES
+        if _str(raw.get("type")) in SKIPPED_INPUT_TYPES:
+            return True
+        # A control whose only "label" is the widget's own placeholder is not a question.
+        # Ashby builds its comboboxes from a text input labelled "Start typing...", which the
+        # answerer cannot answer because nothing was asked — and golden rule #2 then, quite
+        # correctly, escalated the whole application to a human over a piece of UI furniture.
+        # Skipping it here removes the false question instead of weakening the rule.
+        if raw.get("required"):
+            return False
+        label = (_first_label(raw) or "").strip().casefold()
+        return bool(label) and label in PLACEHOLDER_LABELS
 
     def _single_field(self, raw: Mapping[str, Any], kind: FieldKind) -> FormField | None:
         """Build one :class:`~app.jobs.base.FormField` from one descriptor.

@@ -336,6 +336,25 @@ export type MemoryKind = (typeof MEMORY_KINDS)[number];
 export const SESSION_STATUSES = ['running', 'completed', 'failed', 'cancelled'] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
+/**
+ * Why a run stopped, mirroring `app.models.enums.StopReason`.
+ *
+ * `status` says *how* a run ended; this says *why*, and why is the only half a user can act
+ * on. A run that reached its cap and one that ran out of postings are both `completed`.
+ * The server sends the rendered sentence as `SessionRead.stop_sentence` — prefer it over
+ * switching on this value, so the wording lives in one place.
+ */
+export const STOP_REASONS = [
+  'user_stopped',
+  'limit_reached',
+  'daily_limit_reached',
+  'no_eligible_jobs',
+  'submission_disabled',
+  'stalled',
+  'infrastructure_failure',
+] as const;
+export type StopReason = (typeof STOP_REASONS)[number];
+
 /** Session statuses that mean execution has stopped. */
 export const SESSION_FINISHED_STATES: ReadonlySet<SessionStatus> = new Set<SessionStatus>([
   'completed',
@@ -1067,10 +1086,21 @@ export interface SessionRead {
   status: SessionStatus;
   started_at: IsoDateTime;
   ended_at?: IsoDateTime | null;
+  stop_reason?: StopReason | null;
+  stop_requested_at?: IsoDateTime | null;
+  /** The stop reason as one display-ready sentence, numbers filled in. Never "Done." */
+  stop_sentence?: string | null;
+  /** Cap for this run alone; `null` means the configured session cap governs. */
+  max_applications?: number | null;
+  /** Minimum normalised score for this run; `null` means use the setting. */
+  match_threshold?: number | null;
   jobs_found: number;
+  jobs_scored: number;
   jobs_qualified: number;
   resumes_generated: number;
+  applications_started: number;
   applications_completed: number;
+  applications_skipped: number;
   manual_review: number;
   failures: number;
   avg_application_seconds?: number | null;
@@ -1096,7 +1126,13 @@ export interface SessionStartRequest {
   /** Overrides the persisted kill switch for this run only; `null` keeps the stored value. */
   auto_apply?: boolean | null;
   dry_run?: boolean | null;
+  /** Cap for this run; the lower of this and the configured cap wins. */
   max_applications?: number | null;
+  /**
+   * Minimum normalised score (0-100) for this run. The *higher* of this and
+   * `auto_apply_min_score` wins — a run can only ever be pickier than the setting.
+   */
+  match_threshold?: number | null;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════

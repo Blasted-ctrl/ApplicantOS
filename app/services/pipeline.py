@@ -15,21 +15,30 @@ It runs in a fixed order, and every rung returns without touching a browser:
 1. The application is already ``submitted`` or ``confirmed`` → refuse. This is the in-process
    half of golden rule #1; ``UNIQUE(user_id, posting_id)`` is the other half. A guard that
    ran *after* the network call would not be a guard.
-2. The user is at ``settings.max_applications_per_day`` → refuse, and leave the application
-   ``ready`` so tomorrow's run picks it up. A rate limit is not a review item; there is
-   nothing for a human to decide.
-3. The posting scored below ``settings.auto_apply_min_score`` → refuse. An unscored posting
-   is refused too: the gate cannot be satisfied by a number that does not exist.
-4. The provider declares ``supports_auto_apply = False`` → ``needs_review`` with
+2. The run this application belongs to was told to stop, or has already ended → refuse.
+   Stopping deliberately does not kill work inside a browser, so a stop arrives while a
+   queue of prepared applications is still in flight. This rung is the only thing standing
+   between that queue and an employer's inbox.
+3. A cap is reached → refuse, and leave the application ``ready`` so tomorrow's run picks it
+   up. Three caps are resolved to one number by
+   :meth:`~app.models.session.RunSession.application_cap`: the daily cap across every run,
+   the configured per-session cap, and the ``max_applications`` this run was started with.
+   The smallest wins, always — a request may narrow a setting and never widen one. A cap is
+   not a review item; there is nothing for a human to decide.
+4. The posting scored below the run's floor → refuse. The floor is
+   ``settings.auto_apply_min_score``, raised (never lowered) by the run's own
+   ``match_threshold``. An unscored posting is refused too: the gate cannot be satisfied by
+   a number that does not exist.
+5. The provider declares ``supports_auto_apply = False`` → ``needs_review`` with
    :attr:`~app.models.enums.ReviewReason.UNSUPPORTED_FLOW`. LinkedIn and Workday live here
    permanently (golden rule #10), and the user gets a link to apply by hand.
-5. ``settings.is_submission_allowed`` is ``False`` → ``needs_review`` with
+6. ``settings.is_submission_allowed`` is ``False`` → ``needs_review`` with
    :attr:`~app.models.enums.ReviewReason.POLICY_BLOCK`. Both switches default closed, so
    **this is the rung a fresh install stops on**, having done all the useful work first.
 
-Only past all five does a provider see an :class:`~app.jobs.base.ApplyContext`.
+Only past all six does a provider see an :class:`~app.jobs.base.ApplyContext`.
 
-:meth:`Pipeline.prepare` has a sixth refusal of its own, one rung earlier: a posting body that
+:meth:`Pipeline.prepare` has a refusal of its own, one stage earlier: a posting body that
 :func:`app.ai.untrusted.sanitize_external_text` scores as a prompt injection
 (``docs/CONTRACTS.md`` §10b) never reaches a model at all, and the application goes to
 ``needs_review`` with :attr:`~app.models.enums.ReviewReason.POLICY_BLOCK` rather than to
@@ -75,7 +84,7 @@ from app.jobs.base import (
 )
 from app.models.application import Application
 from app.models.cover_letter import CoverLetter
-from app.models.enums import ApplicationStatus, DocumentKind, ReviewReason
+from app.models.enums import ApplicationStatus, DocumentKind, ReviewReason, StopReason
 from app.models.file import UploadedFile
 from app.models.posting import JobPosting
 from app.models.resume import Resume, ResumeVersion
@@ -85,6 +94,7 @@ from app.observability.metrics import observe_apply
 from app.services.application_service import ApplicationService, InvalidTransition
 from app.services.dedupe_service import DedupeService
 from app.services.discovery_service import DiscoveryService
+from app.services.session_service import SessionService
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -250,6 +260,26 @@ _HASH_CHUNK_BYTES: Final[int] = 1 << 20
 _DEFAULT_RESUME_NAME: Final[str] = "Tailored"
 
 
+@dataclass(frozen=True, slots=True)
+class _RunCapacity:
+    """How much of its application allowance one run has left.
+
+    All three numbers are carried rather than just the remainder, because the refusal
+    message names them: "this run's limit of 50 was reached (50 submitted)" is actionable
+    and "cap reached" is not.
+
+    Attributes:
+        cap: The effective limit, already narrowed to the smallest of the run's own
+            ``max_applications``, the configured session cap and what is left in the day.
+        submitted: Applications this run has actually sent, counted from the rows.
+        remaining: ``cap - submitted``. Zero or less means refuse.
+    """
+
+    cap: int
+    submitted: int
+    remaining: int
+
+
 @dataclass(slots=True)
 class PipelineResult:
     """The outcome of one pipeline call (``docs/CONTRACTS.md`` §13).
@@ -363,6 +393,7 @@ class Pipeline:
         applications: ApplicationService | None = None,
         dedupe: DedupeService | None = None,
         discovery: DiscoveryService | None = None,
+        sessions: SessionService | None = None,
     ) -> None:
         """Bind the pipeline to a session, its settings and its collaborators."""
         self._session = session
@@ -370,6 +401,7 @@ class Pipeline:
         self._applications = (
             applications if applications is not None else ApplicationService(session)
         )
+        self._sessions = sessions if sessions is not None else SessionService(session)
         self._dedupe = dedupe if dedupe is not None else DedupeService(session)
         self._discovery = (
             discovery
@@ -490,6 +522,8 @@ class Pipeline:
         self,
         posting_id: uuid.UUID | str,
         user_id: uuid.UUID | str,
+        *,
+        session_id: uuid.UUID | str | None = None,
     ) -> Application:
         """Generate this application's documents and leave it ``ready`` to submit.
 
@@ -509,6 +543,9 @@ class Pipeline:
         Args:
             posting_id: The posting to apply to.
             user_id: The applicant.
+            session_id: The run this work belongs to. Passing it is what makes the
+                application countable by that run — every per-run counter, cap and stop
+                condition is a ``WHERE session_id = ...``, and a NULL matches none of them.
 
         Returns:
             The application. ``ready`` on success, ``failed`` when generation broke — the
@@ -521,7 +558,9 @@ class Pipeline:
         posting = await self._load_posting(posting_id)
         user = await self._load_user(user_id)
 
-        application, created = await self._applications.create_or_get(user.id, posting.id)
+        application, created = await self._applications.create_or_get(
+            user.id, posting.id, session_id=session_id
+        )
         log = logger.bind(
             application_id=str(application.id),
             user_id=str(user.id),
@@ -912,25 +951,84 @@ class Pipeline:
                 ),
             )
 
-        # -- 2. daily cap ----------------------------------------------------------------
+        # -- 2. the run said stop -----------------------------------------------------------
+        #
+        # This rung is what makes the Stop button mean anything. Stopping does not — and must
+        # not — kill work already inside a browser, so by the time a user presses it there
+        # can be a queue of applications already prepared and dispatched. Without a check
+        # here every one of them still submits, minutes after the run was reported over.
+        #
+        # It sits above the caps deliberately: a run that was told to stop should say it was
+        # stopped, not that it was rate limited.
+        halt = await self._sessions.halt_reason(application.session_id)
+        if halt is not None:
+            log.info(
+                "pipeline.submit_run_halted",
+                session_id=str(application.session_id),
+                stop_reason=halt.value,
+            )
+            return self._result(
+                VERDICT_BLOCKED,
+                _STAGE_GUARD,
+                application,
+                started,
+                message=f"The run stopped before this could be sent ({halt.value}).",
+                payload={"session_id": str(application.session_id), "stop_reason": halt.value},
+            )
+
+        # -- 3. the caps ---------------------------------------------------------------------
+        #
+        # Three limits, one comparison. The daily cap spans every run; the session cap and
+        # the request's `max_applications` narrow this run alone, and `application_cap`
+        # resolves them by taking the smallest — a request may never widen a setting.
+        #
+        # Reaching a cap does not fail the application. It stays `ready`, which is what lets
+        # tomorrow, or the next run, pick it up exactly where this one left it.
         used = await self._applications.daily_count(application.user_id)
-        cap = int(self._settings.max_applications_per_day)
-        if used >= cap:
-            log.info("pipeline.submit_rate_limited", used=used, cap=cap)
+        daily_cap = int(self._settings.max_applications_per_day)
+        if used >= daily_cap:
+            await self._halt_run(application.session_id, StopReason.DAILY_LIMIT_REACHED)
+            log.info("pipeline.submit_rate_limited", used=used, cap=daily_cap)
             return self._result(
                 VERDICT_BLOCKED,
                 _STAGE_GUARD,
                 application,
                 started,
                 review_reason=ReviewReason.RATE_LIMITED,
-                message=f"Daily limit reached ({used}/{cap}); will resume tomorrow.",
-                payload={"submitted_today": used, "max_applications_per_day": cap},
+                message=f"Daily limit reached ({used}/{daily_cap}); will resume tomorrow.",
+                payload={"submitted_today": used, "max_applications_per_day": daily_cap},
             )
 
-        # -- 3. score floor ---------------------------------------------------------------
+        run_cap = await self._run_capacity(application.session_id, daily_remaining=daily_cap - used)
+        if run_cap is not None and run_cap.remaining <= 0:
+            await self._halt_run(application.session_id, StopReason.LIMIT_REACHED)
+            log.info(
+                "pipeline.submit_session_capped",
+                session_id=str(application.session_id),
+                submitted=run_cap.submitted,
+                cap=run_cap.cap,
+            )
+            return self._result(
+                VERDICT_BLOCKED,
+                _STAGE_GUARD,
+                application,
+                started,
+                review_reason=ReviewReason.RATE_LIMITED,
+                message=(
+                    f"This run's application limit of {run_cap.cap} was reached "
+                    f"({run_cap.submitted} submitted)."
+                ),
+                payload={
+                    "session_id": str(application.session_id),
+                    "submitted_this_session": run_cap.submitted,
+                    "max_applications": run_cap.cap,
+                },
+            )
+
+        # -- 4. score floor ---------------------------------------------------------------
         score = await self._score_for(application.posting_id, application.user_id)
         value = int(score.normalized) if score is not None else None
-        floor = int(self._settings.auto_apply_min_score)
+        floor = await self._score_floor(application.session_id)
         if value is None or value < floor:
             log.info("pipeline.submit_below_score", score=value, minimum=floor)
             return self._result(
@@ -950,7 +1048,7 @@ class Pipeline:
         posting = await self._load_posting(application.posting_id)
         provider_name = str(posting.provider)
 
-        # -- 4. provider posture (golden rule #10) -----------------------------------------
+        # -- 5. provider posture (golden rule #10) -----------------------------------------
         if not self._supports_auto_apply(provider_name):
             # Annotated because the kill-switch branch below reuses the name for a payload
             # carrying the two switch booleans; both go to ``mark_needs_review``, which takes
@@ -975,7 +1073,7 @@ class Pipeline:
                 payload=payload,
             )
 
-        # -- 5. the kill switch (golden rule #3) --------------------------------------------
+        # -- 6. the kill switch (golden rule #3) --------------------------------------------
         #
         # Two switches, but they do not mean the same thing, and collapsing them into one
         # test cost the product its most useful safety feature. `is_submission_allowed` is
@@ -1027,7 +1125,7 @@ class Pipeline:
                 apply_url=posting.apply_url or posting.url,
             )
 
-        # -- 6. attempt ---------------------------------------------------------------------
+        # -- 7. attempt ---------------------------------------------------------------------
         # Set once `transition(SUBMITTING)` has committed. From that moment a cancellation
         # would otherwise strand the row mid-flight, so the handler below has to clean up.
         submitting_committed = False
@@ -1043,7 +1141,7 @@ class Pipeline:
                 resume_path=resume_path,
                 cover_letter_path=cover_path,
                 answers=dict(application.answers or {}),
-                # Belt and braces: guard 5 already proved this is False. If that guard is
+                # Belt and braces: guard 6 already proved this is False. If that guard is
                 # ever reordered away, the provider still receives the safe value.
                 dry_run=not self._settings.is_submission_allowed,
                 # Without this the field answerer has no retriever, so every free-text
@@ -1059,7 +1157,7 @@ class Pipeline:
             # this one is. The claim is a conditional UPDATE, so precisely one of them sees a
             # row affected and the other is turned away before a browser opens.
             # A rehearsal never claims. Claiming would move the row to SUBMITTING, and a
-            # SUBMITTING row is one that guard 3 will refuse to submit later — so a single
+            # SUBMITTING row is one that guard 1 will refuse to submit later — so a single
             # dry run would permanently consume the application's one chance at being sent
             # for real. The row stays READY, which is precisely what makes a rehearsal
             # repeatable and what lets the real submission follow it.
@@ -1348,6 +1446,8 @@ class Pipeline:
         self,
         posting_id: uuid.UUID | str,
         user_id: uuid.UUID | str,
+        *,
+        session_id: uuid.UUID | str | None = None,
     ) -> PipelineResult:
         """Score, prepare and submit one posting, stopping at the first refusal.
 
@@ -1358,6 +1458,8 @@ class Pipeline:
         Args:
             posting_id: The posting to apply to.
             user_id: The applicant.
+            session_id: The run this work belongs to, attributed to the application it
+                creates and consulted before any of the three stages begins.
 
         Returns:
             The verdict of whichever stage stopped, with
@@ -1368,10 +1470,30 @@ class Pipeline:
         """
         started = time.monotonic()
         posting_uuid = _as_uuid(posting_id, "posting id")
+        session_uuid = _as_uuid(session_id, "session id") if session_id is not None else None
+
+        # Checked before scoring rather than only before submitting: a stopped run should
+        # stop spending, and the submit ladder's rung 2 would refuse the result anyway.
+        halt = await self._sessions.halt_reason(session_uuid)
+        if halt is not None:
+            logger.info(
+                "pipeline.run_one_halted",
+                posting_id=str(posting_uuid),
+                session_id=str(session_uuid),
+                stop_reason=halt.value,
+            )
+            return PipelineResult(
+                verdict=VERDICT_SKIPPED,
+                stage=_STAGE_GUARD,
+                posting_id=posting_uuid,
+                duration_seconds=time.monotonic() - started,
+                message=f"The run stopped before this posting was reached ({halt.value}).",
+                payload={"session_id": str(session_uuid), "stop_reason": halt.value},
+            )
 
         score = await self.score_posting(posting_uuid, user_id)
         value = int(score.normalized or 0)
-        floor = int(self._settings.auto_apply_min_score)
+        floor = await self._score_floor(session_uuid)
         if score.verdict == VERDICT_SKIP or value < floor:
             logger.info(
                 "pipeline.run_one_skipped",
@@ -1390,7 +1512,7 @@ class Pipeline:
                 payload={"score_verdict": score.verdict},
             )
 
-        application = await self.prepare(posting_uuid, user_id)
+        application = await self.prepare(posting_uuid, user_id, session_id=session_uuid)
         if application.status is not ApplicationStatus.READY:
             verdict = _VERDICT_FOR_STATUS.get(application.status, VERDICT_SKIPPED)
             logger.info(
@@ -2314,6 +2436,90 @@ class Pipeline:
             .where(JobScore.posting_id == posting_id, JobScore.user_id == user_id)
             .limit(1)
         )
+
+    # ----------------------------------------------------------------------------------
+    # Run limits
+    # ----------------------------------------------------------------------------------
+
+    async def _run_capacity(
+        self,
+        session_id: uuid.UUID | None,
+        *,
+        daily_remaining: int,
+    ) -> _RunCapacity | None:
+        """Return how much of its allowance the owning run has left.
+
+        Args:
+            session_id: The run this application belongs to, or ``None``.
+            daily_remaining: Submissions the user has left today, across every run.
+
+        Returns:
+            The run's cap, what it has submitted against it, and what is left. ``None`` when
+            the application belongs to no run — an application created by hand is governed
+            by the daily cap alone, which rung 3 has already applied.
+        """
+        if session_id is None:
+            return None
+        try:
+            run = await self._sessions.get(session_id)
+        except LookupError:
+            # A pruned run. The daily cap still governs; inventing a session cap for a run
+            # that no longer exists would refuse work for a limit nobody set.
+            return None
+
+        submitted = await self._sessions.submitted_count(run.id)
+        cap = run.application_cap(
+            configured_cap=int(self._settings.max_applications_per_session),
+            daily_remaining=int(daily_remaining),
+        )
+        return _RunCapacity(cap=cap, submitted=submitted, remaining=cap - submitted)
+
+    async def _score_floor(self, session_id: uuid.UUID | None) -> int:
+        """Return the normalised score a posting must reach to be submitted.
+
+        Args:
+            session_id: The run this application belongs to, or ``None``.
+
+        Returns:
+            ``settings.auto_apply_min_score``, raised by the run's own ``match_threshold``
+            when it set one. Never lowered — a run may ask to be pickier than the standing
+            setting, because the alternative is a way to route around the floor by starting
+            a run with a threshold of zero.
+        """
+        configured = int(self._settings.auto_apply_min_score)
+        if session_id is None:
+            return configured
+        try:
+            run = await self._sessions.get(session_id)
+        except LookupError:
+            return configured
+        return run.score_floor(configured_floor=configured)
+
+    async def _halt_run(self, session_id: uuid.UUID | None, reason: StopReason) -> None:
+        """Ask the owning run to wind down, if there is one and it has not already.
+
+        Called when a cap refuses a submission. Without it the run would keep preparing
+        documents for applications that every subsequent guard will refuse — burning model
+        calls and renders to produce a queue of work that cannot be sent.
+
+        Failure here is deliberately swallowed: the submission verdict is already decided,
+        and a run that cannot be flagged is a worse dashboard, not a worse outcome.
+
+        Args:
+            session_id: The run to stop, or ``None`` for work outside a run.
+            reason: Why it is stopping.
+        """
+        if session_id is None:
+            return
+        try:
+            await self._sessions.request_stop(session_id, reason)
+        except (LookupError, ValueError) as exc:
+            logger.warning(
+                "pipeline.run_halt_failed",
+                session_id=str(session_id),
+                reason=reason.value,
+                error=str(exc),
+            )
 
     async def _resume_container(self, user: User, template: str) -> Resume:
         """Return the :class:`~app.models.resume.Resume` variant new versions belong to.

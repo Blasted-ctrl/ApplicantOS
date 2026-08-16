@@ -41,6 +41,8 @@ __all__ = [
     "POSTING_TERMINAL_STATES",
     "SESSION_FINISHED_STATES",
     "SIGNAL_KIND_TO_STATUS",
+    "STOP_REASONS_COMPLETING",
+    "STOP_REASON_SENTENCES",
     "ATSProviderName",
     "ApplicationStatus",
     "CheckpointStatus",
@@ -61,6 +63,7 @@ __all__ = [
     "SignalSource",
     "SourceKind",
     "StatusSource",
+    "StopReason",
     "StrEnum",
     "WorkArrangement",
     "WorkAuthStatus",
@@ -659,6 +662,85 @@ class SessionStatus(StrEnum):
 #: Session statuses that mean execution has stopped.
 SESSION_FINISHED_STATES: Final[frozenset[SessionStatus]] = frozenset(
     {SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED}
+)
+
+
+class StopReason(StrEnum):
+    """Why a run stopped.
+
+    :class:`SessionStatus` says *how* a run ended — cleanly, cancelled, or broken. It does
+    not say why, and "why" is the only part a user can act on. A run that reached its cap and
+    a run that ran out of eligible postings are both ``completed``; telling the user only
+    that much is the "Done." this vocabulary exists to prevent.
+
+    Every member maps to one sentence in :data:`STOP_REASON_SENTENCES`, which is what the
+    desktop app renders. Adding a member without a sentence is a lookup error at render time
+    rather than a silent blank, which is why the mapping is exhaustive and tested.
+    """
+
+    #: The user pressed Stop.
+    USER_STOPPED = "user_stopped"
+
+    #: The run reached its own ``max_applications`` cap.
+    LIMIT_REACHED = "limit_reached"
+
+    #: The user is at ``max_applications_per_day`` across every run.
+    DAILY_LIMIT_REACHED = "daily_limit_reached"
+
+    #: Nothing left to apply to: every qualified posting is already applied to or exhausted.
+    NO_ELIGIBLE_JOBS = "no_eligible_jobs"
+
+    #: ``auto_apply_enabled`` is off, so the run discovered and scored and then had nothing
+    #: further it was permitted to do. This is the **shipped default**, which is why it has
+    #: a reason of its own: reporting a fresh install's first run as "no eligible postings"
+    #: would be false, and reporting it as a failure would be worse.
+    SUBMISSION_DISABLED = "submission_disabled"
+
+    #: The run stopped reporting progress and the watchdog closed it.
+    STALLED = "stalled"
+
+    #: Something below the run itself broke — no database, no provider, no storage.
+    INFRASTRUCTURE_FAILURE = "infrastructure_failure"
+
+
+#: One sentence per :class:`StopReason`, in the second person, naming the number that caused
+#: it where there is one. ``{limit}`` is the only placeholder; reasons that need no number
+#: simply do not contain it, so :func:`~app.models.session.stop_sentence` can format every
+#: member with the same call.
+STOP_REASON_SENTENCES: Final[dict[StopReason, str]] = {
+    StopReason.USER_STOPPED: "Stopped because you asked it to stop.",
+    StopReason.LIMIT_REACHED: "Stopped because the application limit of {limit} was reached.",
+    StopReason.DAILY_LIMIT_REACHED: (
+        "Stopped because you have reached your daily limit of {limit} applications. "
+        "It will resume tomorrow."
+    ),
+    StopReason.NO_ELIGIBLE_JOBS: (
+        "Stopped because no eligible postings are left — everything that scored high enough "
+        "has already been applied to."
+    ),
+    StopReason.SUBMISSION_DISABLED: (
+        "Stopped after discovering and scoring, because auto-apply is switched off. "
+        "Turn it on in Settings to let a run submit."
+    ),
+    StopReason.STALLED: (
+        "Stopped because the run went quiet for too long and was closed automatically. "
+        "Nothing was driving it."
+    ),
+    StopReason.INFRASTRUCTURE_FAILURE: (
+        "Stopped because something underneath the run failed. The event log has the detail."
+    ),
+}
+
+#: Stop reasons that describe a run which did everything it was asked to do. A run that
+#: reached its cap or ran out of postings is ``completed``; one the user cancelled is
+#: ``cancelled``; anything else is ``failed``.
+STOP_REASONS_COMPLETING: Final[frozenset[StopReason]] = frozenset(
+    {
+        StopReason.LIMIT_REACHED,
+        StopReason.DAILY_LIMIT_REACHED,
+        StopReason.NO_ELIGIBLE_JOBS,
+        StopReason.SUBMISSION_DISABLED,
+    }
 )
 
 

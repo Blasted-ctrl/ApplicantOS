@@ -63,7 +63,9 @@ logger = structlog.get_logger(__name__)
 
 #: Session counters an application run reports.
 _RESUMES_COUNTER: Final[str] = "resumes_generated"
+_STARTED_COUNTER: Final[str] = "applications_started"
 _COMPLETED_COUNTER: Final[str] = "applications_completed"
+_SKIPPED_COUNTER: Final[str] = "applications_skipped"
 _REVIEW_COUNTER: Final[str] = "manual_review"
 _FAILURE_COUNTER: Final[str] = "failures"
 
@@ -170,7 +172,10 @@ def _session_deltas(result: dict[str, Any]) -> dict[str, int]:
         return {_FAILURE_COUNTER: 1}
     if verdict == VERDICT_BLOCKED:
         escalated = result.get("status") == ApplicationStatus.NEEDS_REVIEW.value
-        return {_REVIEW_COUNTER: 1} if escalated else {}
+        # A block that did *not* escalate is a cap or a stop: the application was passed
+        # over and stays ready. That is precisely what "skipped" counts, and leaving it
+        # uncounted is what made a run report fewer outcomes than it had applications.
+        return {_REVIEW_COUNTER: 1} if escalated else {_SKIPPED_COUNTER: 1}
     return {}
 
 
@@ -236,11 +241,27 @@ def prepare(
             """Prepare inside one unit of work, then publish."""
             from app.models.enums import ApplicationStatus
             from app.services.pipeline import Pipeline
+            from app.services.session_service import SessionService
 
             settings = get_settings()
             async with session_scope() as session:
+                # A stop asked for while this task sat on the queue. Preparing anyway would
+                # spend a model call and a render on an application that rung 2 of the
+                # submit ladder is about to refuse.
+                halted = await SessionService(session).halt_reason(session_id)
+                if halted is not None:
+                    return {
+                        "application_id": None,
+                        "posting_id": str(posting_id),
+                        "user_id": str(user_id),
+                        "status": None,
+                        "review_reason": None,
+                        "ready": False,
+                        "halted": halted.value,
+                    }
+
                 pipeline = Pipeline(session, settings)
-                application = await pipeline.prepare(posting_id, user_id)
+                application = await pipeline.prepare(posting_id, user_id, session_id=session_id)
                 payload: dict[str, Any] = {
                     "application_id": str(application.id),
                     "posting_id": str(posting_id),
@@ -252,21 +273,35 @@ def prepare(
                         else None
                     ),
                     "ready": application.status is ApplicationStatus.READY,
+                    "halted": None,
                 }
-                if application.session_id is None and session_id:
-                    payload["session_id"] = str(session_id)
+                if application.session_id is not None:
+                    payload["session_id"] = str(application.session_id)
                 await _publish_application(session, EVENT_APPLICATION_CREATED, application)
                 await _publish_application(session, EVENT_APPLICATION_STATUS_CHANGED, application)
             return payload
 
         outcome = run_async(_run())
 
+        if outcome["halted"] is not None:
+            outcome["queued_for_submit"] = False
+            log.info("apply.prepare_halted", session_id=session_id, reason=outcome["halted"])
+            return outcome
+
         queued: str | None = None
         if outcome["ready"] and get_settings().auto_apply_enabled:
             queued = enqueue(TASK_APPLY_SUBMIT, outcome["application_id"])
         outcome["queued_for_submit"] = queued is not None
 
-        run_async(_record_session(session_id, **{_RESUMES_COUNTER: 1 if outcome["ready"] else 0}))
+        run_async(
+            _record_session(
+                session_id,
+                **{
+                    _RESUMES_COUNTER: 1 if outcome["ready"] else 0,
+                    _STARTED_COUNTER: 1 if outcome["ready"] else 0,
+                },
+            )
+        )
         log.info(
             "apply.prepared",
             application_id=outcome["application_id"],
@@ -403,7 +438,7 @@ def run_one(
             settings = get_settings()
             async with session_scope() as session:
                 pipeline = Pipeline(session, settings)
-                result = await pipeline.run_one(posting_id, user_id)
+                result = await pipeline.run_one(posting_id, user_id, session_id=session_id)
                 payload = result.as_dict()
                 if result.application_id is not None:
                     application = await session.get(Application, result.application_id)

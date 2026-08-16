@@ -71,6 +71,7 @@ from app.api.tasks import (
     TASK_JOBS_POLL_ALL,
     TASK_KNOWLEDGE_REFRESH_STALE,
     TASK_QUEUES,
+    TASK_SESSION_ADVANCE,
     TASK_SESSION_WATCHDOG,
     TASK_SYNC_DETECT_GHOSTED,
     TASK_SYNC_POLL_ALL,
@@ -92,6 +93,7 @@ _INLINE_TASK_ID_PREFIX: Final[str] = "inline-"
 _IN_CELERY_WORKER: Final[Event] = Event()
 
 __all__ = [
+    "ADVANCE_INTERVAL_SECONDS",
     "APPLY_HARD_TIME_LIMIT_SECONDS",
     "APPLY_SOFT_TIME_LIMIT_SECONDS",
     "BEAT_SCHEDULE",
@@ -125,6 +127,7 @@ TASK_MODULES: Final[tuple[str, ...]] = (
     "app.workers.index_knowledge",
     "app.workers.cleanup",
     "app.workers.sync_status",
+    "app.workers.run_loop",
 )
 
 #: Seconds a task may run before ``SoftTimeLimitExceeded`` is raised inside it, giving it a
@@ -140,6 +143,11 @@ APPLY_SOFT_TIME_LIMIT_SECONDS: Final[int] = 45 * 60
 
 #: Hard ceiling for the apply queue.
 APPLY_HARD_TIME_LIMIT_SECONDS: Final[int] = 50 * 60
+
+#: How often the run loop ticks. Short on purpose: it is how quickly a run notices a
+#: stop, a cap or an empty candidate list, and each tick is three cheap COUNT queries
+#: against runs that are executing right now — usually zero of them.
+ADVANCE_INTERVAL_SECONDS: Final[int] = 60
 
 #: Hour (UTC) the daily maintenance sweeps run. Off-peak on purpose: they take table-wide
 #: locks on nothing, but they do walk the filesystem.
@@ -204,6 +212,17 @@ BEAT_SCHEDULE: Final[dict[str, dict[str, Any]]] = {
         "task": TASK_CLEANUP_REFRESH_GAUGES,
         "schedule": timedelta(minutes=5),
         "options": {"queue": QUEUE_MAINTENANCE},
+    },
+    # The run loop's `while` (app/workers/run_loop.py). One minute, because this is the
+    # interval at which a run notices that it is finished, that it has hit its cap, or that
+    # it has been told to stop — and a user who presses Stop should not wait five.
+    #
+    # `expires` is one interval: a tick that has been queued longer than that has been
+    # superseded by the next one, and running both would dispatch the same batch twice.
+    TASK_SESSION_ADVANCE: {
+        "task": TASK_SESSION_ADVANCE,
+        "schedule": timedelta(seconds=ADVANCE_INTERVAL_SECONDS),
+        "options": {"queue": QUEUE_MAINTENANCE, "expires": ADVANCE_INTERVAL_SECONDS},
     },
     TASK_SESSION_WATCHDOG: {
         "task": TASK_SESSION_WATCHDOG,

@@ -275,13 +275,28 @@ export function SessionsRoute() {
         >
           {detail.data === undefined ? null : (
             <div className="flex flex-col gap-4">
+              {/*
+                Why it stopped, before what it did. A run that ended is a question before it
+                is a report, and the server sends the answer as a finished sentence so the
+                wording lives in one place rather than in a switch on both sides of the wire.
+              */}
+              {detail.data.stop_sentence !== null &&
+                detail.data.stop_sentence !== undefined && (
+                  <p className="rounded-md border border-default bg-inset p-3 text-sm text-secondary">
+                    {detail.data.stop_sentence}
+                  </p>
+                )}
+
               <section>
                 <h3 className="label-caps mb-2">Counters</h3>
                 <div className="grid grid-cols-3 gap-3">
                   <Counter label="Found" value={detail.data.jobs_found} />
+                  <Counter label="Scored" value={detail.data.jobs_scored} />
                   <Counter label="Qualified" value={detail.data.jobs_qualified} />
                   <Counter label="Résumés" value={detail.data.resumes_generated} />
+                  <Counter label="Started" value={detail.data.applications_started} />
                   <Counter label="Applied" value={detail.data.applications_completed} />
+                  <Counter label="Skipped" value={detail.data.applications_skipped} />
                   <Counter label="Review" value={detail.data.manual_review} tone="review" />
                   <Counter label="Failed" value={detail.data.failures} tone="danger" />
                   <Counter label="Checkpoints pending" value={detail.data.checkpoints_pending} />

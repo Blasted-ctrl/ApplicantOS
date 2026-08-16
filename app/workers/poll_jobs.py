@@ -61,6 +61,7 @@ MAX_APPLY_FANOUT: Final[int] = 100
 #: Session counters a discovery run reports, mapped from
 #: :class:`~app.services.discovery_service.DiscoveryReport`.
 _FOUND_COUNTER: Final[str] = "jobs_found"
+_SCORED_COUNTER: Final[str] = "jobs_scored"
 _QUALIFIED_COUNTER: Final[str] = "jobs_qualified"
 
 
@@ -226,9 +227,22 @@ async def _enqueue_qualified(
 
     Returns:
         The posting ids handed to ``apply.prepare``. Empty when auto-apply is off, which is
-        the default posture (golden rule #3).
+        the default posture (golden rule #3), and empty when the work belongs to a run —
+        see below.
     """
     settings = get_settings()
+
+    # A run has its own driver. `session.advance` paces that run's applications against its
+    # cap and its stop signal, and fanning a hundred more out from here would race it: the
+    # loop would be metering five at a time while this path had already queued the lot, and
+    # a stop would then have a hundred prepared applications to refuse one by one.
+    #
+    # Discovery *outside* a run — the scheduler's own thirty-minute poll — has no loop
+    # driving it and keeps the original behaviour.
+    if session_id:
+        logger.debug("jobs.apply_fanout_deferred_to_run", session_id=session_id)
+        return []
+
     if not settings.auto_apply_enabled:
         logger.info("jobs.apply_fanout_disabled", user_id=str(user_id))
         return []
@@ -381,13 +395,21 @@ def poll_provider(
                 service = DiscoveryService(session, settings)
                 report = await service.discover_and_score(user_id, [provider], _search_query(query))
                 await session.commit()
-                queued = await _enqueue_qualified(
-                    session, uuid.UUID(str(user_id)), session_id=session_id
+                identifier = uuid.UUID(str(user_id))
+                # Counted before the hand-off and independently of it. `jobs_qualified` used
+                # to be "how many tasks did we enqueue", which is a different question with
+                # a different answer whenever the fan-out is capped, disabled, or — since the
+                # run loop — deliberately deferred. A counter named after postings must count
+                # postings.
+                qualified = len(
+                    await _qualified_posting_ids(session, identifier, limit=MAX_APPLY_FANOUT)
                 )
+                queued = await _enqueue_qualified(session, identifier, session_id=session_id)
 
             payload = report.as_dict()
             payload["provider"] = provider
             payload["user_id"] = str(user_id)
+            payload["qualified"] = qualified
             payload["queued_for_apply"] = len(queued)
             # One run-level frame per provider rather than one per posting: a poll that
             # ingested two hundred rows would otherwise cost two hundred frames to say the
@@ -403,7 +425,8 @@ def poll_provider(
                 session_id,
                 **{
                     _FOUND_COUNTER: int(outcome.get("found", 0)),
-                    _QUALIFIED_COUNTER: int(outcome.get("queued_for_apply", 0)),
+                    _SCORED_COUNTER: int(outcome.get("scored", 0)),
+                    _QUALIFIED_COUNTER: int(outcome.get("qualified", 0)),
                 },
             )
         )
@@ -413,6 +436,7 @@ def poll_provider(
             created=outcome.get("created"),
             deduped=outcome.get("deduped"),
             scored=outcome.get("scored"),
+            qualified=outcome.get("qualified"),
             queued_for_apply=outcome.get("queued_for_apply"),
             errors=len(outcome.get("errors") or []),
         )

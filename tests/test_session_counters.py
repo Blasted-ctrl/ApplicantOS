@@ -104,11 +104,14 @@ def test_kill_switch_block_counts_as_a_review() -> None:
     assert deltas == {"manual_review": 1}
 
 
-def test_daily_cap_block_counts_nothing() -> None:
+def test_daily_cap_block_counts_a_skip_and_not_a_review() -> None:
     """The other ``blocked``: the cap leaves the application ``ready`` for tomorrow.
 
-    No human is involved and nothing is waiting, so counting it would inflate the review
-    figure by one per capped application every night.
+    No human is involved and nothing is waiting, so counting it as ``manual_review`` would
+    inflate the review figure by one per capped application every night. It is not nothing,
+    though — the run passed over a posting it had every intention of applying to, and that
+    is exactly what ``applications_skipped`` reports. Counting it as neither is what made a
+    session's outcomes add up to fewer than the applications it touched.
     """
     deltas = _session_deltas(
         _result(
@@ -117,7 +120,7 @@ def test_daily_cap_block_counts_nothing() -> None:
             review_reason=ReviewReason.RATE_LIMITED,
         )
     )
-    assert deltas == {}
+    assert deltas == {"applications_skipped": 1}
 
 
 def test_skip_over_an_existing_review_counts_nothing() -> None:

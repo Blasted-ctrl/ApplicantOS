@@ -312,6 +312,8 @@ class ApplicationService:
         self,
         user_id: uuid.UUID | str,
         posting_id: uuid.UUID | str,
+        *,
+        session_id: uuid.UUID | str | None = None,
     ) -> tuple[Application, bool]:
         """Return this user's application to this posting, creating it if there is none.
 
@@ -327,9 +329,19 @@ class ApplicationService:
         ``company_id`` is denormalised onto the row from the posting so analytics can group
         by employer without a join.
 
+        ``session_id`` is what attributes the application to the run that produced it. It is
+        set on insert **and** back-filled on an existing row that has none, because an
+        application can legitimately be created outside a run — by ``POST /applications`` or
+        by a review being resolved — and later be picked up by one. It is never *moved*: an
+        application already credited to a run stays credited to that run, so re-running over
+        an old posting cannot re-attribute yesterday's work to today's session.
+
         Args:
             user_id: The applicant.
             posting_id: The posting being applied to.
+            session_id: The run this application belongs to, when there is one. Without it
+                the row is orphaned: every per-run counter, cap and stop condition is
+                computed by ``WHERE session_id = ...``, and a NULL matches none of them.
 
         Returns:
             ``(application, created)`` — the row and whether this call inserted it.
@@ -342,9 +354,19 @@ class ApplicationService:
         """
         user_uuid = _as_uuid(user_id, "user id")
         posting_uuid = _as_uuid(posting_id, "posting id")
+        session_uuid = _as_uuid(session_id, "session id") if session_id is not None else None
 
         existing = await self._find(user_uuid, posting_uuid)
         if existing is not None:
+            if session_uuid is not None and existing.session_id is None:
+                existing.session_id = session_uuid
+                await self._session.flush()
+                await self._session.commit()
+                logger.info(
+                    "application.session_attributed",
+                    application_id=str(existing.id),
+                    session_id=str(session_uuid),
+                )
             return existing, False
 
         posting = await self._session.scalar(
@@ -357,6 +379,7 @@ class ApplicationService:
             user_id=user_uuid,
             posting_id=posting_uuid,
             company_id=posting.company_id,
+            session_id=session_uuid,
             status=ApplicationStatus.DRAFT,
         )
         application.add_event(
@@ -386,6 +409,7 @@ class ApplicationService:
             application_id=str(application.id),
             user_id=str(user_uuid),
             posting_id=str(posting_uuid),
+            session_id=str(session_uuid) if session_uuid is not None else None,
         )
         return application, True
 

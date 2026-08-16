@@ -50,9 +50,11 @@ from app.models.application import Application
 from app.models.checkpoint import Checkpoint
 from app.models.enums import (
     APPLICATION_POST_SUBMIT_STATES,
+    STOP_REASONS_COMPLETING,
     ApplicationStatus,
     CheckpointStatus,
     SessionStatus,
+    StopReason,
 )
 from app.models.session import (
     COUNTER_FLOOR,
@@ -66,10 +68,12 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 
 __all__ = [
     "DEFAULT_STALE_AFTER_MINUTES",
+    "MAX_SCORE",
     "MAX_STALE_AFTER_MINUTES",
     "MIN_STALE_AFTER_MINUTES",
     "STATS_STATUS_PREFIX",
     "SessionService",
+    "status_for",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -96,6 +100,10 @@ MAX_STALE_AFTER_MINUTES: Final[int] = 7 * 24 * 60
 #: the flat ``dict[str, int]`` the schema declares stays unambiguous.
 STATS_STATUS_PREFIX: Final[str] = "status_"
 
+#: Top of the normalised score band, mirroring :attr:`app.models.score.JobScore.normalized`.
+#: A run cannot ask for a threshold above it: nothing could ever clear one.
+MAX_SCORE: Final[int] = 100
+
 #: Checkpoint statuses that still represent outstanding work for a run.
 _OUTSTANDING_CHECKPOINT_STATES: Final[tuple[CheckpointStatus, ...]] = (
     CheckpointStatus.PENDING,
@@ -109,6 +117,28 @@ _OUTSTANDING_CHECKPOINT_STATES: Final[tuple[CheckpointStatus, ...]] = (
 _POST_SUBMIT_ORDERED: Final[tuple[ApplicationStatus, ...]] = tuple(
     sorted(APPLICATION_POST_SUBMIT_STATES, key=lambda status: status.value)
 )
+
+
+def status_for(reason: StopReason) -> SessionStatus:
+    """Return the session status a given stop reason implies.
+
+    The one mapping from "why it stopped" to "how it ended", so the two can never contradict
+    each other on the same row. A run that hit its cap or ran out of postings did what was
+    asked of it and is ``completed``; a run the user stopped is ``cancelled``; a run that
+    stalled or broke underneath is ``failed``.
+
+    Args:
+        reason: Why the run stopped.
+
+    Returns:
+        The terminal status to record.
+    """
+    resolved = StopReason(reason)
+    if resolved in STOP_REASONS_COMPLETING:
+        return SessionStatus.COMPLETED
+    if resolved is StopReason.USER_STOPPED:
+        return SessionStatus.CANCELLED
+    return SessionStatus.FAILED
 
 
 class SessionService:
@@ -142,6 +172,8 @@ class SessionService:
         trigger: str = DEFAULT_SESSION_TRIGGER,
         *,
         config_snapshot: Mapping[str, Any] | None = None,
+        max_applications: int | None = None,
+        match_threshold: int | None = None,
     ) -> RunSession:
         """Open a run for *user_id*, or return the one already running.
 
@@ -156,14 +188,24 @@ class SessionService:
             config_snapshot: Effective configuration at start, stored verbatim so a run stays
                 reproducible. **The caller is responsible for excluding secrets**: this is a
                 JSON column, and the structlog redaction chain governs logs, not the database.
+            max_applications: Cap for this run alone, or ``None`` to be governed by the
+                configured session cap. Stored on the row rather than only in the snapshot
+                because the submit ladder reads it on every attempt, and a limit that lives
+                only in a JSON blob nobody queries is a limit that does not exist.
+            match_threshold: Minimum normalised score for this run, or ``None`` for the
+                configured floor. Narrowing only — see
+                :meth:`~app.models.session.RunSession.score_floor`.
 
         Returns:
             The running session, committed.
 
         Raises:
             LookupError: If *user_id* is malformed.
+            ValueError: If either narrowing is negative, or *match_threshold* exceeds 100.
         """
         identifier = _as_uuid(user_id, "user id")
+        cap = _validated_narrowing(max_applications, "max_applications")
+        threshold = _validated_narrowing(match_threshold, "match_threshold", ceiling=MAX_SCORE)
 
         existing = await self.current(identifier)
         if existing is not None:
@@ -181,6 +223,8 @@ class SessionService:
             started_at=utcnow(),
             trigger=(trigger or DEFAULT_SESSION_TRIGGER).strip() or DEFAULT_SESSION_TRIGGER,
             config_snapshot=dict(config_snapshot or {}),
+            max_applications=cap,
+            match_threshold=threshold,
         )
         self._session.add(run)
         await self._session.flush()
@@ -191,6 +235,8 @@ class SessionService:
             session_id=str(run.id),
             user_id=str(identifier),
             trigger=run.trigger,
+            max_applications=cap,
+            match_threshold=threshold,
         )
         return run
 
@@ -198,15 +244,21 @@ class SessionService:
         self,
         session_id: uuid.UUID | str,
         status: SessionStatus = SessionStatus.COMPLETED,
+        reason: StopReason | None = None,
     ) -> RunSession:
         """Close a run, stamping ``ended_at`` if it is not already stamped.
 
         Idempotent: re-finishing updates the status but preserves the original end time, so a
-        watchdog sweep arriving after a clean shutdown cannot rewrite that run's timing.
+        watchdog sweep arriving after a clean shutdown cannot rewrite that run's timing. The
+        stop reason is preserved for the same reason — the first explanation is the true one.
+
+        Prefer :meth:`conclude` in new code: it derives the status from the reason, so the
+        two can never disagree about the same run.
 
         Args:
             session_id: The run to close.
             status: How it ended. Defaults to ``completed``.
+            reason: Why it ended. Ignored when the run already records one.
 
         Returns:
             The closed session, committed.
@@ -222,7 +274,7 @@ class SessionService:
         if resolved is SessionStatus.RUNNING:
             raise ValueError("finish() requires a terminal status, not 'running'")
 
-        run.finish(resolved)
+        run.finish(resolved, reason)
         await self._session.flush()
         await self._session.commit()
 
@@ -231,10 +283,128 @@ class SessionService:
             session_id=str(run.id),
             user_id=str(run.user_id),
             status=resolved.value,
+            stop_reason=run.stop_reason.value if run.stop_reason is not None else None,
             applications_completed=run.applications_completed,
             failures=run.failures,
         )
         return run
+
+    async def conclude(
+        self,
+        session_id: uuid.UUID | str,
+        reason: StopReason,
+    ) -> RunSession:
+        """Close a run, deriving its status from *why* it stopped.
+
+        One mapping, in one place, so a run can never be ``completed`` with a reason that
+        means it broke. :data:`~app.models.enums.STOP_REASONS_COMPLETING` names the reasons
+        that mean the run did everything asked of it; a user stop is ``cancelled``; anything
+        else is ``failed``.
+
+        Args:
+            session_id: The run to close.
+            reason: Why it stopped.
+
+        Returns:
+            The closed session, committed.
+
+        Raises:
+            LookupError: If *session_id* is malformed or names no run.
+        """
+        return await self.finish(session_id, status_for(reason), reason)
+
+    async def request_stop(
+        self,
+        session_id: uuid.UUID | str,
+        reason: StopReason = StopReason.USER_STOPPED,
+    ) -> RunSession:
+        """Ask a run to wind down, without closing it.
+
+        This is the signal every long step polls through :meth:`halt_reason`. It is separate
+        from :meth:`conclude` because work already in flight has to be able to *observe* the
+        stop: flipping the status straight to ``cancelled`` would end the run on the
+        dashboard while a browser was still filling a form, and the counters that browser
+        went on to report would land on a run the user had been told was over.
+
+        Idempotent, and the first reason wins — a user's stop is not relabelled by a limit
+        the run happens to hit while winding down.
+
+        Args:
+            session_id: The run to stop.
+            reason: Why it is stopping.
+
+        Returns:
+            The run, committed, with its stop signal set.
+
+        Raises:
+            LookupError: If *session_id* is malformed or names no run.
+        """
+        run = await self.get(session_id)
+        if run.request_stop(reason):
+            await self._session.flush()
+            await self._session.commit()
+            logger.info(
+                "run_session.stop_requested",
+                session_id=str(run.id),
+                user_id=str(run.user_id),
+                reason=reason.value,
+            )
+        return run
+
+    async def halt_reason(self, session_id: uuid.UUID | str | None) -> StopReason | None:
+        """Return why *session_id* may not start new work, or ``None`` if it may.
+
+        The single predicate every caller about to begin an application consults. It answers
+        for two conditions at once — a stop was asked for, or the run is already over —
+        because a caller does not care which is true, only whether it is allowed to proceed.
+        Asking those questions separately at each call site is how a stop ends up honoured
+        on one path and ignored on another.
+
+        Args:
+            session_id: The run to check, or ``None`` for work that belongs to no run.
+                Work outside a run is never halted by this, which is correct: there is no
+                run whose stop it could be violating.
+
+        Returns:
+            The stop reason, or ``None`` when the run is live (or there is no run).
+        """
+        if session_id is None:
+            return None
+        try:
+            run = await self.get(session_id)
+        except LookupError:
+            # A run pruned or never created. Refusing here would strand work that is
+            # otherwise legitimate, and there is no stop being violated.
+            return None
+        if not run.is_halting:
+            return None
+        return run.stop_reason or StopReason.USER_STOPPED
+
+    async def submitted_count(self, session_id: uuid.UUID | str) -> int:
+        """Return how many applications this run has actually sent.
+
+        Counted from the applications themselves rather than read off
+        ``applications_completed``, because the cap this feeds is a safety limit and a
+        rollup counter is a report. A counter increment lost to a crash between the
+        submission and the ``UPDATE`` would silently raise the cap; a ``COUNT`` cannot.
+
+        Args:
+            session_id: The run to measure.
+
+        Returns:
+            Applications attributed to this run that have reached a post-submit state.
+
+        Raises:
+            LookupError: If *session_id* is malformed.
+        """
+        identifier = _as_uuid(session_id, "session id")
+        total = await self._session.scalar(
+            select(func.count(Application.id)).where(
+                Application.session_id == identifier,
+                Application.status.in_(_POST_SUBMIT_ORDERED),
+            )
+        )
+        return int(total or 0)
 
     # ----------------------------------------------------------------------------------
     # Counters
@@ -415,9 +585,12 @@ class SessionService:
         duration = run.duration_seconds
         stats: dict[str, int] = {
             "jobs_found": int(run.jobs_found or 0),
+            "jobs_scored": int(run.jobs_scored or 0),
             "jobs_qualified": int(run.jobs_qualified or 0),
             "resumes_generated": int(run.resumes_generated or 0),
+            "applications_started": int(run.applications_started or 0),
             "applications_completed": int(run.applications_completed or 0),
+            "applications_skipped": int(run.applications_skipped or 0),
             "manual_review": int(run.manual_review or 0),
             "failures": int(run.failures or 0),
             "applications": sum(by_status.values()),
@@ -483,8 +656,17 @@ class SessionService:
             .values(
                 status=SessionStatus.FAILED,
                 ended_at=func.coalesce(RunSession.ended_at, now),
+                # `coalesce`, not a plain assignment: a run that was already winding down
+                # for a reason of its own — the user stopped it, it hit its cap — must keep
+                # that reason. Only a run with no explanation at all is labelled stalled.
+                stop_reason=func.coalesce(RunSession.stop_reason, StopReason.STALLED.value),
             )
-            .execution_options(synchronize_session=False)
+            # `"fetch"`, unlike the `False` used by the hot-path counter increments: this
+            # sweep runs every five minutes over a handful of rows, and its whole job is to
+            # correct instances other code is still holding. `expire_on_commit` is off
+            # project-wide, so without this a caller that had the session loaded would go on
+            # reading `running` from a row this method just failed.
+            .execution_options(synchronize_session="fetch")
         )
         await self._session.commit()
 
@@ -530,6 +712,41 @@ class SessionService:
 # ======================================================================================
 # Helpers
 # ======================================================================================
+
+
+def _validated_narrowing(
+    value: int | None,
+    label: str,
+    *,
+    ceiling: int | None = None,
+) -> int | None:
+    """Check one per-run narrowing, letting ``None`` through untouched.
+
+    ``None`` and zero are deliberately different: ``None`` means "no per-run narrowing, use
+    the setting", zero means "apply to nothing". Coercing one into the other would turn a
+    request that said nothing about a limit into one that forbids all work.
+
+    Args:
+        value: The requested narrowing, or ``None``.
+        label: Field name, used in the error message.
+        ceiling: Largest permitted value, when the field has one.
+
+    Returns:
+        The validated value, or ``None``.
+
+    Raises:
+        ValueError: If the value is negative, or above *ceiling*.
+        TypeError: If the value is not an integer.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{label} requires an int, got {type(value).__name__!r}")
+    if value < COUNTER_FLOOR:
+        raise ValueError(f"{label}={value} is negative")
+    if ceiling is not None and value > ceiling:
+        raise ValueError(f"{label}={value} is above the maximum of {ceiling}")
+    return value
 
 
 def _validated_deltas(deltas: Mapping[str, Any]) -> dict[str, int]:

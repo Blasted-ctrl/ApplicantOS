@@ -70,6 +70,7 @@ export function StartRunDialog({
   const [autoApply, setAutoApply] = useState(autoApplyEnabled);
   const [runDryRun, setRunDryRun] = useState(dryRun);
   const [maxApplications, setMaxApplications] = useState('');
+  const [matchThreshold, setMatchThreshold] = useState('');
 
   const effectiveAuto = overrideSafety ? autoApply : autoApplyEnabled;
   const effectiveDry = overrideSafety ? runDryRun : dryRun;
@@ -92,12 +93,15 @@ export function StartRunDialog({
               loading={starting}
               trailingIcon={<Kbd keys={['Ctrl', 'Enter']} />}
               onClick={() => {
-                const parsed = Number.parseInt(maxApplications, 10);
+                const cap = Number.parseInt(maxApplications, 10);
+                const floor = Number.parseInt(matchThreshold, 10);
                 onStart({
                   trigger: 'manual',
                   auto_apply: overrideSafety ? autoApply : null,
                   dry_run: overrideSafety ? runDryRun : null,
-                  max_applications: Number.isFinite(parsed) && parsed > 0 ? parsed : null,
+                  max_applications: Number.isFinite(cap) && cap > 0 ? cap : null,
+                  match_threshold:
+                    Number.isFinite(floor) && floor > 0 && floor <= 100 ? floor : null,
                 });
               }}
             >
@@ -131,23 +135,49 @@ export function StartRunDialog({
             )}
           </p>
 
-          <Field
-            label="Cap this run"
-            help="Leave empty to use the daily cap from Settings."
-            htmlFor="run-max"
-          >
-            <Input
-              id="run-max"
-              type="number"
-              min={1}
-              mono
-              value={maxApplications}
-              placeholder="applications"
-              onChange={(event) => {
-                setMaxApplications(event.target.value);
-              }}
-            />
-          </Field>
+          {/*
+            Both fields narrow and neither widens: the server takes the *lower* cap and the
+            *higher* threshold of what is asked here and what Settings holds. Saying so in
+            the help text matters, because a field that silently ignored you would be worse
+            than no field at all.
+          */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field
+              label="Stop after"
+              help="Lower of this and the caps in Settings."
+              htmlFor="run-max"
+            >
+              <Input
+                id="run-max"
+                type="number"
+                min={1}
+                mono
+                value={maxApplications}
+                placeholder="applications"
+                onChange={(event) => {
+                  setMaxApplications(event.target.value);
+                }}
+              />
+            </Field>
+            <Field
+              label="Minimum match"
+              help="Higher of this and the floor in Settings."
+              htmlFor="run-threshold"
+            >
+              <Input
+                id="run-threshold"
+                type="number"
+                min={1}
+                max={100}
+                mono
+                value={matchThreshold}
+                placeholder="score out of 100"
+                onChange={(event) => {
+                  setMatchThreshold(event.target.value);
+                }}
+              />
+            </Field>
+          </div>
 
           <label className="flex items-start gap-3">
             <Switch

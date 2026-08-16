@@ -34,7 +34,11 @@ from sqlalchemy.sql.functions import FunctionElement
 
 from app.database.base import Base
 from app.database.types import utcnow
-from app.models.enums import SessionStatus
+from app.models.enums import (
+    STOP_REASON_SENTENCES,
+    SessionStatus,
+    StopReason,
+)
 from app.models.mixins import TimestampMixin, UserOwnedMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
@@ -46,6 +50,7 @@ __all__ = [
     "DEFAULT_SESSION_TRIGGER",
     "SESSION_COUNTER_FIELDS",
     "SESSION_STATUS_COLUMN",
+    "STOP_REASON_COLUMN",
     "RunSession",
 ]
 
@@ -67,14 +72,25 @@ SESSION_STATUS_COLUMN: Final[SAEnum] = SAEnum(
     values_callable=_ENUM_VALUES,
 )
 
+#: Storage type for :class:`~app.models.enums.StopReason`.
+STOP_REASON_COLUMN: Final[SAEnum] = SAEnum(
+    StopReason,
+    name="stop_reason",
+    native_enum=False,
+    values_callable=_ENUM_VALUES,
+)
+
 #: Every column :meth:`RunSession.record` is allowed to increment. Anything else is a
 #: caller bug and raises rather than being silently absorbed as an instance attribute.
 SESSION_COUNTER_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "applications_completed",
+        "applications_skipped",
+        "applications_started",
         "failures",
         "jobs_found",
         "jobs_qualified",
+        "jobs_scored",
         "manual_review",
         "resumes_generated",
     }
@@ -172,6 +188,39 @@ class RunSession(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         doc="When the run stopped. NULL while running; the watchdog reaps stale NULLs.",
     )
 
+    # -- stopping -----------------------------------------------------------------------
+    # `status` says how a run ended. `stop_reason` says why, and why is the only half a user
+    # can act on: "reached your limit of 50" and "ran out of postings" are both `completed`.
+    stop_reason: Mapped[StopReason | None] = mapped_column(
+        STOP_REASON_COLUMN,
+        nullable=True,
+        doc="Why the run stopped. NULL while running, and on rows written before 0003.",
+    )
+    stop_requested_at: Mapped[datetime | None] = mapped_column(
+        nullable=True,
+        index=True,
+        doc=(
+            "When a stop was asked for. This is the *cooperative* signal every long step "
+            "polls; `status` is only flipped once the run has actually wound down."
+        ),
+    )
+
+    # -- what the user asked for ---------------------------------------------------------
+    # Both are per-run narrowings of a standing setting, and both may only ever narrow:
+    # `max_applications` is intersected with `max_applications_per_session` and the daily
+    # cap, `match_threshold` is raised to at least `auto_apply_min_score`. A request cannot
+    # widen what a run is permitted to do — see `RunSession.application_cap`.
+    max_applications: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        doc="Cap for this run alone. NULL means the configured session cap governs.",
+    )
+    match_threshold: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        doc="Minimum normalised score (0-100) for this run. NULL means use the setting.",
+    )
+
     # -- rollup counters ----------------------------------------------------------------
     jobs_found: Mapped[int] = mapped_column(
         Integer,
@@ -179,6 +228,13 @@ class RunSession(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         server_default="0",
         nullable=False,
         doc="Postings discovered during this run, before deduplication.",
+    )
+    jobs_scored: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+        doc="Postings this run put a score on, whether or not they qualified.",
     )
     jobs_qualified: Mapped[int] = mapped_column(
         Integer,
@@ -194,12 +250,26 @@ class RunSession(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         nullable=False,
         doc="Tailored resume versions produced during this run.",
     )
+    applications_started: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+        doc="Applications this run opened a browser for. Started minus completed is the loss.",
+    )
     applications_completed: Mapped[int] = mapped_column(
         Integer,
         default=0,
         server_default="0",
         nullable=False,
         doc="Applications that reached a submitted state. Also the duration sample count.",
+    )
+    applications_skipped: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+        doc="Postings passed over: already applied to, below the floor, or provider-refused.",
     )
     manual_review: Mapped[int] = mapped_column(
         Integer,
@@ -283,6 +353,96 @@ class RunSession(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         """Whether this run is still executing."""
         return self.status is SessionStatus.RUNNING
 
+    @property
+    def is_halting(self) -> bool:
+        """Whether no *new* work may start under this run.
+
+        True once the run has stopped **or** once a stop has been asked for and not yet
+        acted on. The two are deliberately one predicate: a caller about to open a browser
+        does not care which of them is true, only whether it is allowed to proceed. Keeping
+        them separate at the call site is how a stop ends up honoured on one path and
+        ignored on another.
+        """
+        return not self.is_running or self.stop_requested_at is not None
+
+    def application_cap(self, *, configured_cap: int, daily_remaining: int) -> int:
+        """Return how many more applications this run may submit.
+
+        Three limits are in play and the smallest always wins, because every one of them is
+        a *narrowing*. The request's ``max_applications`` cannot raise the configured session
+        cap, and neither can raise what the user has left in the day. A cap that could be
+        widened from the request body would make ``max_applications_per_session`` advisory,
+        which is not what a setting called a maximum means.
+
+        Args:
+            configured_cap: ``settings.max_applications_per_session``.
+            daily_remaining: ``max_applications_per_day`` minus what the user has already
+                submitted today, across every run.
+
+        Returns:
+            The number of further submissions permitted, never negative.
+        """
+        limits = [int(configured_cap), int(daily_remaining)]
+        if self.max_applications is not None:
+            limits.append(int(self.max_applications))
+        return max(COUNTER_FLOOR, min(limits))
+
+    def score_floor(self, *, configured_floor: int) -> int:
+        """Return the normalised score a posting must reach for this run to apply.
+
+        Narrowing only, for the same reason as :meth:`application_cap`: a run may ask to be
+        *pickier* than the standing setting, never less picky. A request that could lower
+        the floor would be a way to route around ``auto_apply_min_score`` by starting a run.
+
+        Args:
+            configured_floor: ``settings.auto_apply_min_score``.
+
+        Returns:
+            The effective floor for this run.
+        """
+        if self.match_threshold is None:
+            return int(configured_floor)
+        return max(int(configured_floor), int(self.match_threshold))
+
+    def request_stop(self, reason: StopReason) -> bool:
+        """Ask this run to wind down, without closing it.
+
+        Separating the request from the close is what makes a stop *observable* by work that
+        is already in flight. Flipping ``status`` straight to ``cancelled`` would end the run
+        on the dashboard while a browser was still filling a form, and the counters that
+        browser went on to report would land on a session the user had been told was over.
+
+        Idempotent: the first reason wins, so a user stop is not overwritten by a limit the
+        run happens to hit while winding down.
+
+        Args:
+            reason: Why the run is stopping.
+
+        Returns:
+            ``True`` if this call set the signal, ``False`` if one was already set.
+        """
+        if self.stop_requested_at is not None:
+            return False
+        self.stop_requested_at = utcnow()
+        self.stop_reason = StopReason(reason)
+        return True
+
+    @property
+    def stop_sentence(self) -> str | None:
+        """The stop reason as a sentence, with its number filled in.
+
+        Returns:
+            One sentence naming why the run stopped, or ``None`` while it is still running
+            and no stop has been asked for. Never the word "Done."
+        """
+        if self.stop_reason is None:
+            return None
+        template = STOP_REASON_SENTENCES.get(self.stop_reason)
+        if template is None:  # pragma: no cover - guarded by test_stop_reasons_all_have_copy
+            return f"Stopped: {self.stop_reason.value.replace('_', ' ')}."
+        limit = self.max_applications if self.max_applications is not None else ""
+        return template.format(limit=limit)
+
     def record(self, **deltas: int) -> None:
         """Increment one or more rollup counters.
 
@@ -353,18 +513,28 @@ class RunSession(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
             merged[bucket] = int(merged.get(bucket, 0)) + int(count)
         self.token_usage = merged
 
-    def finish(self, status: SessionStatus = SessionStatus.COMPLETED) -> None:
+    def finish(
+        self,
+        status: SessionStatus = SessionStatus.COMPLETED,
+        reason: StopReason | None = None,
+    ) -> None:
         """Close the run, stamping :attr:`ended_at` if it is not already stamped.
 
         Idempotent: re-finishing a session updates the status but preserves the original
-        end time, so a watchdog sweep cannot rewrite a clean shutdown's timing.
+        end time, so a watchdog sweep cannot rewrite a clean shutdown's timing. The stop
+        reason follows the same rule for the same reason — the first explanation of why a
+        run ended is the true one, and a later sweep must not relabel a run the user
+        cancelled as one that stalled.
 
         Args:
             status: Terminal status to record. Defaults to ``completed``.
+            reason: Why it stopped. Ignored when a reason is already recorded.
         """
         self.status = status
         if self.ended_at is None:
             self.ended_at = utcnow()
+        if reason is not None and self.stop_reason is None:
+            self.stop_reason = StopReason(reason)
 
     def __repr__(self) -> str:
         """Return a debugger-friendly summary that never triggers a lazy load."""

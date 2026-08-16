@@ -44,9 +44,9 @@ from app.api.deps import (
 )
 from app.api.events import EVENT_SESSION_FINISHED, EVENT_SESSION_STARTED, bus
 from app.api.routes._support import require_owner
-from app.api.tasks import TASK_JOBS_POLL_ALL, dispatch
+from app.api.tasks import TASK_JOBS_POLL_ALL, TASK_SESSION_ADVANCE, dispatch
 from app.models.application import Application
-from app.models.enums import SessionStatus
+from app.models.enums import SessionStatus, StopReason
 from app.models.session import RunSession
 from app.schemas.application import ApplicationRead
 from app.schemas.common import OkResponse, Page, paginate
@@ -174,6 +174,8 @@ async def start_session(
         user.id,
         payload.trigger,
         config_snapshot=_config_snapshot(settings, user, payload),
+        max_applications=payload.max_applications,
+        match_threshold=payload.match_threshold,
     )
     item = SessionRead.model_validate(run)
     bus.publish_model(EVENT_SESSION_STARTED, item)
@@ -184,6 +186,11 @@ async def start_session(
         session_id=str(run.id),
         query=payload.discover.model_dump(mode="json") if payload.discover else None,
     )
+
+    # Kick the run loop rather than waiting up to `ADVANCE_INTERVAL_SECONDS` for beat. The
+    # loop is what applies to what discovery finds, so without this a run that already has
+    # scored postings waiting would sit idle for a minute before doing anything at all.
+    await dispatch(TASK_SESSION_ADVANCE, str(run.id))
 
     logger.info(
         "api.session_started",
@@ -273,18 +280,25 @@ async def stop_session(
     user: CurrentUser,
     service: SessionServiceDep,
 ) -> SessionRead:
-    """Close a run as cancelled.
+    """Close a run as cancelled, and refuse every submission it had queued.
 
     ``cancelled``, not ``completed`` or ``failed``: a user stopping a run is neither a clean
     finish nor a fault, and folding it into either would distort the reliability figures the
     dashboard reports.
 
-    Idempotent — re-stopping updates the status but preserves the original ``ended_at``, so
-    a stop arriving after the watchdog already reaped the run cannot rewrite its timing.
+    **Two writes, in this order, and the order is the point.** The stop is *requested* first,
+    which is the signal a task already on the ``apply`` queue polls at rung 2 of
+    :meth:`~app.services.pipeline.Pipeline.submit`; only then is the run closed. Closing it
+    first would leave a window in which the run reads as over while its queued applications
+    have seen no stop signal at all — and by the time the user sees "stopped", several more
+    would have been sent.
 
-    In-flight work is not killed here: a task already on the ``apply`` queue finishes what it
-    started, and stopping mid-browser-flow is what would leave an application stranded in
-    ``submitting``.
+    In-flight work is still not *killed*: a browser already filling a form finishes, because
+    aborting mid-flow is what strands an application in ``submitting`` with an unknown
+    outcome at the employer's end. What stops is everything that had not yet started.
+
+    Idempotent — re-stopping preserves the original ``ended_at`` and the original stop
+    reason, so a stop arriving after the watchdog reaped the run cannot relabel it.
 
     Args:
         session_id: The run to stop.
@@ -292,7 +306,7 @@ async def stop_session(
         service: The run-session service.
 
     Returns:
-        The closed run.
+        The closed run, carrying ``stop_reason`` and the sentence the UI renders.
 
     Raises:
         LookupError: If no run has that id — mapped to 404.
@@ -300,7 +314,8 @@ async def stop_session(
     run = await service.get(session_id)
     require_owner(run.user_id, user.id, "session")
 
-    closed = await service.finish(run.id, SessionStatus.CANCELLED)
+    await service.request_stop(run.id, StopReason.USER_STOPPED)
+    closed = await service.finish(run.id, SessionStatus.CANCELLED, StopReason.USER_STOPPED)
     item = SessionRead.model_validate(closed)
     bus.publish_model(EVENT_SESSION_FINISHED, item)
 
@@ -308,6 +323,7 @@ async def stop_session(
         "api.session_stopped",
         user_id=str(user.id),
         session_id=str(session_id),
+        stop_reason=closed.stop_reason.value if closed.stop_reason is not None else None,
         applications_completed=closed.applications_completed,
     )
     return item

@@ -66,6 +66,7 @@ __all__ = [
     "TASK_KNOWLEDGE_INDEX_SOURCE",
     "TASK_KNOWLEDGE_REFRESH_STALE",
     "TASK_QUEUES",
+    "TASK_SESSION_ADVANCE",
     "TASK_SESSION_WATCHDOG",
     "TASK_SYNC_DETECT_GHOSTED",
     "TASK_SYNC_ON_LAUNCH",
@@ -108,6 +109,7 @@ TASK_CLEANUP_EXPIRE_POSTINGS: Final[str] = "cleanup.expire_postings"
 TASK_CLEANUP_PRUNE_ARTIFACTS: Final[str] = "cleanup.prune_artifacts"
 TASK_CLEANUP_PRUNE_CACHE: Final[str] = "cleanup.prune_cache"
 TASK_CLEANUP_REFRESH_GAUGES: Final[str] = "cleanup.refresh_gauges"
+TASK_SESSION_ADVANCE: Final[str] = "session.advance"
 TASK_SESSION_WATCHDOG: Final[str] = "session.watchdog"
 TASK_SYNC_POLL_ALL: Final[str] = "sync.poll_all"
 TASK_SYNC_POLL_ACCOUNT: Final[str] = "sync.poll_account"
@@ -132,6 +134,10 @@ TASK_QUEUES: Final[dict[str, str]] = {
     TASK_CLEANUP_PRUNE_ARTIFACTS: QUEUE_MAINTENANCE,
     TASK_CLEANUP_PRUNE_CACHE: QUEUE_MAINTENANCE,
     TASK_CLEANUP_REFRESH_GAUGES: QUEUE_MAINTENANCE,
+    # The run loop rides the maintenance queue, not `apply`: it dispatches application
+    # work and never performs any, so it must not queue behind the browser flows it is
+    # supposed to be pacing.
+    TASK_SESSION_ADVANCE: QUEUE_MAINTENANCE,
     TASK_SESSION_WATCHDOG: QUEUE_MAINTENANCE,
     # Status sync (docs/CONTRACTS.md §17.7). Maintenance rather than discovery: these read a
     # mailbox and write a status, they never touch a provider or a browser.

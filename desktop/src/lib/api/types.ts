@@ -1079,6 +1079,32 @@ export interface IndexReport {
 // Sessions
 // ══════════════════════════════════════════════════════════════════════════════════════
 
+/**
+ * How a posting compared to the applicant themselves, mirroring
+ * `app.ai.similarity.MatchBreakdown`.
+ *
+ * Carried inside `ScoreRead.breakdown` under the `match` key rather than as a column of its
+ * own, and **absent** rather than zeroed when there was no indexed profile to compare
+ * against — four confident zeroes and "we have not indexed you yet" are different statements
+ * and the UI has to be able to tell them apart. `comparable: false` is the same distinction
+ * one level down: both sides existed but one was too thin to measure.
+ */
+export interface MatchBreakdown {
+  title_relevance: number;
+  skills_overlap: number;
+  resume_similarity: number;
+  combined: number;
+  matched_skills: string[];
+  missing_skills: string[];
+  comparable: boolean;
+  percent: {
+    combined: number;
+    title_relevance: number;
+    skills_overlap: number;
+    resume_similarity: number;
+  };
+}
+
 /** One automation run: its status, its timing, and every rollup counter. */
 export interface SessionRead {
   id: Uuid;

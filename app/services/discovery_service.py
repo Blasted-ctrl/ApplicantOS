@@ -41,7 +41,7 @@ from __future__ import annotations
 import inspect
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
@@ -68,16 +68,19 @@ from app.services.dedupe_service import DedupeService
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from app.ai.similarity import ApplicantProfile
     from app.config.settings import Settings
     from app.jobs.base import ATSProvider, RawPosting
 
 __all__ = [
+    "CORPUS_POSTING_LIMIT",
     "DEFAULT_KEYWORDS",
     "DEFAULT_POSTED_WITHIN_DAYS",
     "EVENT_PROVIDER_EMPTY",
     "EVENT_PROVIDER_FAILED",
     "EVENT_PROVIDER_FINISHED",
     "EVENT_PROVIDER_STARTED",
+    "PROFILE_FACT_LIMIT",
     "RESCORABLE_STATUSES",
     "DiscoveryReport",
     "DiscoveryService",
@@ -127,6 +130,15 @@ RESCORABLE_STATUSES: Final[frozenset[PostingStatus]] = frozenset(
         PostingStatus.SKIPPED,
     }
 )
+
+#: Ceiling on the facts one applicant profile is built from. A user with thousands of
+#: indexed facts does not produce a thousand-times better match vector — the vocabulary
+#: saturates long before that — and the read happens once per scoring batch.
+PROFILE_FACT_LIMIT: Final[int] = 500
+
+#: Ceiling on the postings sampled for the IDF corpus. Enough to make document frequencies
+#: stable, small enough that building them is one indexed query rather than a table scan.
+CORPUS_POSTING_LIMIT: Final[int] = 2_000
 
 #: Signature of the optional progress hook: an event name and a JSON-ready payload.
 ProgressCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -606,16 +618,23 @@ class DiscoveryService:
         """
         user = await self._load_user(user_id)
         prefs: UserPreferences = user.prefs
-        scorer = Scorer(load_rules(), prefs)
 
         postings = await self._postings_to_score(user.id, posting_ids)
         if not postings:
             logger.debug("discovery.nothing_to_score", user_id=str(user.id))
             return 0
 
+        # Built once for the batch, in this order, because both are batch-wide: the corpus
+        # weights must be the same for the applicant's vector and every posting's, and the
+        # applicant's vector is the expensive half — rebuilding it per posting would dominate
+        # the cost of scoring two hundred of them.
+        idf = await self._corpus_weights(user.id)
+        profile = await self._applicant_profile(user.id, prefs, idf)
+        scorer = Scorer(load_rules(), prefs, idf=idf)
+
         verdicts: dict[str, int] = {}
         for posting in postings:
-            result = await self._score_one(scorer, posting)
+            result = await self._score_one(scorer, posting, profile)
             await self._upsert_score(posting, user.id, result)
             self._route(posting, result)
             verdicts[result.verdict] = verdicts.get(result.verdict, 0) + 1
@@ -636,12 +655,19 @@ class DiscoveryService:
         )
         return len(postings)
 
-    async def _score_one(self, scorer: Scorer, posting: JobPosting) -> ScoreResult:
+    async def _score_one(
+        self,
+        scorer: Scorer,
+        posting: JobPosting,
+        profile: ApplicantProfile | None = None,
+    ) -> ScoreResult:
         """Score one posting, with or without the optional model pass.
 
         Args:
             scorer: The scorer bound to this user's preferences and rule pack.
             posting: The posting to judge.
+            profile: The applicant to compare it against, or ``None`` when this user has no
+                indexed knowledge yet.
 
         Returns:
             The itemised result. When the model pass is enabled it may move the total by
@@ -649,8 +675,107 @@ class DiscoveryService:
             any failure of it degrades silently to the rule score.
         """
         if not self._use_llm:
-            return scorer.score_rules(posting)
-        return await scorer.score(posting, use_llm=True)
+            return scorer.score_rules(posting, profile)
+        return await scorer.score(posting, use_llm=True, profile=profile)
+
+    async def _applicant_profile(
+        self,
+        user_id: uuid.UUID,
+        prefs: UserPreferences,
+        idf: Mapping[str, float] | None,
+    ) -> ApplicantProfile | None:
+        """Flatten this user's knowledge into something a posting can be compared against.
+
+        The evidence is the user's :class:`~app.models.knowledge.KnowledgeFact` rows, not a
+        résumé file. That is golden rule #6 applied to matching: a résumé is a generated view
+        and can be stale, out of date, or one of several; the facts are the thing the whole
+        system agrees is true about this person.
+
+        Args:
+            user_id: The applicant.
+            prefs: Their preferences, supplying the target titles.
+            idf: Corpus weights, or ``None``.
+
+        Returns:
+            The profile, or ``None`` when the user has no active facts — matching a posting
+            against an empty applicant would produce a confident zero for every posting, and
+            "we have not indexed you yet" is a different statement from "you do not fit".
+        """
+        from app.ai.similarity import ApplicantProfile
+        from app.models.knowledge import KnowledgeFact
+
+        rows = (
+            (
+                await self._session.execute(
+                    select(KnowledgeFact.text, KnowledgeFact.skills, KnowledgeFact.technologies)
+                    .where(
+                        KnowledgeFact.user_id == user_id,
+                        KnowledgeFact.is_active.is_(True),
+                    )
+                    .order_by(KnowledgeFact.created_at.asc(), KnowledgeFact.id.asc())
+                    .limit(PROFILE_FACT_LIMIT)
+                )
+            )
+            .all()
+        )
+        if not rows:
+            logger.debug("discovery.no_profile_facts", user_id=str(user_id))
+            return None
+
+        skills: set[str] = set()
+        for _text, fact_skills, technologies in rows:
+            skills.update(fact_skills or [])
+            skills.update(technologies or [])
+
+        return ApplicantProfile.build(
+            [text for text, _skills, _technologies in rows],
+            titles=list(prefs.preferred_keywords or []),
+            skills=skills,
+            idf=idf,
+        )
+
+    async def _corpus_weights(self, user_id: uuid.UUID) -> Mapping[str, float] | None:
+        """Return document frequencies over the postings this user has already seen.
+
+        A résumé and a posting are two documents, and a textbook TF-IDF over a corpus of two
+        weights the vocabulary they *share* — the whole substance of the match — lowest of
+        all. The corpus that makes IDF mean something here is the population the posting is
+        drawn from, which is exactly what this user's ingested postings are.
+
+        Args:
+            user_id: The applicant, whose postings define the population.
+
+        Returns:
+            The weights, or ``None`` when there are too few postings to be worth it —
+            :func:`~app.ai.similarity.build_idf` applies that floor itself and returns an
+            empty mapping, which callers read as "use sublinear TF".
+        """
+        from app.ai.similarity import build_idf
+
+        titles_and_bodies = (
+            (
+                await self._session.execute(
+                    select(JobPosting.title, JobPosting.description)
+                    .where(JobPosting.description.is_not(None))
+                    .order_by(JobPosting.created_at.desc(), JobPosting.id.desc())
+                    .limit(CORPUS_POSTING_LIMIT)
+                )
+            )
+            .all()
+        )
+        weights = build_idf(
+            "\n".join(part for part in (title, description) if part)
+            for title, description in titles_and_bodies
+        )
+        if not weights:
+            return None
+        logger.debug(
+            "discovery.corpus_built",
+            user_id=str(user_id),
+            documents=len(titles_and_bodies),
+            terms=len(weights),
+        )
+        return weights
 
     async def _postings_to_score(
         self,

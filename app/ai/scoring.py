@@ -61,10 +61,12 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from collections.abc import Iterable, Mapping, Sequence
 
     from app.ai.llm import ModelPlugin
+    from app.ai.similarity import ApplicantProfile, MatchBreakdown, MatchWeights
     from app.models.user import UserPreferences
 
 __all__ = [
     "COMPONENT_LLM_ADJUSTMENT",
+    "COMPONENT_MATCH",
     "DEFAULT_RULES",
     "GATE_BLOCKED_COMPANY",
     "GATE_BLOCKED_INDUSTRY",
@@ -75,6 +77,7 @@ __all__ = [
     "GATE_STARTUP_TOO_SMALL",
     "HARD_GATE_KEYS",
     "HARD_GATE_PENALTY",
+    "MATCH_COMPONENT_POINTS",
     "MAX_LLM_ADJUSTMENT",
     "MAX_NORMALIZED_SCORE",
     "MIN_NORMALIZED_SCORE",
@@ -217,6 +220,15 @@ HARD_GATE_KEYS: Final[frozenset[str]] = frozenset(
 #: Synthetic component key carrying the language model's adjustment, so that
 #: ``sum(points of matched components) == total`` still holds after the model has spoken.
 COMPONENT_LLM_ADJUSTMENT: Final[str] = "llm_adjustment"
+
+#: Component key for the applicant-to-posting match (``docs/SCORING.md``).
+COMPONENT_MATCH: Final[str] = "match"
+
+#: Points a perfect match contributes. Chosen to be meaningful beside the rule pack without
+#: being able to carry a posting on its own: the pack's own positive rules total well above
+#: this, so a posting that matches the applicant perfectly but satisfies no preference still
+#: lands short of the apply threshold rather than being waved through on similarity alone.
+MATCH_COMPONENT_POINTS: Final[int] = 30
 
 #: Label rendered for that component.
 LLM_ADJUSTMENT_LABEL: Final[str] = "Model adjustment"
@@ -890,6 +902,10 @@ class ScoreResult:
         verdict: ``"apply"``, ``"review"`` or ``"skip"``.
         rationale: Optional model-written prose. Never the source of the number.
         model_used: The model that wrote :attr:`rationale`; ``None`` for a pure rule score.
+        match: How the posting compared to the applicant themselves — title relevance,
+            skills overlap and résumé similarity. ``None`` when no
+            :class:`~app.ai.similarity.ApplicantProfile` was supplied, which is the case for
+            every caller that only wants the rule pack's verdict.
     """
 
     total: int
@@ -898,6 +914,7 @@ class ScoreResult:
     verdict: Verdict
     rationale: str | None = None
     model_used: str | None = None
+    match: MatchBreakdown | None = None
 
     @property
     def matched_components(self) -> list[ScoreComponent]:
@@ -944,7 +961,7 @@ class ScoreResult:
             months later — the review band in force and the count of vetoes — so the panel
             never has to re-run the engine to explain an old score.
         """
-        return {
+        breakdown: dict[str, Any] = {
             "components": [component.to_dict() for component in self.components],
             "total": self.total,
             "normalized": self.normalized,
@@ -952,6 +969,13 @@ class ScoreResult:
             "review_band": REVIEW_BAND,
             "hard_negatives": [component.rule for component in self.hard_negatives],
         }
+        # Omitted rather than written as null when there was no profile to compare against.
+        # A `match` key holding zeros would be indistinguishable from a genuine no-match, and
+        # the UI's "Why this job matched" panel would confidently render four zeroes for a
+        # posting nothing had actually measured.
+        if self.match is not None:
+            breakdown["match"] = self.match.to_dict()
+        return breakdown
 
 
 def explain(result: ScoreResult) -> str:
@@ -1402,6 +1426,11 @@ class Scorer:
         llm: An explicit model client for the optional adjustment pass. ``None`` resolves
             :func:`app.ai.llm.get_llm` lazily on first use, which is also what makes the
             zero-API-key path work: it returns the deterministic offline model.
+        match_weights: How title relevance, skills overlap and résumé similarity blend into
+            the match score. ``None`` uses :data:`app.ai.similarity.DEFAULT_WEIGHTS`.
+        idf: Corpus document frequencies from :func:`app.ai.similarity.build_idf`, shared by
+            every comparison this scorer makes. ``None`` uses corpus-free sublinear-TF
+            weighting, which is what a fresh install has and is reproducible either way.
     """
 
     def __init__(
@@ -1409,11 +1438,23 @@ class Scorer:
         rules: Sequence[ScoreRule] | None = None,
         prefs: UserPreferences | None = None,
         llm: ModelPlugin | None = None,
+        *,
+        match_weights: MatchWeights | None = None,
+        idf: Mapping[str, float] | None = None,
     ) -> None:
-        """Bind a pack and a set of preferences to this scorer."""
+        """Bind a pack, a set of preferences and a match configuration to this scorer."""
+        from app.ai.similarity import DEFAULT_WEIGHTS
+
         self.rules: list[ScoreRule] = list(rules) if rules is not None else default_rules()
         self.prefs: UserPreferences = prefs if prefs is not None else _default_preferences()
+        self.match_weights: MatchWeights = (
+            match_weights if match_weights is not None else DEFAULT_WEIGHTS
+        )
         self._llm = llm
+        # The corpus weights every profile and posting in this batch is vectorised with.
+        # They must be the *same* weights on both sides: two vectors weighted differently
+        # are not comparable, and the cosine between them is a number with no meaning.
+        self._idf = idf
         self._rules_hash = hash_payload([rule.to_dict() for rule in self.rules])
         self._prefs_hash = hash_payload(self.prefs)
 
@@ -1469,34 +1510,44 @@ class Scorer:
     # The deterministic engine
     # ----------------------------------------------------------------------------------
 
-    def score_rules(self, posting: Any) -> ScoreResult:
-        """Score *posting* against the pack and the user's preference gates.
+    def score_rules(self, posting: Any, profile: ApplicantProfile | None = None) -> ScoreResult:
+        """Score *posting* against the pack, the preference gates and — optionally — a person.
 
         **This function is pure, synchronous and deterministic.** It reads no clock, no
         network, no database and no random source; it consults only already-loaded ORM
         state; and it returns identical output for identical input, forever. That is a hard
         requirement: the dashboard ranks postings against each other, and a score that
-        drifts between runs makes every comparison it shows a lie.
+        drifts between runs makes every comparison it shows a lie. Supplying *profile* does
+        not weaken that — :mod:`app.ai.similarity` holds the same contract, which is why the
+        match is computed there rather than by a model.
 
         Args:
             posting: A :class:`~app.models.posting.JobPosting`, a posting DTO, a provider
                 ``RawPosting``, or a mapping with the same field names.
+            profile: The applicant to compare the posting against. ``None`` — the default —
+                scores the rule pack alone and produces byte-identical output to before this
+                parameter existed.
 
         Returns:
             The itemised result. Every rule in the pack and every preference gate appears in
             :attr:`ScoreResult.components`, matched or not, so the score panel can show what
             was examined; only matched components contribute to the total.
         """
-        return self._score_view(_build_view(posting))
+        return self._score_view(_build_view(posting), profile)
 
-    def _score_view(self, view: _PostingView) -> ScoreResult:
-        """Run the pack and the gates over an already-flattened posting.
+    def _score_view(
+        self,
+        view: _PostingView,
+        profile: ApplicantProfile | None = None,
+    ) -> ScoreResult:
+        """Run the pack, the gates and the match over an already-flattened posting.
 
         Split out of :meth:`score_rules` so :meth:`score` can build the view once and use it
         for both the deterministic pass and the model prompt.
 
         Args:
             view: The flattened posting.
+            profile: The applicant, or ``None`` for a rule-only score.
 
         Returns:
             The itemised rule-based result.
@@ -1504,12 +1555,17 @@ class Scorer:
         components = [self._evaluate_rule(rule, view) for rule in self.rules]
         components.extend(self._preference_gates(view))
 
+        breakdown = self._match(view, profile)
+        if breakdown is not None:
+            components.append(self._match_component(breakdown))
+
         total = sum(component.contribution() for component in components)
         result = ScoreResult(
             total=total,
             normalized=self.normalize_total(total),
             components=components,
             verdict=self.verdict_for(total),
+            match=breakdown,
         )
         logger.debug(
             "scoring.rules_scored",
@@ -1518,8 +1574,74 @@ class Scorer:
             verdict=result.verdict,
             matched=len(result.matched_components),
             hard_negatives=len(result.hard_negatives),
+            match_combined=breakdown.combined if breakdown is not None else None,
         )
         return result
+
+    # ----------------------------------------------------------------------------------
+    # Matching the applicant, not just the rules
+    # ----------------------------------------------------------------------------------
+
+    def _match(self, view: _PostingView, profile: ApplicantProfile | None) -> MatchBreakdown | None:
+        """Compare one posting against the applicant, when there is one to compare against.
+
+        Args:
+            view: The flattened posting.
+            profile: The applicant, or ``None``.
+
+        Returns:
+            The breakdown, or ``None`` when no profile was supplied.
+        """
+        if profile is None:
+            return None
+
+        from app.ai.similarity import match
+
+        return match(
+            profile,
+            title=view.title,
+            description=view.description,
+            weights=self.match_weights,
+            idf=self._idf,
+        )
+
+    def _match_component(self, breakdown: MatchBreakdown) -> ScoreComponent:
+        """Turn a match breakdown into one line of the score's arithmetic.
+
+        The combined ratio is scaled by :data:`MATCH_COMPONENT_POINTS` and rounded, so the
+        rule pack and the match are denominated in the same units and the panel can show
+        them side by side. It is a *component*, not a multiplier on the total: a posting the
+        pack vetoes stays vetoed however well it matches, which is what keeps a hard
+        negative hard.
+
+        Args:
+            breakdown: The computed match.
+
+        Returns:
+            The component. Unmatched — contributing nothing — when there was not enough text
+            on one side to compare, because a zero earned by absent evidence and a zero
+            earned by a genuine mismatch must not read the same.
+        """
+        percent = breakdown.as_percent()
+        if not breakdown.comparable:
+            return ScoreComponent(
+                rule=COMPONENT_MATCH,
+                label="Match to your background",
+                points=0,
+                matched=False,
+                evidence="not enough text on one side to compare",
+            )
+        return ScoreComponent(
+            rule=COMPONENT_MATCH,
+            label="Match to your background",
+            points=round(breakdown.combined * MATCH_COMPONENT_POINTS),
+            matched=True,
+            evidence=(
+                f"title {percent['title_relevance']}%, "
+                f"skills {percent['skills_overlap']}%, "
+                f"résumé {percent['resume_similarity']}%"
+            ),
+        )
 
     def _evaluate_rule(self, rule: ScoreRule, view: _PostingView) -> ScoreComponent:
         """Evaluate one rule against one posting.
@@ -1831,7 +1953,13 @@ class Scorer:
     # The optional language-model pass
     # ----------------------------------------------------------------------------------
 
-    async def score(self, posting: Any, *, use_llm: bool = True) -> ScoreResult:
+    async def score(
+        self,
+        posting: Any,
+        *,
+        use_llm: bool = True,
+        profile: ApplicantProfile | None = None,
+    ) -> ScoreResult:
         """Score *posting*, optionally letting a model nudge the total by ``±10``.
 
         The rule engine runs first and its result is the floor of what this returns: on any
@@ -1842,6 +1970,9 @@ class Scorer:
         Args:
             posting: The posting to score.
             use_llm: Set ``False`` to skip the model entirely and return the rule score.
+            profile: The applicant to compare the posting against, passed through to
+                :meth:`score_rules`. The model pass never sees it and never adjusts it — the
+                match is deterministic by construction and stays that way.
 
         Returns:
             The result, with the model's adjustment recorded as its own component (so the
@@ -1849,7 +1980,7 @@ class Scorer:
             :attr:`ScoreResult.rationale`.
         """
         view = _build_view(posting)
-        base = self._score_view(view)
+        base = self._score_view(view, profile)
         if not use_llm:
             return base
 
@@ -1909,6 +2040,10 @@ class Scorer:
             verdict=verdict,
             rationale=rationale,
             model_used=model_used,
+            # Carried through unchanged. The model may move the total; it may not touch how
+            # the posting compared to the applicant, because that number's whole value is
+            # that it is reproducible.
+            match=base.match,
         )
 
     async def _llm_adjustment(self, view: _PostingView, base: ScoreResult) -> dict[str, Any] | None:

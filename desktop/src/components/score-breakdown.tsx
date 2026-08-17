@@ -13,8 +13,24 @@
  */
 
 import { EmptyState, ScoreBar, ScoreComponentRow } from '@/components/ui';
-import type { ScoreRead } from '@/lib/api/types';
+import type { MatchBreakdown, ScoreRead } from '@/lib/api/types';
 import { cn, scoreVerdict } from '@/lib/utils';
+
+/**
+ * Read the match block out of a score's raw breakdown.
+ *
+ * `breakdown` is a `JsonObject` because the server stores the engine's own output verbatim,
+ * so this is the one place the shape is asserted — narrowed on the fields actually read
+ * rather than cast wholesale, so an older score written before matching existed returns
+ * `null` instead of rendering four `undefined`s as zeroes.
+ */
+function readMatch(score: ScoreRead): MatchBreakdown | null {
+  const raw = (score.breakdown as { match?: unknown }).match;
+  if (raw === null || typeof raw !== 'object') return null;
+  const candidate = raw as Partial<MatchBreakdown>;
+  if (typeof candidate.combined !== 'number' || typeof candidate.percent !== 'object') return null;
+  return candidate as MatchBreakdown;
+}
 
 /** Props for {@link ScoreBreakdown}. */
 export interface ScoreBreakdownProps {
@@ -82,6 +98,8 @@ export function ScoreBreakdown({ score, threshold, className }: ScoreBreakdownPr
         </div>
       )}
 
+      <WhyThisMatched match={readMatch(score)} />
+
       {score.rationale !== null && score.rationale !== undefined && score.rationale !== '' && (
         <p className="text-sm text-secondary">{score.rationale}</p>
       )}
@@ -95,5 +113,65 @@ export function ScoreBreakdown({ score, threshold, className }: ScoreBreakdownPr
         {score.verdict === null || score.verdict === undefined ? '' : ` · verdict ${score.verdict}`}
       </p>
     </div>
+  );
+}
+
+/**
+ * "Why this job matched" — the three signals behind the match, and the skills gap.
+ *
+ * Rendered as three labelled bars on one shared scale rather than as prose, because the
+ * question a reader is actually asking is comparative: *which* of the three carried this
+ * posting, and which one let it down. Prose can state three numbers; only a shared scale
+ * lets you see at a glance that the title was perfect and the skills were not.
+ *
+ * The missing skills are the half a user can act on, so they are shown even though the
+ * matched ones are the flattering list.
+ */
+function WhyThisMatched({ match }: { match: MatchBreakdown | null }) {
+  if (match === null) return null;
+
+  if (!match.comparable) {
+    return (
+      <p className="text-sm text-muted">
+        Not enough text to compare this posting to your background. Index a résumé or a
+        project so future postings can be matched against it.
+      </p>
+    );
+  }
+
+  const rows = [
+    { label: 'Title relevance', value: match.percent.title_relevance },
+    { label: 'Skills overlap', value: match.percent.skills_overlap },
+    { label: 'Résumé similarity', value: match.percent.resume_similarity },
+  ];
+
+  return (
+    <section className="flex flex-col gap-2 rounded-md border border-default bg-inset p-3">
+      <div className="flex items-baseline justify-between">
+        <h4 className="label-caps">Why this job matched</h4>
+        <span className="font-mono text-md tabular-nums text-primary">
+          {match.percent.combined}%
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        {rows.map((row) => (
+          <div key={row.label} className="flex items-center gap-3">
+            <span className="w-36 shrink-0 text-sm text-secondary">{row.label}</span>
+            <ScoreBar value={row.value} size="sm" fluid hideValue className="min-w-0 flex-1" />
+            <span className="w-10 shrink-0 text-right font-mono text-mini tabular-nums text-secondary">
+              {row.value}%
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {match.missing_skills.length > 0 && (
+        <p className="text-mini text-muted">
+          <span className="text-secondary">Asks for, and you have not indexed: </span>
+          {match.missing_skills.join(', ')}
+        </p>
+      )}
+    </section>
   );
 }

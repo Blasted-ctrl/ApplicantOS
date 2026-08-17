@@ -55,6 +55,7 @@ export { useDismissReview, useResolveReview, useReviewCount, useReviews } from '
 export { useCreateResume, usePreviewResume, useResumeVersion, useResumes } from './use-resumes';
 export {
   useActiveSession,
+  useHydrateActiveSession,
   useSession,
   useSessions,
   useStartSession,

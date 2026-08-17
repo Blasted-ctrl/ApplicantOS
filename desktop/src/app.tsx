@@ -34,6 +34,7 @@ import type { ApiError } from '@/lib/api/client';
 import {
   useBackendStatus,
   useDiscoverPostings,
+  useHydrateActiveSession,
   useOnboardingStatus,
   useReadySignal,
   useSafetyState,
@@ -85,6 +86,9 @@ export function AppShell() {
 
   useBackendStatus();
   useReadySignal();
+  // A WebSocket only carries what happens next, so a run already executing when the app
+  // opens would otherwise be invisible — and unstoppable, since `Ctrl+S` needs a session.
+  useHydrateActiveSession();
 
   // First run lands in the wizard exactly once. A ref rather than a dependency on the
   // pathname, because a user who deliberately navigates out of onboarding must not be dragged

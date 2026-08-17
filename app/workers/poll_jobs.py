@@ -46,6 +46,7 @@ from app.config.settings import get_settings
 from app.database.session import session_scope
 from app.workers import run_async, task_span
 from app.workers.celery_app import celery_app, enqueue
+from app.workers.counters import record_session
 from app.workers.retry import retryable
 
 __all__ = ["MAX_APPLY_FANOUT", "poll_all", "poll_provider", "score_posting"]
@@ -258,28 +259,6 @@ async def _enqueue_qualified(
     return queued
 
 
-async def _record_session(session_id: str | None, **deltas: int) -> None:
-    """Add *deltas* to a run session's counters, when the work belongs to a run.
-
-    Args:
-        session_id: The run session id, or ``None`` for work outside a run.
-        **deltas: Counter increments, validated by
-            :meth:`app.services.session_service.SessionService.record`.
-    """
-    if not session_id or not any(deltas.values()):
-        return
-
-    from app.services.session_service import SessionService
-
-    try:
-        async with session_scope() as session:
-            await SessionService(session).record(session_id, **deltas)
-    except (LookupError, ValueError) as exc:
-        # A run that finished, or was reaped by the watchdog, while its tasks were still in
-        # flight. Losing a counter is not a reason to fail a discovery run.
-        logger.warning("jobs.session_record_failed", session_id=session_id, error=str(exc))
-
-
 # ======================================================================================
 # jobs.poll_all
 # ======================================================================================
@@ -421,7 +400,7 @@ def poll_provider(
 
         outcome = run_async(_run())
         run_async(
-            _record_session(
+            record_session(
                 session_id,
                 **{
                     _FOUND_COUNTER: int(outcome.get("found", 0)),

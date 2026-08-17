@@ -14,6 +14,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
 import * as api from '@/lib/api/endpoints';
 import type { PageParams, SessionRead, SessionStartRequest, Uuid } from '@/lib/api/types';
@@ -21,6 +22,15 @@ import { notifyError, notifyIfNotStarted } from '@/lib/notify';
 import { qk } from '@/lib/query/keys';
 import { sessionDetailOptions, sessionListOptions } from '@/lib/query/options';
 import { useSessionStore } from '@/stores/session';
+
+/**
+ * How many recent runs {@link useHydrateActiveSession} inspects.
+ *
+ * More than one because the newest row is not necessarily the running one: a run started
+ * from the API while an older one was still executing would sort above it, and a single-row
+ * page would then miss the run the user actually needs to be able to stop.
+ */
+const HYDRATION_PAGE_SIZE = 5;
 
 /** `GET /sessions`. */
 export function useSessions(params: PageParams = {}) {
@@ -38,6 +48,44 @@ export function useSession(id: Uuid | undefined) {
 /** The run currently executing, from the live store rather than from a query. */
 export function useActiveSession(): SessionRead | null {
   return useSessionStore((s) => s.activeSession);
+}
+
+/**
+ * Seed the live store from the server on mount, and correct it when it goes stale.
+ *
+ * The store is fed by `session.*` frames, which is right for a *running* app and wrong for
+ * one that has just started: a WebSocket only carries what happens next. A user who quit the
+ * desktop app during a run and reopened it saw an idle status bar, a disabled `Ctrl+S` and no
+ * way to stop the run that was still executing — the frames announcing it had been broadcast
+ * while nothing was listening.
+ *
+ * It writes in exactly two situations, so it can never fight the socket:
+ *
+ * - the store is empty and the server has a running run — the launch case;
+ * - the store holds a run the server now reports as finished — the missed-frame case, where
+ *   the app was closed when `session.finished` went out.
+ *
+ * Reading the cached list is safe rather than lazy: `ws.ts` patches list rows from every
+ * session frame, so the cache is as current as the socket is.
+ */
+export function useHydrateActiveSession(): void {
+  const query = useQuery(sessionListOptions({ limit: HYDRATION_PAGE_SIZE }));
+  const applySession = useSessionStore((s) => s.applySession);
+  const clearSession = useSessionStore((s) => s.clearSession);
+  const rows = query.data?.items;
+
+  useEffect(() => {
+    if (rows === undefined) return;
+    const running = rows.find((row) => row.status === 'running') ?? null;
+    const held = useSessionStore.getState().activeSession;
+
+    if (held === null) {
+      if (running !== null) applySession(running);
+      return;
+    }
+    const server = rows.find((row) => row.id === held.id);
+    if (server !== undefined && server.status !== 'running') clearSession();
+  }, [rows, applySession, clearSession]);
 }
 
 /**

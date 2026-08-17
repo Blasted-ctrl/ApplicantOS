@@ -55,6 +55,7 @@ from app.workers.celery_app import (
     celery_app,
     enqueue,
 )
+from app.workers.counters import record_session
 from app.workers.retry import is_terminal_outcome, retryable
 
 __all__ = ["prepare", "run_one", "submit"]
@@ -110,26 +111,6 @@ async def _publish_application(session: Any, event: str, application: Any) -> No
         )
         return
     bus.publish_model(event, item)
-
-
-async def _record_session(session_id: str | None, **deltas: int) -> None:
-    """Add *deltas* to a run session's counters, when the work belongs to a run.
-
-    Args:
-        session_id: The run session id, or ``None``.
-        **deltas: Counter increments, validated by
-            :meth:`app.services.session_service.SessionService.record`.
-    """
-    if not session_id or not any(deltas.values()):
-        return
-
-    from app.services.session_service import SessionService
-
-    try:
-        async with session_scope() as session:
-            await SessionService(session).record(session_id, **deltas)
-    except (LookupError, ValueError) as exc:
-        logger.warning("apply.session_record_failed", session_id=session_id, error=str(exc))
 
 
 def _session_deltas(result: dict[str, Any]) -> dict[str, int]:
@@ -294,7 +275,7 @@ def prepare(
         outcome["queued_for_submit"] = queued is not None
 
         run_async(
-            _record_session(
+            record_session(
                 session_id,
                 **{
                     _RESUMES_COUNTER: 1 if outcome["ready"] else 0,
@@ -373,7 +354,7 @@ def submit(application_id: str) -> dict[str, Any]:
             return payload, owning_session
 
         outcome, owning_session = run_async(_run())
-        run_async(_record_session(owning_session, **_session_deltas(outcome)))
+        run_async(record_session(owning_session, **_session_deltas(outcome)))
 
         if is_terminal_outcome(outcome):
             log.info(
@@ -447,7 +428,7 @@ def run_one(
             return payload
 
         outcome = run_async(_run())
-        run_async(_record_session(session_id, **_session_deltas(outcome)))
+        run_async(record_session(session_id, **_session_deltas(outcome)))
         log.info(
             "apply.run_one_finished",
             verdict=outcome.get("verdict"),

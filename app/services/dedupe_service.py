@@ -87,6 +87,7 @@ __all__ = [
     "FUZZY_WINDOW_DAYS",
     "MUTABLE_POSTING_FIELDS",
     "DedupeService",
+    "employer_domain",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -162,6 +163,20 @@ COMPANY_HINT_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: Fewest labels a hostname must have to yield a registrable domain. A bare `localhost`
+#: or a single label names no employer.
+_MIN_DOMAIN_LABELS: Final[int] = 2
+
+#: Labels kept for a second-level public suffix like ``co.uk``.
+_UK_STYLE_LABELS: Final[int] = 3
+
+#: Second-level suffixes common enough to be worth handling without a full public-suffix
+#: list. Missing one costs an exact-match miss in the matcher, never a wrong match, because
+#: the domain is only ever compared for equality.
+_SECOND_LEVEL_SUFFIXES: Final[frozenset[str]] = frozenset(
+    {"co", "com", "org", "net", "ac", "gov", "edu"}
+)
+
 #: Hint fields that are booleans. ``False`` is a real answer, not "unknown", so these are
 #: only ever written when the stored value is still the default ``False``.
 _BOOLEAN_HINTS: Final[frozenset[str]] = frozenset({"is_defense", "is_startup"})
@@ -193,6 +208,62 @@ class _TextView:
     description: str | None = None
 
 
+def employer_domain(url: str | None) -> str | None:
+    """Return the employer's own web domain, when a posting URL reveals one.
+
+    ``companies.domain`` was never populated — 0 of 597 rows on the development machine —
+    and two things depend on it. ``EmailTracker.sender_allowlist`` bounds every mailbox
+    query by it, so mail from a company's own address (``careers@instead.com``) was never
+    even *searched* for; and ``SignalMatcher``'s strongest signal is sender domain against
+    company domain, which could therefore never fire. The status-sync feature was running on
+    ATS relay domains alone.
+
+    The evidence is already in hand. A posting's ``url`` is very often the employer's own
+    careers page rather than the board's — ``abnormal.ai/careers/jobs/…``,
+    ``careers.airbnb.com/positions/…``, ``www.akunacapital.com/careers/job/…`` — and its
+    registrable domain is the company's. Nothing is inferred from the company *name*, which
+    would be fabrication: this reads a URL the provider gave us.
+
+    A URL on a known ATS host yields ``None``. ``boards.greenhouse.io/acme`` says who hosts
+    the board, not who the employer is, and recording it as the employer's domain would
+    match every Greenhouse customer to every Greenhouse email.
+
+    Args:
+        url: A posting URL, or ``None``.
+
+    Returns:
+        The registrable domain in lower case, or ``None`` when the URL is absent,
+        unparseable, or an ATS host.
+
+    Example:
+        >>> employer_domain("https://careers.airbnb.com/positions/7380185")
+        'airbnb.com'
+        >>> employer_domain("https://boards.greenhouse.io/acme/jobs/1") is None
+        True
+    """
+    if not url:
+        return None
+
+    from urllib.parse import urlparse
+
+    from app.tracking.base import is_relay_domain
+
+    host = (urlparse(str(url)).hostname or "").strip().lower().rstrip(".")
+    if not host or is_relay_domain(host):
+        return None
+
+    labels = [label for label in host.split(".") if label]
+    if len(labels) < _MIN_DOMAIN_LABELS:
+        return None
+
+    # Two labels is the common case (`abnormal.ai`). Three is where a public suffix like
+    # `co.uk` lives, and without a suffix list the safe reading of `careers.acme.co.uk` is
+    # the last three labels — over-keeping a label costs an exact-match miss, while
+    # under-keeping it would make every `.co.uk` employer share one domain.
+    keep = _UK_STYLE_LABELS if labels[-2] in _SECOND_LEVEL_SUFFIXES else _MIN_DOMAIN_LABELS
+    return ".".join(labels[-keep:])
+
+
 def _distinguishing_url(url: str) -> bool:
     """Return whether *url* identifies one opening rather than one employer.
 
@@ -220,6 +291,22 @@ def _distinguishing_url(url: str) -> bool:
     if len(segments) < APPLY_URL_MIN_SEGMENTS:
         return False
     return any(character.isdigit() for character in "".join(segments))
+
+
+def _company_hints_from(raw: RawPosting) -> dict[str, Any]:
+    """Build the enrichment hints an incoming posting can honestly supply.
+
+    Args:
+        raw: The discovered posting.
+
+    Returns:
+        A mapping for :meth:`DedupeService.get_or_create_company`; empty when the posting
+        reveals nothing about the employer beyond their name.
+    """
+    domain = employer_domain(getattr(raw, "url", None)) or employer_domain(
+        getattr(raw, "apply_url", None)
+    )
+    return {"domain": domain} if domain else {}
 
 
 def _title_similarity(left: str, right: str) -> float:
@@ -881,7 +968,9 @@ class DedupeService:
             lost for want of an employer.
         """
         try:
-            return await self.get_or_create_company(raw.company_name)
+            return await self.get_or_create_company(
+                raw.company_name, **_company_hints_from(raw)
+            )
         except ValueError:
             logger.info(
                 "dedupe.posting_without_company",

@@ -34,6 +34,7 @@ from app.jobs.dedupe import (
     normalize_title,
     similarity,
 )
+from app.models.company import Company
 from app.models.enums import ATSProviderName, WorkArrangement
 
 
@@ -486,3 +487,134 @@ async def test_a_listing_url_matching_the_other_boards_apply_url_collapses(
     )
 
     assert await DedupeService(session).find_existing(aggregated) is existing
+
+
+# ======================================================================================
+# The employer's own domain — the signal the mailbox sync could not work without
+# ======================================================================================
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # A posting URL is very often the employer's own careers page. Every one of these is
+        # a real shape from the development database.
+        ("https://abnormal.ai/careers/jobs/7849854003", "abnormal.ai"),
+        ("https://careers.airbnb.com/positions/7380185", "airbnb.com"),
+        ("https://www.akunacapital.com/careers/job/7974805/", "akunacapital.com"),
+        ("https://jobs.cribl.io/apply/x", "cribl.io"),
+        # An ATS host says who runs the board, not who the employer is. Keeping one would
+        # match every Greenhouse customer to every Greenhouse email.
+        ("https://boards.greenhouse.io/andurilindustries/jobs/5208", None),
+        ("https://job-boards.greenhouse.io/airbnb/jobs/7380185", None),
+        ("https://jobs.lever.co/calstart/abc", None),
+        ("https://jobs.ashbyhq.com/acme/9911", None),
+        ("https://acme.wd1.myworkdayjobs.com/en-US/External", None),
+        ("https://www.linkedin.com/jobs/view/4012345678", None),
+        # A public suffix keeps three labels: under-keeping would make every .co.uk
+        # employer share one domain.
+        ("https://careers.acme.co.uk/jobs/1", "acme.co.uk"),
+        # Nothing to read.
+        ("", None),
+        (None, None),
+        ("not a url", None),
+        ("https://localhost/jobs/1", None),
+    ],
+)
+def test_the_employer_domain_is_read_from_the_url_never_the_name(
+    url: str | None, expected: str | None
+) -> None:
+    """`companies.domain` was never populated — 0 of 597 rows — and two things need it.
+
+    `EmailTracker.sender_allowlist` bounds every mailbox query by it, so mail from a
+    company's own address was never *searched* for; and `SignalMatcher`'s strongest signal
+    is sender domain against company domain, which could therefore never fire. Status sync
+    was running on ATS relay domains alone.
+
+    Nothing is inferred from the company *name*, which would be fabrication. This reads a
+    URL the provider gave us.
+    """
+    from app.services.dedupe_service import employer_domain
+
+    assert employer_domain(url) == expected
+
+
+async def test_ingesting_a_posting_records_the_employers_domain(session, company) -> None:
+    """The derivation has to actually reach the row, not merely exist."""
+    from app.jobs.base import RawPosting
+    from app.models.enums import ATSProviderName
+    from app.services.dedupe_service import DedupeService
+
+    raw = RawPosting(
+        provider=ATSProviderName.GREENHOUSE,
+        external_id="domain-1",
+        url="https://careers.airbnb.com/positions/7380185",
+        title="Software Engineering Intern",
+        company_name="Airbnb Domains Test",
+    )
+
+    posting, created = await DedupeService(session).upsert(raw)
+    employer = await session.get(Company, posting.company_id)
+
+    assert created is True
+    assert employer is not None
+    assert employer.domain == "airbnb.com"
+
+
+async def test_an_ats_hosted_posting_records_no_domain(session) -> None:
+    """A board host must never be recorded as the employer's own domain."""
+    from app.jobs.base import RawPosting
+    from app.models.enums import ATSProviderName
+    from app.services.dedupe_service import DedupeService
+
+    raw = RawPosting(
+        provider=ATSProviderName.GREENHOUSE,
+        external_id="domain-2",
+        url="https://boards.greenhouse.io/anduril/jobs/5208",
+        title="Firmware Engineer",
+        company_name="Anduril Domains Test",
+    )
+
+    posting, _ = await DedupeService(session).upsert(raw)
+    employer = await session.get(Company, posting.company_id)
+
+    assert employer is not None
+    assert employer.domain is None
+
+
+async def test_a_later_poll_backfills_a_company_that_had_none(session) -> None:
+    """Which is why no data migration is needed: the next discovery run heals it.
+
+    `_apply_company_hints` fills empty fields only, so this can enrich the 597 existing
+    domainless rows without ever overwriting something already known.
+    """
+    from app.jobs.base import RawPosting
+    from app.models.enums import ATSProviderName
+    from app.services.dedupe_service import DedupeService
+
+    service = DedupeService(session)
+    first, _ = await service.upsert(
+        RawPosting(
+            provider=ATSProviderName.GREENHOUSE,
+            external_id="backfill-1",
+            url="https://boards.greenhouse.io/backfillco/jobs/1",
+            title="Engineer",
+            company_name="Backfill Co",
+        )
+    )
+    employer = await session.get(Company, first.company_id)
+    assert employer is not None
+    assert employer.domain is None
+
+    await service.upsert(
+        RawPosting(
+            provider=ATSProviderName.GREENHOUSE,
+            external_id="backfill-2",
+            url="https://careers.backfillco.com/jobs/2",
+            title="Senior Engineer",
+            company_name="Backfill Co",
+        )
+    )
+
+    await session.refresh(employer)
+    assert employer.domain == "backfillco.com"

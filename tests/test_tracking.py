@@ -829,3 +829,51 @@ def test_no_post_submit_state_can_reach_a_pre_submit_one() -> None:
 
     for state in APPLICATION_POST_SUBMIT_STATES:
         assert not reachable(state) & APPLICATION_PRE_SUBMIT_STATES, state.value
+
+
+# ======================================================================================
+# IMAP folder names — found by pointing the real adapter at a real Gmail account
+# ======================================================================================
+
+
+@pytest.mark.parametrize(
+    ("folder", "expected"),
+    [
+        ("INBOX", "INBOX"),
+        ("[Gmail]/All Mail", '"[Gmail]/All Mail"'),
+        ("[Gmail]/Sent Mail", '"[Gmail]/Sent Mail"'),
+        ("My Label", '"My Label"'),
+        # Already quoted by the caller: left alone, so this is safe to apply unconditionally.
+        ('"[Gmail]/Spam"', '"[Gmail]/Spam"'),
+        # RFC 3501 requires these escaped inside a quoted string.
+        ('Odd"Name', '"Odd\\"Name"'),
+        ("Back\\slash", '"Back\\\\slash"'),
+        ("", '""'),
+    ],
+)
+def test_a_folder_name_with_a_space_is_quoted(folder: str, expected: str) -> None:
+    """``imaplib`` passes a mailbox name through untouched, and IMAP tokenises on whitespace.
+
+    Found by running the real adapter against a real Gmail account: selecting
+    ``[Gmail]/All Mail`` sent ``EXAMINE [Gmail]/All Mail`` — three tokens — and the server
+    answered ``BAD Could not parse command``. That surfaced as a
+    ``MailboxUnavailableError`` which aborts the **whole sync**, not just that folder, so any
+    user who configured All Mail, Sent Mail, or a label with a space in it got no status sync
+    at all and an error that named the folder without explaining it.
+    """
+    from app.tracking.email.imap import _quote_folder
+
+    assert _quote_folder(folder) == expected
+
+
+def test_the_default_folder_needs_no_quoting() -> None:
+    """The common case must not gain quotes it does not need.
+
+    Servers accept a quoted ``"INBOX"``, but changing the wire format of the one folder
+    every install uses, to fix a bug in the folders it does not, is a poor trade.
+    """
+    from app.tracking.email.base import DEFAULT_FOLDERS
+    from app.tracking.email.imap import _quote_folder
+
+    for folder in DEFAULT_FOLDERS:
+        assert _quote_folder(folder) == folder

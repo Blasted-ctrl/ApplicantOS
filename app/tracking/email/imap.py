@@ -134,6 +134,49 @@ def _imap_date(value: datetime) -> str:
     return f"{moment.day:02d}-{_IMAP_MONTHS[moment.month - 1]}-{moment.year}"
 
 
+#: Characters that force a mailbox name to be sent as a quoted string. Whitespace is the
+#: one that bites in practice — IMAP tokenises on it, so ``[Gmail]/All Mail`` arrives as
+#: three tokens and the server answers ``BAD``.
+_NEEDS_QUOTING: Final[frozenset[str]] = frozenset({" ", "	", '"', "\\"})
+
+
+def _quote_folder(folder: str) -> str:
+    """Return *folder* in the form ``EXAMINE`` will accept.
+
+    :mod:`imaplib` passes a mailbox name through untouched, and IMAP tokenises on
+    whitespace — so ``EXAMINE [Gmail]/All Mail`` is three tokens and the server answers
+    ``BAD Could not parse command``. That is not an edge case on Gmail: ``[Gmail]/All Mail``,
+    ``[Gmail]/Sent Mail`` and any user label with a space in it all hit it, and the failure
+    is a :class:`~app.tracking.email.base.MailboxUnavailableError` that aborts the whole
+    sync rather than skipping one folder.
+
+    A name already quoted by the caller is left alone, so this is safe to apply
+    unconditionally.
+
+    Args:
+        folder: A mailbox name, quoted or bare.
+
+    Returns:
+        The name, quoted when it needs to be. Embedded quotes and backslashes are escaped,
+        which RFC 3501 requires of a quoted string.
+
+    Example:
+        >>> _quote_folder("INBOX")
+        'INBOX'
+        >>> _quote_folder("[Gmail]/All Mail")
+        '"[Gmail]/All Mail"'
+    """
+    name = folder.strip()
+    if not name:
+        return '""'
+    if name.startswith('"') and name.endswith('"') and len(name) > 1:
+        return name
+    if not any(character in name for character in _NEEDS_QUOTING):
+        return name
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _or_chain(terms: Sequence[Sequence[str]]) -> list[str]:
     """Combine IMAP search keys with ``OR``, in the prefix form the protocol requires.
 
@@ -520,7 +563,7 @@ class ImapMailbox:
         try:
             # readonly=True issues EXAMINE, not SELECT: the server itself then refuses
             # every mutating command for the rest of this session (§17.8.1).
-            status, _ = connection.select(folder, readonly=True)
+            status, _ = connection.select(_quote_folder(folder), readonly=True)
         except (OSError, imaplib.IMAP4.error) as exc:
             raise MailboxUnavailableError(
                 f"could not examine IMAP folder {folder!r} ({type(exc).__name__})"

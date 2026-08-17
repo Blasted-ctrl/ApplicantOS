@@ -102,7 +102,7 @@ export const POSTING_TERMINAL_STATES: ReadonlySet<PostingStatus> = new Set<Posti
   'expired',
 ]);
 
-/** Lifecycle of a single application to a single posting. All thirteen values. */
+/** Lifecycle of a single application to a single posting. All fourteen values. */
 export const APPLICATION_STATUSES = [
   'draft',
   'preparing',
@@ -116,13 +116,19 @@ export const APPLICATION_STATUSES = [
   'rejected',
   'interview',
   'offer',
+  'accepted',
   'ghosted',
 ] as const;
 export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
 
-/** Statuses that end an application's life. Mirrors `APPLICATION_TERMINAL_STATES`. */
+/**
+ * Statuses that end an application's life. Mirrors `APPLICATION_TERMINAL_STATES`.
+ *
+ * `offer` is deliberately absent: an offer can still become `accepted`, and treating it as
+ * terminal is what made the product's own "Accepted" category unreachable.
+ */
 export const APPLICATION_TERMINAL_STATES: ReadonlySet<ApplicationStatus> =
-  new Set<ApplicationStatus>(['failed', 'abandoned', 'rejected', 'offer', 'ghosted']);
+  new Set<ApplicationStatus>(['failed', 'abandoned', 'rejected', 'accepted', 'ghosted']);
 
 /**
  * Statuses that mean the employer already holds this application.
@@ -137,8 +143,49 @@ export const APPLICATION_POST_SUBMIT_STATES: ReadonlySet<ApplicationStatus> =
     'rejected',
     'interview',
     'offer',
+    'accepted',
     'ghosted',
   ]);
+
+/**
+ * The four words the product shows a user, mirroring `app.models.enums.UserFacingStatus`.
+ *
+ * A **view**, and only a view. Nothing in the client may route, gate or enable an
+ * affordance on it — `APPLICATION_POST_SUBMIT_STATES` remains the authority on whether an
+ * employer holds an application. `userFacingStatus` returns `null` for the states that
+ * belong in none of the four.
+ */
+export const USER_FACING_STATUSES = ['applied', 'rejected', 'offered', 'accepted'] as const;
+export type UserFacingStatus = (typeof USER_FACING_STATUSES)[number];
+
+/** Which of the four each internal status rolls up into. Mirrors `USER_FACING_STATUS`. */
+const USER_FACING_BY_STATUS: Readonly<Record<ApplicationStatus, UserFacingStatus | null>> = {
+  draft: 'applied',
+  preparing: 'applied',
+  ready: 'applied',
+  submitting: 'applied',
+  submitted: 'applied',
+  confirmed: 'applied',
+  needs_review: 'applied',
+  interview: 'applied',
+  ghosted: 'applied',
+  rejected: 'rejected',
+  offer: 'offered',
+  accepted: 'accepted',
+  // Never sent. Counting either as "Applied" would tell a user they had applied for a job
+  // nobody received.
+  failed: null,
+  abandoned: null,
+};
+
+/**
+ * Roll one internal status up into the four the product shows.
+ *
+ * @returns the category, or `null` for an application that was never sent.
+ */
+export function userFacingStatus(status: ApplicationStatus): UserFacingStatus | null {
+  return USER_FACING_BY_STATUS[status];
+}
 
 /** Statuses in which nothing has been transmitted to the employer. */
 export const APPLICATION_PRE_SUBMIT_STATES: ReadonlySet<ApplicationStatus> =
@@ -407,6 +454,7 @@ export const SIGNAL_KINDS = [
   'assessment_requested',
   'interview_invite',
   'offer',
+  'offer_accepted',
   'rejection',
   'withdrawn',
   'ghosted_inferred',
@@ -426,6 +474,7 @@ export const SIGNAL_KIND_TO_STATUS: Readonly<Record<SignalKind, ApplicationStatu
   assessment_requested: 'needs_review',
   interview_invite: 'interview',
   offer: 'offer',
+  offer_accepted: 'accepted',
   rejection: 'rejected',
   withdrawn: 'abandoned',
   ghosted_inferred: 'ghosted',

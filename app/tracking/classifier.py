@@ -130,6 +130,12 @@ LLM_MAX_CONFIDENCE: Final[float] = 0.75
 #: offer.
 KIND_PRECEDENCE: Final[dict[SignalKind, int]] = {
     SignalKind.REJECTION: 90,
+    # Above `offer`, for the same reason `rejection` is above both: an acceptance
+    # confirmation restates the offer's own vocabulary ("your offer", "accept"), so ranking
+    # by score would read every acceptance as a fresh offer and the application would never
+    # leave `offer`. Below `rejection`, because "the position has been filled — another
+    # candidate accepted" is a rejection that mentions an acceptance.
+    SignalKind.OFFER_ACCEPTED: 85,
     SignalKind.OFFER: 80,
     SignalKind.INTERVIEW_INVITE: 70,
     SignalKind.ASSESSMENT_REQUESTED: 60,
@@ -451,6 +457,58 @@ PHRASE_RULES: Final[tuple[PhraseRule, ...]] = (
             ("would like to offer you", 0.95, STRONG),
             ("your offer package", 0.92, STRONG),
             ("accept the offer", 0.85, STRONG),
+        ),
+    ),
+    # -- offer_accepted ----------------------------------------------------------------
+    # The end of the funnel, and the table that has to be strictest, because this kind is the
+    # only one whose status cannot be walked back by the state machine.
+    #
+    # A strong entry here must satisfy three things at once, and the first draft of this
+    # table satisfied none of them. Every phrase must name an act that is
+    #
+    #   **completed**   — not conditional. "Once you have accepted, HR will reach out" is an
+    #                     offer being negotiated, and "you have accepted" matched it.
+    #   **second person** — not third party. "The candidate we selected has accepted our
+    #                     offer" is a *rejection*, and "accepted our offer" matched it.
+    #   **about acceptance** — not about the offer document. "signed offer letter",
+    #                     "countersigned", "your first day" and "excited to have you join"
+    #                     are the vocabulary of an offer being *made*. Because
+    #                     KIND_PRECEDENCE ranks this kind above `offer`, matching them here
+    #                     did not merely add a false acceptance: it stopped genuine offer
+    #                     letters registering as offers at all.
+    #
+    # Everything that fails any of the three is WEAK, so it can corroborate a real anchor and
+    # can never be one. That is the difference between "welcome aboard, your first day is
+    # Monday" following "we have received your acceptance" — which should read as an
+    # acceptance — and the same sentence inside the offer letter itself, which should not.
+    *_rules(
+        SignalKind.OFFER_ACCEPTED,
+        (
+            # Completed, second person, unambiguously about the acceptance itself.
+            ("received your acceptance", 0.95, STRONG),
+            ("acceptance has been received", 0.95, STRONG),
+            ("we have your acceptance", 0.95, STRONG),
+            ("received your signed offer", 0.95, STRONG),
+            ("received your countersigned offer", 0.95, STRONG),
+            ("thank you for accepting", 0.95, STRONG),
+            ("thanks for accepting", 0.93, STRONG),
+            ("your acceptance of the offer", 0.95, STRONG),
+            ("you accepted the offer", 0.92, STRONG),
+            ("you have signed", 0.88, STRONG),
+            # Corroboration only. Each of these appears in offer letters, rejections naming
+            # another candidate, or ordinary onboarding mail.
+            ("you have accepted", 0.45, WEAK),
+            ("offer has been accepted", 0.45, WEAK),
+            ("accepted our offer", 0.40, WEAK),
+            ("accepted the offer", 0.40, WEAK),
+            ("signed offer letter", 0.40, WEAK),
+            ("countersigned", 0.40, WEAK),
+            ("welcome to the team", 0.45, WEAK),
+            ("welcome aboard", 0.45, WEAK),
+            ("excited to have you join", 0.40, WEAK),
+            ("your first day", 0.45, WEAK),
+            ("start date is confirmed", 0.45, WEAK),
+            ("onboarding", 0.40, WEAK),
         ),
     ),
     # -- assessment_requested ---------------------------------------------------------

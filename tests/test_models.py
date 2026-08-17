@@ -437,6 +437,7 @@ MIRRORED_ENUMS: dict[str, str] = {
     "SourceKind": "SOURCE_KINDS",
     "StatusSource": "STATUS_SOURCES",
     "StopReason": "STOP_REASONS",
+    "UserFacingStatus": "USER_FACING_STATUSES",
     "WorkArrangement": "WORK_ARRANGEMENTS",
     "WorkAuthStatus": "WORK_AUTH_STATUSES",
 }

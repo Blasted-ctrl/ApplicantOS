@@ -35,12 +35,24 @@ export type ListSnapshot = readonly [readonly unknown[], unknown];
  *
  * A page whose rows did not change is returned by reference too, so an event about an
  * application on page 4 does not invalidate the render of page 1.
+ *
+ * **The return value is how a caller learns the row was not there.** This function patches;
+ * it cannot insert, because a new row has no correct position in a page that the server
+ * ordered and paginated — putting it at the top would show it above rows that sort above it,
+ * and would leave `total` and every subsequent page's offset wrong. A caller handling a
+ * *creation* event therefore needs to know that nothing was patched, so it can invalidate and
+ * let the server say where the row belongs. Returning `void` here is what made the live feed
+ * silent: every `application.created` frame during a run patched nothing, reported nothing,
+ * and the table stayed as it was until the user navigated away and back.
+ *
+ * @returns whether any cached page contained the row.
  */
 export function patchListRow<T extends { id: Uuid }>(
   keyPrefix: readonly unknown[],
   id: Uuid,
   patch: Partial<T>,
-): void {
+): boolean {
+  let found = false;
   queryClient.setQueriesData<Page<T>>({ queryKey: keyPrefix }, (old) => {
     if (old === undefined) return old;
     let changed = false;
@@ -49,8 +61,10 @@ export function patchListRow<T extends { id: Uuid }>(
       changed = true;
       return { ...item, ...patch };
     });
+    if (changed) found = true;
     return changed ? { ...old, items } : old;
   });
+  return found;
 }
 
 /**

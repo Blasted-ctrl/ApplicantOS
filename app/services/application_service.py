@@ -103,7 +103,7 @@ _EVENT_KIND_ERROR: Final[str] = "error"
 #:   retry (``POST /applications/{id}/retry``) or revive a dismissal. Both are pre-submit
 #:   states, so neither edge can produce a second submission.
 #: * The outcome states model reality: a ``ghosted`` employer sometimes writes back, and an
-#:   ``interview`` ends in an offer or a rejection. ``offer`` is the end of the funnel.
+#:   ``interview`` ends in an offer or a rejection. ``accepted`` is the end of the funnel.
 ALLOWED_TRANSITIONS: Final[dict[ApplicationStatus, set[ApplicationStatus]]] = {
     ApplicationStatus.DRAFT: {
         ApplicationStatus.PREPARING,
@@ -171,7 +171,30 @@ ALLOWED_TRANSITIONS: Final[dict[ApplicationStatus, set[ApplicationStatus]]] = {
         ApplicationStatus.REJECTED,
         ApplicationStatus.GHOSTED,
     },
-    ApplicationStatus.OFFER: set(),
+    # An offer is not the end of the funnel; taking it is. The empty set here made the
+    # product's own "Accepted" category unreachable — an offer could arrive and never be
+    # accepted by anything.
+    #
+    # `accepted` is the only edge out, deliberately. Declining an offer would naturally map
+    # to `abandoned`, and `abandoned` leads back to `draft` — which would be the first path
+    # in the whole table from a post-submit state back to a submittable one, and therefore a
+    # way to apply twice. Declining stays unrepresentable until it has an edge that cannot
+    # do that.
+    ApplicationStatus.OFFER: {
+        ApplicationStatus.ACCEPTED,
+    },
+    # One edge out, and it exists so a mistake is correctable. `accepted` is the end of the
+    # funnel and feeds `is_successful_outcome()`, the offer rate and the memory weights, so
+    # an acceptance recorded in error is a hire the whole system believes in. Leaving it with
+    # no outgoing edge made that permanent — `PATCH /applications/{id}` refused every value.
+    #
+    # Going back to `offer` and nowhere else is what keeps this safe: `offer` leads only to
+    # `accepted`, so the pair is a closed loop with no path to any pre-submit state and no
+    # second submission. Terminal, in this table, has always meant "the end of the automated
+    # funnel" rather than "no edges" — `rejected` is terminal and keeps two.
+    ApplicationStatus.ACCEPTED: {
+        ApplicationStatus.OFFER,
+    },
     ApplicationStatus.GHOSTED: {
         ApplicationStatus.INTERVIEW,
         ApplicationStatus.OFFER,

@@ -43,6 +43,7 @@ __all__ = [
     "SIGNAL_KIND_TO_STATUS",
     "STOP_REASONS_COMPLETING",
     "STOP_REASON_SENTENCES",
+    "USER_FACING_STATUS",
     "ATSProviderName",
     "ApplicationStatus",
     "CheckpointStatus",
@@ -65,6 +66,7 @@ __all__ = [
     "StatusSource",
     "StopReason",
     "StrEnum",
+    "UserFacingStatus",
     "WorkArrangement",
     "WorkAuthStatus",
 ]
@@ -257,8 +259,8 @@ class ApplicationStatus(StrEnum):
     * **Pre-submit** — ``draft``, ``preparing``, ``ready``, ``submitting``: documents are
       being generated and the browser flow has not completed. Nothing has been sent.
     * **Post-submit** — ``submitted``, ``confirmed`` and every outcome that follows
-      (``rejected``, ``interview``, ``offer``, ``ghosted``): the employer has the
-      application. Golden rule #1 forbids ever re-submitting from these states.
+      (``rejected``, ``interview``, ``offer``, ``accepted``, ``ghosted``): the employer has
+      the application. Golden rule #1 forbids ever re-submitting from these states.
     * **Off-path** — ``needs_review`` (waiting on a human), ``failed`` and ``abandoned``.
     """
 
@@ -274,15 +276,19 @@ class ApplicationStatus(StrEnum):
     REJECTED = "rejected"
     INTERVIEW = "interview"
     OFFER = "offer"
+    ACCEPTED = "accepted"
     GHOSTED = "ghosted"
 
     @classmethod
     def terminal_states(cls) -> frozenset[ApplicationStatus]:
         """Return the statuses that end an application's life.
 
-        ``confirmed`` and ``interview`` are *not* terminal: an outcome is still pending and
-        the status will change again. ``offer`` is terminal because it is the end of the
-        automated funnel — everything afterwards happens off-platform.
+        ``confirmed``, ``interview`` and ``offer`` are *not* terminal: an outcome is still
+        pending and the status will change again. ``accepted`` is — it is the end of the
+        funnel, and everything afterwards happens off-platform.
+
+        ``offer`` used to be terminal, which made the product's own "Accepted" category
+        unreachable: an offer could be received and never taken.
         """
         return APPLICATION_TERMINAL_STATES
 
@@ -321,9 +327,22 @@ class ApplicationStatus(StrEnum):
         """Return whether the application is still in flight or awaiting an outcome."""
         return self not in APPLICATION_TERMINAL_STATES
 
+    def user_facing(self) -> UserFacingStatus | None:
+        """Return which of the product's four categories this status shows as.
+
+        Returns:
+            The category, or ``None`` for a status that belongs in none of them — an
+            application that was never sent. See :data:`USER_FACING_STATUS`.
+        """
+        return USER_FACING_STATUS[self]
+
     def is_successful_outcome(self) -> bool:
         """Return whether this status represents a positive result for analytics."""
-        return self in {ApplicationStatus.INTERVIEW, ApplicationStatus.OFFER}
+        return self in {
+            ApplicationStatus.INTERVIEW,
+            ApplicationStatus.OFFER,
+            ApplicationStatus.ACCEPTED,
+        }
 
 
 #: Statuses that end an application's life; nothing transitions out of these.
@@ -332,7 +351,7 @@ APPLICATION_TERMINAL_STATES: Final[frozenset[ApplicationStatus]] = frozenset(
         ApplicationStatus.FAILED,
         ApplicationStatus.ABANDONED,
         ApplicationStatus.REJECTED,
-        ApplicationStatus.OFFER,
+        ApplicationStatus.ACCEPTED,
         ApplicationStatus.GHOSTED,
     }
 )
@@ -345,6 +364,7 @@ APPLICATION_POST_SUBMIT_STATES: Final[frozenset[ApplicationStatus]] = frozenset(
         ApplicationStatus.REJECTED,
         ApplicationStatus.INTERVIEW,
         ApplicationStatus.OFFER,
+        ApplicationStatus.ACCEPTED,
         ApplicationStatus.GHOSTED,
     }
 )
@@ -363,6 +383,57 @@ APPLICATION_PRE_SUBMIT_STATES: Final[frozenset[ApplicationStatus]] = frozenset(
 APPLICATION_ACTIVE_STATES: Final[frozenset[ApplicationStatus]] = frozenset(
     set(ApplicationStatus) - APPLICATION_TERMINAL_STATES
 )
+
+
+class UserFacingStatus(StrEnum):
+    """The four words the product shows a user about an application.
+
+    :class:`ApplicationStatus` has thirteen members because the automation needs to
+    distinguish "generating documents" from "waiting on a human" from "the browser crashed".
+    A person tracking their job hunt needs none of that: they want to know which pile this
+    application is in. ``docs/CONTRACTS.md`` and every guard keep the thirteen; this is the
+    view over them.
+
+    It is a **view, and only a view**. Nothing routes on it, nothing gates on it, and
+    :meth:`ApplicationStatus.is_post_submit` remains the sole authority on whether an
+    employer actually holds an application. Deriving a policy decision from a display label
+    is how a four-way summary turns into a safety bug.
+    """
+
+    APPLIED = "applied"
+    REJECTED = "rejected"
+    OFFERED = "offered"
+    ACCEPTED = "accepted"
+
+
+#: Which of the four each internal status rolls up into, and ``None`` for the states that
+#: belong in none of them.
+#:
+#: ``None`` is not an oversight. ``failed`` and ``abandoned`` describe applications that were
+#: never sent — a browser crash, a dismissal — and folding either into "Applied" would tell a
+#: user they had applied for a job nobody received. They are excluded from the four-way
+#: summary entirely, which is the honest treatment: the summary counts applications, and
+#: these are not applications.
+#:
+#: The pre-submit states *are* included, following the product spec, and the label there
+#: means "in your pile" rather than "the employer has it". That is a real gap between the
+#: word and the fact, and it is why nothing may route on this mapping.
+USER_FACING_STATUS: Final[dict[ApplicationStatus, UserFacingStatus | None]] = {
+    ApplicationStatus.DRAFT: UserFacingStatus.APPLIED,
+    ApplicationStatus.PREPARING: UserFacingStatus.APPLIED,
+    ApplicationStatus.READY: UserFacingStatus.APPLIED,
+    ApplicationStatus.SUBMITTING: UserFacingStatus.APPLIED,
+    ApplicationStatus.SUBMITTED: UserFacingStatus.APPLIED,
+    ApplicationStatus.CONFIRMED: UserFacingStatus.APPLIED,
+    ApplicationStatus.NEEDS_REVIEW: UserFacingStatus.APPLIED,
+    ApplicationStatus.INTERVIEW: UserFacingStatus.APPLIED,
+    ApplicationStatus.GHOSTED: UserFacingStatus.APPLIED,
+    ApplicationStatus.REJECTED: UserFacingStatus.REJECTED,
+    ApplicationStatus.OFFER: UserFacingStatus.OFFERED,
+    ApplicationStatus.ACCEPTED: UserFacingStatus.ACCEPTED,
+    ApplicationStatus.FAILED: None,
+    ApplicationStatus.ABANDONED: None,
+}
 
 
 class ReviewReason(StrEnum):
@@ -840,6 +911,7 @@ class SignalKind(StrEnum):
     ASSESSMENT_REQUESTED = "assessment_requested"
     INTERVIEW_INVITE = "interview_invite"
     OFFER = "offer"
+    OFFER_ACCEPTED = "offer_accepted"
     REJECTION = "rejection"
     WITHDRAWN = "withdrawn"
     GHOSTED_INFERRED = "ghosted_inferred"
@@ -873,12 +945,17 @@ class SignalKind(StrEnum):
 #:   says nothing about the outcome, and an unclassifiable message must never move anything.
 #: * ``ghosted_inferred`` maps to ``ghosted`` — the one status this system derives from
 #:   silence rather than from a message, gated by ``settings.ghosted_after_days``.
+#: * ``offer_accepted`` maps to ``accepted``, the end of the funnel. It is a separate kind
+#:   from ``offer`` because an acceptance confirmation restates the offer's own vocabulary
+#:   ("your offer", "accept"), so a single kind would classify both as a fresh offer and the
+#:   application would never leave ``offer``.
 SIGNAL_KIND_TO_STATUS: Final[dict[SignalKind, ApplicationStatus | None]] = {
     SignalKind.APPLICATION_RECEIVED: ApplicationStatus.SUBMITTED,
     SignalKind.VIEWED: None,
     SignalKind.ASSESSMENT_REQUESTED: ApplicationStatus.NEEDS_REVIEW,
     SignalKind.INTERVIEW_INVITE: ApplicationStatus.INTERVIEW,
     SignalKind.OFFER: ApplicationStatus.OFFER,
+    SignalKind.OFFER_ACCEPTED: ApplicationStatus.ACCEPTED,
     SignalKind.REJECTION: ApplicationStatus.REJECTED,
     SignalKind.WITHDRAWN: ApplicationStatus.ABANDONED,
     SignalKind.GHOSTED_INFERRED: ApplicationStatus.GHOSTED,

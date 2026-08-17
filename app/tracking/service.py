@@ -74,6 +74,7 @@ __all__ = [
     "GHOSTED_ELIGIBLE_STATUSES",
     "LAST_ERROR_MAX_CHARS",
     "MANUAL_OUTCOME_STATUSES",
+    "NEVER_AUTO_APPLIED",
     "StatusSyncService",
     "credential_key",
     "delete_credential",
@@ -117,7 +118,21 @@ MANUAL_OUTCOME_STATUSES: Final[frozenset[ApplicationStatus]] = frozenset(
     {
         ApplicationStatus.REJECTED,
         ApplicationStatus.OFFER,
+        ApplicationStatus.ACCEPTED,
         ApplicationStatus.ABANDONED,
+    }
+)
+
+#: Statuses a phrase match may **never** apply on its own, however confident it is.
+#:
+#: Narrow on purpose, and the test for membership is recoverability rather than importance.
+#: A wrong `rejected` is annoying and reversible — the state machine keeps edges out of it.
+#: A wrong `accepted` is neither: it is the end of the funnel, it feeds
+#: `is_successful_outcome()`, the offer rate and the memory weights, and no product path can
+#: undo it without a second deliberate act. Something that irreversible is worth one click.
+NEVER_AUTO_APPLIED: Final[frozenset[ApplicationStatus]] = frozenset(
+    {
+        ApplicationStatus.ACCEPTED,
     }
 )
 
@@ -740,6 +755,24 @@ class StatusSyncService:
         if row.application_id is None or classification.status is None:
             return False
         if combined < self.min_confidence:
+            return False
+        if classification.status in NEVER_AUTO_APPLIED:
+            # Golden rule #2, applied to the one outcome nothing can walk back. Every other
+            # status a signal can produce is recoverable: a mistaken `rejected` still has
+            # edges to `interview` and `offer`, a mistaken `ghosted` has three. `accepted`
+            # is the end of the funnel, and a wrong one silently records a hire that did not
+            # happen — in the analytics, in the memory weights, and in the figure the user
+            # reads on the dashboard.
+            #
+            # So it parks. The signal is already persisted with its evidence, and
+            # `POST /tracking/signals/{id}/resolve` applies it in one click. Asking is
+            # cheaper than being wrong here by a wide margin.
+            logger.info(
+                "tracking.status_needs_confirmation",
+                application_id=str(row.application_id),
+                proposed=classification.status.value,
+                confidence=round(combined, 3),
+            )
             return False
         return await self._transition(row, classification.status, combined, StatusSource.EMAIL)
 

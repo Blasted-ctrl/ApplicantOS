@@ -102,10 +102,11 @@ KIND_WEIGHTS: Final[dict[MemoryKind, float]] = {
     MemoryKind.NOTE: DEFAULT_MEMORY_WEIGHT,
 }
 
-#: Weight overrides for application outcomes. An offer or an interview says far more about
-#: what works than a rejection does — a rejection has a hundred causes, most of them nothing
-#: to do with the resume — and a ghosting says almost nothing at all.
+#: Weight overrides for application outcomes. An acceptance, an offer or an interview says
+#: far more about what works than a rejection does — a rejection has a hundred causes, most
+#: of them nothing to do with the resume — and a ghosting says almost nothing at all.
 OUTCOME_WEIGHTS: Final[dict[ApplicationStatus, float]] = {
+    ApplicationStatus.ACCEPTED: 2.4,
     ApplicationStatus.OFFER: 2.2,
     ApplicationStatus.INTERVIEW: 2.0,
     ApplicationStatus.REJECTED: 1.4,

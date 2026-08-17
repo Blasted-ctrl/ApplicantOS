@@ -425,7 +425,7 @@ function tone(
   };
 }
 
-/** The binding `ApplicationStatus` → visual mapping. All thirteen values (§2.4). */
+/** The binding `ApplicationStatus` → visual mapping. All fourteen values (§2.4). */
 const APPLICATION_TONES: Readonly<Record<ApplicationStatus, StatusTone>> = {
   draft: tone('neutral', 'Draft', 'ring', false, 0.12),
   preparing: tone('progress', 'Preparing', 'filled', true, 0.12),
@@ -439,6 +439,9 @@ const APPLICATION_TONES: Readonly<Record<ApplicationStatus, StatusTone>> = {
   rejected: tone('rejected', 'Rejected', 'filled', false, 0.12),
   interview: tone('interview', 'Interview', 'filled', false, 0.14),
   offer: tone('offer', 'Offer', 'filled', false, 1, true),
+  // The one outcome that outranks an offer, so it is the one that gets the solid treatment
+  // reserved for a result worth looking up from the table for.
+  accepted: tone('offer', 'Accepted', 'filled', false, 1, true),
   ghosted: tone('dim', 'Ghosted', 'dashed', false, 0.1),
 };
 
@@ -530,6 +533,7 @@ const SIGNAL_TONES: Readonly<Record<SignalKind, StatusTone>> = {
   assessment_requested: tone('review', 'Assessment', 'filled', false, 0.14),
   interview_invite: tone('interview', 'Interview invite', 'filled', false, 0.14),
   offer: tone('offer', 'Offer', 'filled', false, 1, true),
+  offer_accepted: tone('offer', 'Offer accepted', 'filled', false, 1, true),
   rejection: tone('rejected', 'Rejection', 'filled', false, 0.12),
   withdrawn: tone('dim', 'Withdrawn', 'dashed', false, 0.1),
   ghosted_inferred: tone('dim', 'Ghosted', 'dashed', false, 0.1),

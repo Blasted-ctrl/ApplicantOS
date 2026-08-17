@@ -79,6 +79,7 @@ __all__ = [
     "FUNNEL_STAGES",
     "INTERVIEW_OUTCOME_STATES",
     "MAX_TIMESERIES_DAYS",
+    "OFFER_OUTCOME_STATES",
     "SCORE_BANDS",
     "UNKNOWN_LABEL",
     "AnalyticsService",
@@ -106,20 +107,32 @@ DEFAULT_BREAKDOWN_LIMIT: Final[int] = 20
 #: a posting with no resolved employer. Named rather than blank so the row is still clickable.
 UNKNOWN_LABEL: Final[str] = "Unknown"
 
-#: Statuses that mean the application reached at least an interview. ``offer`` is included
-#: because status is a *current* state, not a history: an application now holding an offer
-#: went through the interview stage, and excluding it would make the funnel non-monotonic and
-#: understate the interview rate exactly where the good news is.
+#: Statuses that mean the application reached at least an interview. ``offer`` and
+#: ``accepted`` are included because status is a *current* state, not a history: an
+#: application now holding an offer went through the interview stage, and excluding it would
+#: make the funnel non-monotonic and understate the interview rate exactly where the good
+#: news is. The same argument applies with more force to an offer that was taken.
 INTERVIEW_OUTCOME_STATES: Final[tuple[ApplicationStatus, ...]] = (
     ApplicationStatus.INTERVIEW,
     ApplicationStatus.OFFER,
+    ApplicationStatus.ACCEPTED,
 )
 
 #: Statuses that mean the employer replied at all, in any direction.
 _RESPONDED_STATES: Final[tuple[ApplicationStatus, ...]] = (
     ApplicationStatus.INTERVIEW,
     ApplicationStatus.OFFER,
+    ApplicationStatus.ACCEPTED,
     ApplicationStatus.REJECTED,
+)
+
+#: Statuses that mean an offer was made, whether or not it was taken. Every "offers" figure
+#: counts against this rather than against ``offer`` alone: an accepted application still
+#: *received* an offer, and dropping it the moment it is accepted would make the number fall
+#: on the best possible news.
+OFFER_OUTCOME_STATES: Final[tuple[ApplicationStatus, ...]] = (
+    ApplicationStatus.OFFER,
+    ApplicationStatus.ACCEPTED,
 )
 
 #: Deterministic ordering of the post-submit statuses for ``IN`` clauses. Frozenset iteration
@@ -237,7 +250,7 @@ class AnalyticsService:
             ),
             rejected=counts.get(ApplicationStatus.REJECTED, 0),
             needs_review=counts.get(ApplicationStatus.NEEDS_REVIEW, 0),
-            offers=counts.get(ApplicationStatus.OFFER, 0),
+            offers=sum(counts.get(status, 0) for status in OFFER_OUTCOME_STATES),
             total=sum(counts.values()),
         )
 
@@ -288,7 +301,7 @@ class AnalyticsService:
             "prepared": sum(counts.values()),
             "submitted": sum(counts.get(status, 0) for status in _POST_SUBMIT_ORDERED),
             "interview": sum(counts.get(status, 0) for status in INTERVIEW_OUTCOME_STATES),
-            "offer": counts.get(ApplicationStatus.OFFER, 0),
+            "offer": sum(counts.get(status, 0) for status in OFFER_OUTCOME_STATES),
         }
 
         top = totals["discovered"]
@@ -408,6 +421,10 @@ class AnalyticsService:
             attribute = {
                 ApplicationStatus.INTERVIEW: "interviews",
                 ApplicationStatus.OFFER: "offers",
+                # Folded into "offers" rather than given a series of its own: the chart plots
+                # the funnel, and an acceptance is an offer that was taken, not a fourth
+                # outcome alongside it.
+                ApplicationStatus.ACCEPTED: "offers",
                 ApplicationStatus.REJECTED: "rejections",
             }.get(resolved)
             if attribute is None:
@@ -836,7 +853,9 @@ class AnalyticsService:
             by_status={status.value: count for status, count in counts.items()},
             response_rate=_ratio(responded, submitted),
             interview_rate=_ratio(interviewed, submitted),
-            offer_rate=_ratio(counts.get(ApplicationStatus.OFFER, 0), submitted),
+            offer_rate=_ratio(
+                sum(counts.get(status, 0) for status in OFFER_OUTCOME_STATES), submitted
+            ),
             avg_application_seconds=(float(mean_duration) if mean_duration is not None else None),
             avg_score=float(mean_score) if mean_score is not None else None,
             tokens_used=await self._tokens_used(identifier, window),

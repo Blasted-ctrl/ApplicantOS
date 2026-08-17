@@ -2675,6 +2675,7 @@ _VERDICT_FOR_STATUS: Final[dict[ApplicationStatus, str]] = {
     ApplicationStatus.REJECTED: VERDICT_ALREADY_APPLIED,
     ApplicationStatus.INTERVIEW: VERDICT_ALREADY_APPLIED,
     ApplicationStatus.OFFER: VERDICT_ALREADY_APPLIED,
+    ApplicationStatus.ACCEPTED: VERDICT_ALREADY_APPLIED,
     ApplicationStatus.GHOSTED: VERDICT_ALREADY_APPLIED,
     ApplicationStatus.ABANDONED: VERDICT_SKIPPED,
 }

@@ -27,6 +27,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models.enums import (
+    APPLICATION_POST_SUBMIT_STATES,
     ApplicationStatus,
     SignalKind,
     SignalSource,
@@ -109,6 +110,13 @@ CORPUS: list[tuple[str, str, SignalKind, ApplicationStatus | None]] = [
         "After careful consideration we have decided to move forward with other candidates.",
         SignalKind.REJECTION,
         ApplicationStatus.REJECTED,
+    ),
+    (
+        "Welcome to Acme Robotics!",
+        "We have received your acceptance and your signed offer letter. Welcome to the team — "
+        "your first day is Monday the 3rd.",
+        SignalKind.OFFER_ACCEPTED,
+        ApplicationStatus.ACCEPTED,
     ),
 ]
 
@@ -565,3 +573,259 @@ def test_the_llm_never_sees_more_than_a_bounded_body() -> None:
     from app.tracking.base import LLM_MAX_BODY_CHARS
 
     assert LLM_MAX_BODY_CHARS <= 2000
+
+
+# ======================================================================================
+# Acceptance — the outcome the product names and the state machine could not reach
+# ======================================================================================
+
+
+def test_an_acceptance_is_not_read_as_a_fresh_offer(classifier) -> None:
+    """The reason ``offer_accepted`` is a kind of its own.
+
+    An acceptance confirmation restates the offer's whole vocabulary — "your offer", "accept"
+    — so on score alone it classifies as ``offer``. The application would then be moved to
+    ``offer``, which it already was, and "Accepted" would never appear anywhere.
+    """
+    result = classifier.classify_rules(
+        _signal(
+            subject="Your signed offer — Acme Robotics",
+            body="Thank you, we have received your acceptance of the offer of employment. "
+            "Welcome aboard!",
+        )
+    )
+
+    assert result.kind is SignalKind.OFFER_ACCEPTED
+    assert result.status is ApplicationStatus.ACCEPTED
+
+
+def test_a_rejection_naming_an_acceptance_is_still_a_rejection(classifier) -> None:
+    """"The position has been filled — another candidate accepted" is not good news.
+
+    ``KIND_PRECEDENCE`` puts rejection above acceptance for exactly this shape, the same way
+    it already outranks ``offer`` because "we will not be extending an offer" contains
+    "extending an offer".
+    """
+    result = classifier.classify_rules(
+        _signal(
+            subject="Update on your application",
+            body="We regret to inform you that the position has been filled — another "
+            "candidate accepted the offer. We will not be moving forward.",
+        )
+    )
+
+    assert result.kind is SignalKind.REJECTION
+    assert result.status is ApplicationStatus.REJECTED
+
+
+async def test_an_offer_can_be_accepted(session, application, make_posting) -> None:
+    """``offer`` had no outgoing edge, so ``accepted`` was unreachable by any path."""
+    from app.services.application_service import ApplicationService
+
+    service = ApplicationService(session)
+    application.status = ApplicationStatus.OFFER
+    await session.commit()
+
+    moved = await service.transition(application, ApplicationStatus.ACCEPTED)
+
+    assert moved.status is ApplicationStatus.ACCEPTED
+    assert moved.status.is_terminal()
+    assert moved.status.is_post_submit()
+
+
+async def test_accepting_is_the_end_of_the_funnel(session, application) -> None:
+    """``accepted`` leads nowhere except back, and back only to ``offer``.
+
+    The first version of this state asserted *no* outgoing edge at all, which is the natural
+    reading of "end of the funnel" and was wrong: it made a mistaken acceptance permanent
+    through every API the product has. The single edge back to ``offer`` is a correction
+    path, and ``offer`` leads only to ``accepted``, so the pair is a closed loop that reaches
+    no pre-submit state — which is what
+    ``test_no_post_submit_state_can_reach_a_pre_submit_one`` proves for the whole graph.
+    """
+    from app.services.application_service import ALLOWED_TRANSITIONS
+
+    assert ALLOWED_TRANSITIONS[ApplicationStatus.ACCEPTED] == {ApplicationStatus.OFFER}
+    assert ApplicationStatus.ACCEPTED.is_terminal()
+
+
+async def test_an_accepted_application_can_never_be_submitted_again(
+    session, submission_allowed, posting, make_application, make_score, monkeypatch
+) -> None:
+    """Golden rule #1 covers the new state too, and by the same mechanism.
+
+    ``accepted`` joining the post-submit band is what makes rung 1 of the submit ladder
+    refuse it; adding an outcome state without adding it there would open a hole.
+    """
+    from app.services.pipeline import Pipeline
+
+    await make_score(posting, normalized=95)
+    application = await make_application(posting, status=ApplicationStatus.ACCEPTED)
+
+    calls: list[object] = []
+
+    class Spy:
+        async def apply(self, ctx: object):
+            calls.append(ctx)
+            raise AssertionError("an accepted application was submitted again")
+
+    monkeypatch.setattr(Pipeline, "_provider", staticmethod(lambda _name: Spy()))
+    result = await Pipeline(session, submission_allowed).submit(application.id)
+
+    assert calls == []
+    assert result.verdict == "already_applied"
+
+
+def test_no_internal_status_is_missing_from_the_four() -> None:
+    """A status with no mapping would render as a blank cell in the summary."""
+    from app.models.enums import USER_FACING_STATUS
+
+    assert set(USER_FACING_STATUS) == set(ApplicationStatus)
+
+
+def test_the_four_categories_are_reachable() -> None:
+    """Each of the product's four words has at least one internal status behind it."""
+    from app.models.enums import USER_FACING_STATUS, UserFacingStatus
+
+    covered = {value for value in USER_FACING_STATUS.values() if value is not None}
+    assert covered == set(UserFacingStatus)
+
+
+def test_an_application_that_was_never_sent_is_in_none_of_the_four() -> None:
+    """Counting a crashed run as "Applied" would tell a user they applied when they did not."""
+    assert ApplicationStatus.FAILED.user_facing() is None
+    assert ApplicationStatus.ABANDONED.user_facing() is None
+
+
+# ======================================================================================
+# The acceptance classifier, after an adversarial review executed it and found four holes
+# ======================================================================================
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    [
+        ("signature request", "Please return the signed offer letter by Friday and we'll "
+                              "begin onboarding."),
+        ("start date", "We are pleased to offer you the position. If you accept, your first "
+                       "day will be 6 April 2026."),
+        ("countersignature", "Sign electronically and we will return the countersigned offer "
+                             "letter."),
+        ("enthusiasm", "Let me know if you'd like to accept the offer; we're excited to have "
+                       "you join us."),
+    ],
+)
+def test_an_offer_being_made_is_never_read_as_one_already_taken(
+    classifier, label: str, body: str
+) -> None:
+    """All four reproduce a real misclassification, verified by running the classifier.
+
+    "signed offer letter", "your first day", "countersigned" and "excited to have you join"
+    are the vocabulary of an offer *letter*, not of an acceptance. Because ``KIND_PRECEDENCE``
+    ranks ``offer_accepted`` above ``offer``, matching them strongly did not merely invent an
+    acceptance — it stopped genuine offers registering as offers at all, breaking the single
+    most valuable signal the mailbox sync reads.
+    """
+    result = classifier.classify_rules(_signal(subject="Your offer", body=body))
+
+    assert result.kind is not SignalKind.OFFER_ACCEPTED, label
+    assert result.status is not ApplicationStatus.ACCEPTED
+
+
+def test_a_conditional_acceptance_is_not_an_acceptance(classifier) -> None:
+    """"Once you have accepted" is a negotiation, not a completed act.
+
+    It classified as ``offer_accepted`` at 0.97 and auto-applied an irreversible status.
+    """
+    result = classifier.classify_rules(
+        _signal(
+            subject="Next steps",
+            body="Great speaking today. Once you have accepted, HR will reach out about "
+            "onboarding and benefits enrolment.",
+        )
+    )
+
+    assert result.status is not ApplicationStatus.ACCEPTED
+
+
+def test_someone_elses_acceptance_is_not_the_users(classifier) -> None:
+    """A rejection naming the winning candidate must not record the user as hired.
+
+    ``KIND_PRECEDENCE`` does not save this: a kind whose matches are all WEAK is discarded
+    *before* precedence is consulted, so a rejection carrying only "unfortunately" loses to a
+    strong ``accepted our offer``. The fix is that third-party phrasing is no longer strong —
+    it never identifies who accepted.
+    """
+    result = classifier.classify_rules(
+        _signal(
+            subject="Thank you for your interest",
+            body="The candidate we selected has accepted our offer, so we are closing this "
+            "requisition. Unfortunately we cannot consider you further.",
+        )
+    )
+
+    assert result.status is not ApplicationStatus.ACCEPTED
+
+
+def test_a_genuine_acceptance_still_classifies(classifier) -> None:
+    """The tightening must not have thrown away the signal it exists to detect."""
+    for body in (
+        "We have received your acceptance and your signed offer letter. Welcome to the team!",
+        "Thank you for accepting our offer. Onboarding details to follow.",
+    ):
+        result = classifier.classify_rules(_signal(subject="Welcome", body=body))
+        assert result.kind is SignalKind.OFFER_ACCEPTED
+        assert result.status is ApplicationStatus.ACCEPTED
+
+
+def test_an_acceptance_is_never_applied_without_a_human(session, settings) -> None:
+    """Golden rule #2 for the one status nothing can walk back.
+
+    Every other status a signal can produce is recoverable — a wrong ``rejected`` still has
+    edges to ``interview`` and ``offer``. A wrong ``accepted`` records a hire that did not
+    happen, in the analytics, in the memory weights and on the dashboard. So it parks for
+    one-click confirmation however confident the phrase match was.
+    """
+    from app.tracking.service import NEVER_AUTO_APPLIED
+
+    assert ApplicationStatus.ACCEPTED in NEVER_AUTO_APPLIED
+    assert ApplicationStatus.REJECTED not in NEVER_AUTO_APPLIED
+    assert ApplicationStatus.OFFER not in NEVER_AUTO_APPLIED
+
+
+async def test_a_wrong_acceptance_can_be_corrected(session, application) -> None:
+    """``accepted`` had no outgoing edge, so a mistake was permanent through every API."""
+    from app.services.application_service import ApplicationService
+
+    service = ApplicationService(session)
+    application.status = ApplicationStatus.ACCEPTED
+    await session.commit()
+
+    moved = await service.transition(application, ApplicationStatus.OFFER)
+
+    assert moved.status is ApplicationStatus.OFFER
+
+
+def test_no_post_submit_state_can_reach_a_pre_submit_one() -> None:
+    """Golden rule #1, proved by reachability rather than by inspection.
+
+    Adding ``accepted`` added two edges to the state machine, and the correction edge back to
+    ``offer`` is the kind of change that quietly opens a path to re-submission. This walks the
+    whole graph instead of trusting a reading of it, so any future edge that opens one fails
+    here rather than in production.
+    """
+    from app.models.enums import APPLICATION_PRE_SUBMIT_STATES
+    from app.services.application_service import ALLOWED_TRANSITIONS
+
+    def reachable(start: ApplicationStatus) -> set[ApplicationStatus]:
+        seen: set[ApplicationStatus] = set()
+        stack = [start]
+        while stack:
+            for nxt in ALLOWED_TRANSITIONS.get(stack.pop(), set()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        return seen
+
+    for state in APPLICATION_POST_SUBMIT_STATES:
+        assert not reachable(state) & APPLICATION_PRE_SUBMIT_STATES, state.value

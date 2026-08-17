@@ -39,7 +39,13 @@ import structlog
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.config.settings import Settings
 
-__all__ = ["PeriodicScheduler", "start_scheduler", "stop_scheduler"]
+__all__ = [
+    "CRONTAB_FIRST_DELAY",
+    "CRONTAB_INTERVAL",
+    "PeriodicScheduler",
+    "start_scheduler",
+    "stop_scheduler",
+]
 
 logger = structlog.get_logger(__name__)
 
@@ -50,6 +56,17 @@ TICK_SECONDS: Final[float] = 20.0
 
 #: Seconds to wait for the loop to finish its current tick during shutdown.
 STOP_TIMEOUT_SECONDS: Final[float] = 5.0
+
+#: How long after launch a translated crontab entry first fires. Long enough that startup —
+#: migrations, plugin registration, the first discovery poll — is over, short enough that it
+#: still happens in a session somebody only keeps open for an hour.
+CRONTAB_FIRST_DELAY: Final[timedelta] = timedelta(minutes=5)
+
+#: How often a translated crontab entry repeats. Six hours rather than twenty-four because a
+#: desktop app is not up for twenty-four: a daily interval measured from launch would, on a
+#: machine used for a few hours an evening, never elapse. Both translated tasks are
+#: idempotent, so firing more often than the server schedule does costs a query.
+CRONTAB_INTERVAL: Final[timedelta] = timedelta(hours=6)
 
 
 @dataclass(slots=True)
@@ -70,27 +87,47 @@ class _Entry:
 def _entries(now: datetime) -> list[_Entry]:
     """Build the schedule from Celery's own definition.
 
-    Crontab entries are deliberately skipped. They exist for daily maintenance at 03:00 UTC
-    — pruning artefacts, detecting ghosted applications — and a desktop machine is usually
-    asleep then, so honouring a wall-clock time would mean either never running them or
-    running them at a surprising moment on the next launch. They stay the responsibility of
-    a real deployment, where a beat process is actually up at three in the morning.
+    Crontab entries are **translated, not skipped**. They name a wall-clock time — 03:00 and
+    03:30 UTC — because that is when a server should do table-wide maintenance. A desktop
+    machine is asleep then, so honouring the clock literally meant those two tasks never ran
+    at all on a desktop install: ``sync.detect_ghosted`` is what turns a silent application
+    into a ``ghosted`` one, and without it an application the employer never answered stayed
+    "submitted" forever.
+
+    The translation is deliberately not a clever cron emulation. Each crontab entry becomes
+    "shortly after launch, then every :data:`CRONTAB_INTERVAL`", which fires at least once in
+    any real session. That is safe because both tasks are idempotent and window-based rather
+    than incremental: ``expire_postings`` expires anything past its age threshold and
+    ``detect_ghosted`` marks anything silent past ``settings.ghosted_after_days``. Running
+    either twice in a day costs one extra query and changes nothing.
+
+    A real deployment with ``celery beat`` still gets the exact 03:00 schedule — this
+    scheduler stands down the moment a worker appears.
 
     Args:
         now: The moment the scheduler started, used to seed the first due time.
 
     Returns:
-        One entry per fixed-interval task, each first due a full interval from now.
+        One entry per task, fixed-interval and translated-crontab alike.
     """
     from app.workers.celery_app import BEAT_SCHEDULE
 
     entries: list[_Entry] = []
     for name, spec in BEAT_SCHEDULE.items():
         schedule: Any = spec.get("schedule")
-        if not isinstance(schedule, timedelta):
-            logger.debug("scheduler.skipped_crontab", task=name)
+        if isinstance(schedule, timedelta):
+            entries.append(_Entry(task=name, interval=schedule, due_at=now + schedule))
             continue
-        entries.append(_Entry(task=name, interval=schedule, due_at=now + schedule))
+        # A crontab, or anything else Celery understands and this scheduler does not.
+        logger.debug(
+            "scheduler.crontab_translated",
+            task=name,
+            interval_seconds=CRONTAB_INTERVAL.total_seconds(),
+            first_delay_seconds=CRONTAB_FIRST_DELAY.total_seconds(),
+        )
+        entries.append(
+            _Entry(task=name, interval=CRONTAB_INTERVAL, due_at=now + CRONTAB_FIRST_DELAY)
+        )
     return entries
 
 

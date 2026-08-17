@@ -111,12 +111,12 @@ export function getConnectionState(): ConnectionState {
  */
 
 /** Merge an application into its detail entry and every cached list page. */
-function applyApplication(application: ApplicationRead): void {
+function applyApplication(application: ApplicationRead): boolean {
   queryClient.setQueryData<ApplicationDetail>(
     qk.applicationDetail(application.id),
     (old) => (old === undefined ? undefined : { ...old, ...application }),
   );
-  patchListRow<ApplicationRead>(qk.applicationLists(), application.id, application);
+  return patchListRow<ApplicationRead>(qk.applicationLists(), application.id, application);
 }
 
 /** Merge a session into its detail entry and every cached list page. */
@@ -167,7 +167,22 @@ function handle(frame: AppEvent): void {
     case 'application.submitted':
     case 'application.needs_review': {
       const application = frame.payload;
-      applyApplication(application);
+      const patched = applyApplication(application);
+
+      // A row no cached page holds — a brand-new application, or one created while the user
+      // was on another screen. `patchListRow` cannot insert it: only the server knows where
+      // it sorts and what it does to `total`. Invalidating is the honest move, and
+      // `refetchType: 'active'` bounds it to a list the user is actually looking at, so a
+      // run applying to fifty postings costs fifty refetches only while that table is open.
+      //
+      // Without this the live feed was silent: every `application.created` frame patched
+      // nothing and the table stayed as it was until the user navigated away and back.
+      if (!patched) {
+        void queryClient.invalidateQueries({
+          queryKey: qk.applicationLists(),
+          refetchType: 'active',
+        });
+      }
 
       // The review queue's entries are `ReviewItem`s, not applications — the frame does not
       // carry the unanswered fields — so this is one of the few honest invalidations.

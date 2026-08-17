@@ -29,6 +29,7 @@ from app.ai.similarity import (
     match,
     title_relevance,
     tokenize,
+    usable_targets,
     weight,
 )
 
@@ -321,3 +322,23 @@ def test_reweighting_moves_the_combined_score(profile: ApplicantProfile) -> None
 def test_the_corpus_floor_is_a_real_number() -> None:
     """Guards the constant itself: a floor of two would reintroduce the bug it prevents."""
     assert MIN_CORPUS_DOCUMENTS > 2
+
+
+def test_target_titles_come_from_stated_roles_not_search_keywords() -> None:
+    """The two fields are not interchangeable, and confusing them broke the signal.
+
+    ``prefs.preferred_keywords`` is what discovery *searches* for; ``profile.desired_roles``
+    is what the user said they want to be. On the development machine the keywords are
+    ``intern``, ``internship``, ``co-op`` and the roles are "Software Engineer Intern" and
+    five more. Matching on the keywords gave every posting with "Intern" in its title a
+    perfect title score; matching on the roles ranks "Software Engineering Intern" first and
+    "Human Resources Intern" far below it.
+    """
+    keywords = ["intern", "internship", "co-op"]
+    roles = ["Software Engineer Intern", "Backend Engineer Intern"]
+
+    assert usable_targets(keywords) == ()
+    assert usable_targets(roles) == tuple(roles)
+
+    assert title_relevance("Human Resources Intern", roles) < 0.5
+    assert title_relevance("Software Engineering Intern", roles) == 1.0

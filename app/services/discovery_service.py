@@ -629,7 +629,7 @@ class DiscoveryService:
         # applicant's vector is the expensive half — rebuilding it per posting would dominate
         # the cost of scoring two hundred of them.
         idf = await self._corpus_weights(user.id)
-        profile = await self._applicant_profile(user.id, prefs, idf)
+        profile = await self._applicant_profile(user, prefs, idf)
         scorer = Scorer(load_rules(), prefs, idf=idf)
 
         verdicts: dict[str, int] = {}
@@ -680,7 +680,7 @@ class DiscoveryService:
 
     async def _applicant_profile(
         self,
-        user_id: uuid.UUID,
+        user: User,
         prefs: UserPreferences,
         idf: Mapping[str, float] | None,
     ) -> ApplicantProfile | None:
@@ -691,9 +691,18 @@ class DiscoveryService:
         and can be stale, out of date, or one of several; the facts are the thing the whole
         system agrees is true about this person.
 
+        The target titles come from ``profile.desired_roles`` — the roles the user actually
+        named — with ``prefs.preferred_keywords`` only as a fallback. Those two are not the
+        same thing and treating them as interchangeable is what broke the title signal on
+        real data: this user's keywords are ``intern``, ``internship`` and ``co-op``, which
+        are search terms, while their ``desired_roles`` are "Software Engineer Intern",
+        "Backend Engineer Intern" and four more. Reading the keywords made every posting with
+        "Intern" in its title a perfect title match; reading the roles makes the signal mean
+        what its name says.
+
         Args:
-            user_id: The applicant.
-            prefs: Their preferences, supplying the target titles.
+            user: The applicant, carrying both the id and the loaded profile.
+            prefs: Their preferences, supplying the fallback targets.
             idf: Corpus weights, or ``None``.
 
         Returns:
@@ -709,7 +718,7 @@ class DiscoveryService:
                 await self._session.execute(
                     select(KnowledgeFact.text, KnowledgeFact.skills, KnowledgeFact.technologies)
                     .where(
-                        KnowledgeFact.user_id == user_id,
+                        KnowledgeFact.user_id == user.id,
                         KnowledgeFact.is_active.is_(True),
                     )
                     .order_by(KnowledgeFact.created_at.asc(), KnowledgeFact.id.asc())
@@ -719,7 +728,7 @@ class DiscoveryService:
             .all()
         )
         if not rows:
-            logger.debug("discovery.no_profile_facts", user_id=str(user_id))
+            logger.debug("discovery.no_profile_facts", user_id=str(user.id))
             return None
 
         skills: set[str] = set()
@@ -729,7 +738,7 @@ class DiscoveryService:
 
         return ApplicantProfile.build(
             [text for text, _skills, _technologies in rows],
-            titles=list(prefs.preferred_keywords or []),
+            titles=self._desired_roles(user) or list(prefs.preferred_keywords or []),
             skills=skills,
             idf=idf,
         )

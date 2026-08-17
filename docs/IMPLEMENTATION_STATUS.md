@@ -6,7 +6,7 @@ written; it is marked done because a command was run and its output is quoted.
 A claim with no command under it is not a claim, it is an intention. Those live under
 **Not yet proven**.
 
-Last verified: 2026-08-14.
+Last verified: 2026-08-16.
 
 ---
 
@@ -15,10 +15,15 @@ Last verified: 2026-08-14.
 | Gate | Command | Result |
 |---|---|---|
 | Lint | `ruff check app/ tests/ scripts/` | clean |
-| Types | `mypy app` | clean, 177 source files |
-| Tests | `pytest` (SQLite, `LLM_PROVIDER=null`) | **775 passed** |
+| Types | `mypy app` | clean, 180 source files |
+| Tests | `pytest` (SQLite, `LLM_PROVIDER=null`) | **837 passed** |
 | Desktop types | `npm run typecheck` | clean |
 | Desktop lint | `npm run lint` | clean |
+
+`pytest` could not collect a single test before 2026-08-16: `tests/` had no
+`__init__.py`, so it was only a *namespace portion*, and an unrelated project installed on
+the same machine shipped a regular `tests` package that shadowed it. Both test directories
+are now regular packages.
 
 The test command is the zero-dependency path — no API key, no Postgres, no Redis:
 
@@ -118,6 +123,69 @@ conditional `UPDATE ... WHERE status = :expected`.
 Mutation-tested: removing the status predicate from the `WHERE` turns
 `test_two_concurrent_claims_cannot_both_win` and `test_a_lost_claim_writes_nothing` red;
 restoring it turns them green.
+
+### A run ends, for a reason it can name
+
+Before 2026-08-16 a run had exactly two ways to finish: the user pressed Stop, which wrote
+`cancelled`, or the watchdog reaped it after fifteen minutes of silence, which wrote
+`failed`. Nothing ever wrote `completed`. The development database held the proof — four
+sessions, two cancelled, two failed, zero completed — and eleven applications, **none** with
+a `session_id`, so no run could count, cap or stop its own work even in principle.
+
+`session.advance` is the run loop, one tick per beat interval with all state in the tables.
+Stepped by hand against the real database, 36 qualifying postings, `DRY_RUN=true`:
+
+```
+run cap=2 threshold=75
+tick -> dispatched  dispatched=2        (not the whole backlog)
+tick -> working     outstanding=1       (sequential, not a fan-out)
+tick -> concluded   reason=limit_reached
+status=completed
+"Stopped because the application limit of 2 was reached."
+
+request_stop -> status=running halting=True   (in-flight work can still observe it)
+tick -> concluded  status=cancelled
+"Stopped because you asked it to stop."
+```
+
+Both application caps were dead code before this: the "Cap this run" field in the Start
+dialog was stored in a JSON blob nothing queried, and `max_applications_per_session` was
+declared, rendered in Settings, and read by nobody.
+
+An adversarial review of that change found two defects in it, both since fixed and both
+covered by regression tests: a finished run blocked its own review-queue items forever, and
+the daily allowance was subtracted twice, halving it.
+
+### Match scores that mean something, on real postings
+
+Directive §5 — title relevance, skills overlap, résumé similarity, and their blend. No model
+is involved; the module holds the same purity contract as the rule pack.
+
+Scored against 400 real postings for the indexed user, with a 26,338-term IDF corpus built
+from 2,000 of their own ingested postings:
+
+```
+target titles: Software Engineer Intern, Software Engineering Intern, ... (6)
+
+ 77%  Software Engineering Intern              title 100  skills  88  résumé 12
+ 69%  Backend Engineer                         title  67  skills 100  résumé 11
+ 68%  Infrastructure Software Engineer         title  67  skills 100  résumé  7
+ 24%  Human Resources Intern                   title  33  skills   0
+  1%  Sr. Sales Manager (Starlink Enterprise)  title   0  skills   0
+```
+
+Three defects were found by running it rather than by testing it, and each is now pinned by
+a test:
+
+* A textbook TF-IDF over the two documents being compared weights their **shared** vocabulary
+  lowest, suppressing the overlap that constitutes the match. The corpus is the user's own
+  postings; below 20 documents the weighting falls back to sublinear TF.
+* Reading target titles from `prefs.preferred_keywords` — which for this user are `intern`,
+  `internship`, `co-op` — gave every posting with "Intern" in its title 100% title relevance.
+  "Human Resources Intern" scored 56%. Reading `profile.desired_roles`, the field the user
+  actually filled in, drops it to 24%.
+* A posting naming one recognised skill scored 100% overlap on a single observation, which
+  put "Marketing Operations Systems" level with "Backend Engineer".
 
 ### Prompt-injection defence
 

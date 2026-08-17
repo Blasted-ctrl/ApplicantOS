@@ -237,6 +237,12 @@ async def test_a_confirmed_submit_reaches_confirmed_with_an_id_and_proof(
     assert any(path.name.startswith(DEFAULT_EVIDENCE_NAME) for path in result.screenshot_paths)
     assert page.clicks == [SCOPED_SUBMIT]
     assert page.uploads == [("#resume", str(resume_file))]
+    # §11: the answer set, keyed by the question as the page asked it. Read off a real fill
+    # against a real form fixture rather than a stub, so this is what would actually be
+    # written to `application.answers` for a submission that never needed a human.
+    assert result.answers["First Name"] == "Ada"
+    assert result.answers["Email"] == "ada@example.com"
+    assert all(value for value in result.answers.values())
 
 
 async def test_an_inconclusive_page_reaches_needs_review_not_success(
@@ -789,3 +795,113 @@ def test_no_scoped_alternative_is_ever_a_bare_form_root() -> None:
             for alternative in pack.scoped(selector).split(", "):
                 assert alternative not in roots, f"{pack.name}: {alternative!r} is a bare root"
                 assert " " in alternative, f"{pack.name}: {alternative!r} is not scoped"
+
+
+# ======================================================================================
+# The answer set — what was submitted under the user's name (§11)
+# ======================================================================================
+
+
+def test_apply_result_carries_an_answer_set() -> None:
+    """``ApplyResult`` had no field for it, so it could not be recorded at all."""
+    from app.jobs.base import ApplyResult
+
+    assert ApplyResult().answers == {}
+    assert ApplyResult(answers={"Full name": "Ada"}).answers == {"Full name": "Ada"}
+
+
+def test_a_review_result_still_reports_what_was_answered() -> None:
+    """A review item is far easier to resolve beside the fields that *were* filled."""
+    from app.jobs.base import ApplyResult
+    from app.models.enums import ReviewReason
+
+    result = ApplyResult.needs_review(
+        ReviewReason.UNKNOWN_FIELD,
+        error="one field could not be answered",
+        answers={"Email": "ada@example.com"},
+    )
+
+    assert result.answers == {"Email": "ada@example.com"}
+
+
+def test_a_failure_still_reports_what_was_answered() -> None:
+    """A crash mid-form leaves evidence of how far it got."""
+    from app.jobs.base import ApplyResult
+
+    result = ApplyResult.failed("the browser died", answers={"Phone": "555"})
+
+    assert result.answers == {"Phone": "555"}
+
+
+def test_answers_are_keyed_by_the_question_the_page_asked() -> None:
+    """A CSS selector answers nothing months later; the question does.
+
+    An unlabelled field falls back to its selector rather than being dropped — an unlabelled
+    answer is still an answer submitted under the user's name.
+    """
+    from app.ai.field_answer import AnswerPlan
+    from app.browser.apply import _Attempt
+    from app.jobs.base import FormField
+
+    attempt = _Attempt.__new__(_Attempt)
+    attempt._answers = {}
+    attempt.answered(
+        [
+            AnswerPlan(
+                field=FormField(selector="#first", label="First Name"),
+                value="Ada",
+                confidence=1.0,
+            ),
+            AnswerPlan(
+                field=FormField(selector="#q7", label=""),
+                value="Yes",
+                confidence=1.0,
+            ),
+        ]
+    )
+
+    assert attempt._answers == {"First Name": "Ada", "#q7": "Yes"}
+
+
+def test_two_controls_sharing_a_label_both_survive_the_record() -> None:
+    """``_first_label`` falls back to the nearest heading, so collisions are routine.
+
+    Every unlabelled input under one legend resolves to the same text, and a bare
+    ``dict[label] = value`` silently dropped all but the last. The selector disambiguates,
+    which keeps the record lossless while leaving the common case reading as the question.
+    """
+    from app.ai.field_answer import AnswerPlan
+    from app.browser.apply import _Attempt
+    from app.jobs.base import FormField
+
+    attempt = _Attempt.__new__(_Attempt)
+    attempt._answers = {}
+    attempt.answered(
+        [
+            AnswerPlan(field=FormField(selector="#a", label="Work authorization"), value="Yes"),
+            AnswerPlan(field=FormField(selector="#b", label="Work authorization"), value="No"),
+        ]
+    )
+
+    assert attempt._answers == {
+        "Work authorization": "Yes",
+        "Work authorization (#b)": "No",
+    }
+
+
+def test_an_identical_repeat_answer_is_not_duplicated() -> None:
+    """Two controls that share a label *and* an answer are one fact, not two rows."""
+    from app.ai.field_answer import AnswerPlan
+    from app.browser.apply import _Attempt
+    from app.jobs.base import FormField
+
+    attempt = _Attempt.__new__(_Attempt)
+    attempt._answers = {}
+    attempt.answered(
+        [
+            AnswerPlan(field=FormField(selector="#a", label="Consent"), value="Yes"),
+            AnswerPlan(field=FormField(selector="#b", label="Consent"), value="Yes"),
+        ]
+    )
+
+    assert attempt._answers == {"Consent": "Yes"}

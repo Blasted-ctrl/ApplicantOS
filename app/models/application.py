@@ -316,7 +316,21 @@ class Application(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
     answers: Mapped[dict[str, Any]] = mapped_column(
         default=dict,
         nullable=False,
-        doc="Field-by-field answers submitted, keyed by resolved field identifier.",
+        doc=(
+            "Answers a **human** settled, keyed by field selector or by the label they saw. "
+            "This is an *input*: Pipeline.submit hands it to the field answerer, where "
+            "FieldAnswerer._explicit returns it at confidence 1.0 ahead of the profile, the "
+            "EEO branch and the model. Only values a person actually chose may live here."
+        ),
+    )
+    submitted_answers: Mapped[dict[str, Any]] = mapped_column(
+        default=dict,
+        nullable=False,
+        doc=(
+            "What was actually written into the form, keyed by the question as the page "
+            "asked it (``docs/CONTRACTS.md`` §11). A *record*, never an input — nothing "
+            "reads it back into a later attempt."
+        ),
     )
     ai_reasoning: Mapped[str | None] = mapped_column(
         Text,

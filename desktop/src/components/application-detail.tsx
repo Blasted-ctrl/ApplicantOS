@@ -235,7 +235,13 @@ export function ApplicationDetailPanel({
           {detail === undefined ? (
             <FixedPlaceholder height={200} pending={isPending} />
           ) : (
-            <AnswersTable answers={detail.answers} />
+            <AnswersTable
+              answers={
+                Object.keys(detail.submitted_answers).length > 0
+                  ? detail.submitted_answers
+                  : detail.answers
+              }
+            />
           )}
         </TabsContent>
 
@@ -342,7 +348,14 @@ function FixedPlaceholder({ height, pending }: { height: number; pending: boolea
   );
 }
 
-/** The answers the automation and the reviewer supplied, as a two-column table. */
+/**
+ * The answer set, as a two-column table.
+ *
+ * Prefers `submitted_answers` — what the browser actually wrote, keyed by the question the
+ * page asked — and falls back to `answers`, which holds what a human settled during review.
+ * The fallback matters for applications recorded before the two were separated, and for one
+ * that stopped in review before a form was ever filled.
+ */
 function AnswersTable({ answers }: { answers: JsonObject }) {
   const entries = Object.entries(answers);
   if (entries.length === 0) {

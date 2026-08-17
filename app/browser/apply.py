@@ -59,6 +59,7 @@ from typing import Any, Final
 
 import structlog
 
+from app.ai.field_answer import AnswerPlan
 from app.browser.autofill import (
     AutoFiller,
     FieldResolver,
@@ -301,7 +302,7 @@ class _Attempt:
             :attr:`~app.jobs.base.ApplyResult.browser_log`.
     """
 
-    __slots__ = ("_screenshots", "_started", "ctx", "events", "pack", "session")
+    __slots__ = ("_answers", "_screenshots", "_started", "ctx", "events", "pack", "session")
 
     def __init__(self, ctx: ApplyContext, session: Any, pack: SelectorPack) -> None:
         """Bind the attempt to a session and a pack.
@@ -317,6 +318,7 @@ class _Attempt:
         self.events: list[dict[str, Any]] = []
         self._screenshots: list[Path] = []
         self._started = time.monotonic()
+        self._answers: dict[str, Any] = {}
 
     # ----------------------------------------------------------------------------------
     # Bookkeeping
@@ -362,6 +364,37 @@ class _Attempt:
             return
         if isinstance(path, (str, Path)):
             self._screenshots.append(Path(path))
+
+    def answered(self, plans: Sequence[AnswerPlan]) -> None:
+        """Record what was actually written into the form.
+
+        Keyed by the question as the page asked it, because that is what a person reading
+        the application months later needs — a CSS selector answers nothing. A field with no
+        label falls back to its selector rather than being dropped: an unlabelled answer is
+        still an answer submitted under the user's name.
+
+        The EEO questions travel through here like any other. They are the user's own record
+        of what they said about themselves, on their own machine, and the alternative — an
+        application whose demographic answers are unrecoverable — is worse than the one thing
+        the safety envelope actually forbids, which is *inferring* them. This record is
+        write-only: it lands on ``Application.submitted_answers``, which nothing resolves
+        from, so a disclosure recorded here can never be replayed into a later attempt.
+
+        Two controls can genuinely share a label — ``_first_label`` falls back to the nearest
+        heading, so every unlabelled input under one legend resolves to the same text — and a
+        collision would silently drop one of the answers. The selector disambiguates, which
+        keeps the record lossless while leaving the common case reading as the question the
+        page asked.
+
+        Args:
+            plans: The plans :meth:`~app.browser.autofill.AutoFiller.fill` really wrote.
+        """
+        for plan in plans:
+            label = (plan.field.label or "").strip() or plan.field.selector
+            key = label
+            if key in self._answers and self._answers[key] != plan.value:
+                key = f"{label} ({plan.field.selector})"
+            self._answers[key] = plan.value
 
     def screenshots(self, filler: AutoFiller | None = None, *extra: Path | None) -> list[Path]:
         """Return every proof capture taken so far, in order and without duplicates.
@@ -427,6 +460,7 @@ class _Attempt:
             screenshot_paths=self.screenshots(filler, evidence),
             duration_seconds=self.elapsed,
             browser_log=self.events,
+            answers=dict(self._answers),
         )
 
     def failed(
@@ -452,6 +486,7 @@ class _Attempt:
             screenshot_paths=self.screenshots(filler, evidence),
             duration_seconds=self.elapsed,
             browser_log=self.events,
+            answers=dict(self._answers),
         )
 
     def confirmed(self, verdict: VerificationResult, filler: AutoFiller) -> ApplyResult:
@@ -482,6 +517,7 @@ class _Attempt:
             screenshot_paths=self.screenshots(filler, verdict.evidence_screenshot),
             duration_seconds=self.elapsed,
             browser_log=self.events,
+            answers=dict(self._answers),
         )
 
 
@@ -695,6 +731,10 @@ async def _drive(ctx: ApplyContext, session: Any, pack: SelectorPack) -> ApplyRe
     )
 
     filled, unanswered = await filler.fill(fields)
+    # Recorded before the first early return below, so a review item and a failure carry the
+    # answers too — "eleven fields were answered, this one could not be" is a far easier
+    # thing to resolve than a bare refusal.
+    attempt.answered(filled)
     attempt.record(
         _STEP_FILL,
         f"filled {len(filled)} of {len(fields)} fields",

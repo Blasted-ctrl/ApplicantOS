@@ -1387,6 +1387,22 @@ class Pipeline:
         application.external_application_id = result.external_application_id
         # Reassigned wholesale: JSON columns are not change tracked.
         application.browser_log = [dict(entry) for entry in result.browser_log]
+        if result.answers:
+            # `submitted_answers`, **never** `answers`. The two look interchangeable and are
+            # opposites: `answers` is an *input* the next attempt resolves from, where
+            # `FieldAnswerer._explicit` returns any match at confidence 1.0 ahead of the
+            # profile, the EEO branch and the model. Writing the browser's own output there
+            # would freeze machine-resolved values as though a person had chosen them — a
+            # retracted demographic disclosure re-submitted on a retry, a corrected phone
+            # number ignored, a model essay replayed above any confidence floor.
+            #
+            # Merged rather than replaced so evidence only ever accumulates, matching how
+            # `browser_log` and the event trail behave. A later attempt's value wins, because
+            # it is the more recent thing the page received.
+            application.submitted_answers = {
+                **dict(application.submitted_answers or {}),
+                **result.answers,
+            }
         if screenshots:
             application.confirmation_screenshot_id = screenshots[-1].id
         await self._session.flush()

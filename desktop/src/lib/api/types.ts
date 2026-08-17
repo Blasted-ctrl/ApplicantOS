@@ -787,7 +787,10 @@ export interface ApplicationDetail extends ApplicationRead {
   events: ApplicationEventRead[];
   artifacts: ArtifactRead[];
   artifact_urls: string[];
+  /** Answers a human settled. An input to the next attempt, not a record of the last. */
   answers: JsonObject;
+  /** What was actually written into the form, keyed by the question the page asked. */
+  submitted_answers: JsonObject;
   ai_reasoning?: string | null;
   review_payload: JsonObject;
   browser_log: JsonObject[];

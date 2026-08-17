@@ -1159,6 +1159,11 @@ class ApplyResult:
         external_application_id: The employer's own identifier for this application.
         unanswered_fields: Fields that could not be answered with confidence — the evidence
             behind a ``needs_review`` outcome.
+        answers: What was actually written into the form, keyed by the question as the page
+            asked it. The record of what was submitted under the user's name
+            (``docs/CONTRACTS.md`` §11) — without it, an application that sailed through
+            without needing a human left no trace of what it said, and the only applications
+            whose answers were recoverable were the ones that went wrong.
         duration_seconds: Wall-clock time the attempt took, fed to
             ``applicantos_apply_duration_seconds``.
         browser_log: Structured trace of what the browser did, retained for auditing.
@@ -1173,6 +1178,7 @@ class ApplyResult:
     screenshot_paths: list[Path] = field(default_factory=list)
     external_application_id: str | None = None
     unanswered_fields: list[FormField] = field(default_factory=list)
+    answers: dict[str, Any] = field(default_factory=dict)
     duration_seconds: float = 0.0
     browser_log: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
@@ -1240,6 +1246,7 @@ class ApplyResult:
         screenshot_paths: Sequence[Path] | None = None,
         duration_seconds: float = 0.0,
         browser_log: Sequence[dict[str, Any]] | None = None,
+        answers: Mapping[str, Any] | None = None,
     ) -> ApplyResult:
         """Build the result of an attempt that stopped and asked for a human.
 
@@ -1250,6 +1257,9 @@ class ApplyResult:
             screenshot_paths: Whatever was captured before stopping.
             duration_seconds: Wall-clock duration of the attempt.
             browser_log: Structured trace of the browser session.
+            answers: What *was* written before the attempt stopped. A review item is far
+                easier to resolve beside the eleven fields that were answered than on its
+                own.
 
         Returns:
             A result with ``ok=False`` and status
@@ -1261,6 +1271,7 @@ class ApplyResult:
             review_reason=reason,
             error=error,
             unanswered_fields=list(unanswered_fields or []),
+            answers=dict(answers or {}),
             screenshot_paths=list(screenshot_paths or []),
             duration_seconds=duration_seconds,
             browser_log=list(browser_log or []),
@@ -1274,6 +1285,7 @@ class ApplyResult:
         screenshot_paths: Sequence[Path] | None = None,
         duration_seconds: float = 0.0,
         browser_log: Sequence[dict[str, Any]] | None = None,
+        answers: Mapping[str, Any] | None = None,
     ) -> ApplyResult:
         """Build the result of an attempt that broke rather than stopped deliberately.
 
@@ -1282,6 +1294,7 @@ class ApplyResult:
             screenshot_paths: Whatever was captured before the failure.
             duration_seconds: Wall-clock duration of the attempt.
             browser_log: Structured trace of the browser session.
+            answers: Whatever had been written into the form before it broke.
 
         Returns:
             A result with ``ok=False`` and status
@@ -1291,6 +1304,7 @@ class ApplyResult:
             ok=False,
             status=ApplicationStatus.FAILED,
             error=error,
+            answers=dict(answers or {}),
             screenshot_paths=list(screenshot_paths or []),
             duration_seconds=duration_seconds,
             browser_log=list(browser_log or []),

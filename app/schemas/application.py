@@ -200,7 +200,17 @@ class ApplicationDetail(ApplicationRead):
     )
     answers: dict[str, Any] = Field(
         default_factory=dict,
-        description="Field-by-field answers submitted, keyed by resolved field identifier.",
+        description=(
+            "Answers a human settled, keyed by field selector or by the label they saw. "
+            "An input to the next attempt, not a record of the last one."
+        ),
+    )
+    submitted_answers: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "What was actually written into the form, keyed by the question as the page "
+            "asked it. The record of what was submitted under the user's name."
+        ),
     )
     ai_reasoning: str | None = Field(
         default=None,

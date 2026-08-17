@@ -16,7 +16,7 @@ Last verified: 2026-08-16.
 |---|---|---|
 | Lint | `ruff check app/ tests/ scripts/` | clean |
 | Types | `mypy app` | clean, 180 source files |
-| Tests | `pytest` (SQLite, `LLM_PROVIDER=null`) | **837 passed** |
+| Tests | `pytest` (SQLite, `LLM_PROVIDER=null`) | **874 passed** |
 | Desktop types | `npm run typecheck` | clean |
 | Desktop lint | `npm run lint` | clean |
 
@@ -187,6 +187,63 @@ a test:
 * A posting naming one recognised skill scored 100% overlap on a single observation, which
   put "Marketing Operations Systems" level with "Backend Engineer".
 
+### The four outcomes the product names
+
+`Accepted` was unreachable: there was no `accepted` status, and `ALLOWED_TRANSITIONS[OFFER]`
+was the empty set, so an offer taken and an offer ignored were the same row. Against the real
+database, the four an inbox has to tell apart:
+
+```
+"We have received your application"          -> application_received -> Applied
+"we have decided to move forward with other" -> rejection            -> Rejected
+"We are pleased to offer you the position"   -> offer                -> Offered
+"Thank you for accepting our offer"          -> offer_accepted       -> Accepted
+```
+
+An adversarial review executed the first draft of that classifier and found four defects,
+each reproduced by running it, each now covered by a regression test: offer letters stopped
+registering as offers ("signed offer letter", "countersigned", "your first day" are the
+vocabulary of an offer being *made*); "Once you have accepted, HR will reach out" scored 0.97
+as an acceptance; "The candidate we selected has accepted our offer" — a rejection — did too;
+and the status auto-applied irreversibly. `accepted` is now the sole member of
+`NEVER_AUTO_APPLIED` and has a correction edge back to `offer`.
+
+Golden rule #1 is now proved by walking the whole transition graph rather than by reading it:
+
+```
+accepted   reaches pre-submit: none
+confirmed  reaches pre-submit: none
+ghosted    reaches pre-submit: none
+interview  reaches pre-submit: none
+offer      reaches pre-submit: none
+rejected   reaches pre-submit: none
+submitted  reaches pre-submit: none
+```
+
+### The answer set, in a column that cannot answer for you
+
+§11 requires every submitted application to persist what was submitted under the user's name.
+Nothing wrote one on the successful path — 10 of 11 applications in the development database
+have no answer set, and the one that does went through review.
+
+The first fix put it in `applications.answers`, and a review caught that this is not a record
+but an *input*: `FieldAnswerer._explicit` returns any match there at confidence 1.0, ahead of
+the live profile, ahead of the EEO branch that honours "decline to self-identify", and ahead
+of the model. Four consequences were traced end to end — a retracted demographic disclosure
+re-submitted on retry, a model essay replayed above any confidence floor, profile corrections
+silently ignored, and colliding labels replayed into every field that shared one.
+
+`submitted_answers` (migration 0004) is written by the pipeline, read by the UI, and read
+back by nothing. A real fill against the Greenhouse fixture:
+
+```
+recorded answer set (4 questions):
+   First Name  = Ada
+   Last Name   = Lovelace
+   Email       = ada@example.com
+   Phone       = +44 7700 900123
+```
+
 ### Prompt-injection defence
 
 `app/ai/untrusted.py` — 61 KB, **66 tests passing**, wired into résumé tailoring, cover
@@ -232,7 +289,7 @@ Listed with what is missing, not with an excuse.
 | Item | State | What is missing |
 |---|---|---|
 | Injection chokepoints 4 and 5 | Partial | Wired into 3 of the 5 sites the contract names. Website/portfolio extraction and job-posting ingestion are not screened. |
-| Gmail / Outlook OAuth | Unproven **in-product** | An authorised Gmail account was read during the submission above, but through an external connector, not through `app/tracking/`. Credentials-in-keychain and read-only scope remain unverified. |
+| Gmail / Outlook OAuth | Unproven **in-product** | An authorised Gmail account was read during the submission above, but through an external connector, not through `app/tracking/`. Credentials-in-keychain and read-only scope remain unverified. `tests/integration/test_tracking_live.py` makes this executable; the only remaining prerequisite is a credential — `APPLICANTOS_TEST_IMAP_HOST`, `APPLICANTOS_TEST_IMAP_ADDRESS` and `APPLICANTOS_TEST_IMAP_SECRET` (an app password for Gmail). **This is the one open item on the Phase 1 gate.** |
 | Resuming a review item with a supplied answer | Absent | A challenge escalates to `NEEDS_REVIEW`; nothing can hand an answer back to a live browser session and continue. This is what would make the emailed-code flow unattended. |
 | macOS / Linux sidecars | Absent | Only `applicantos-server-x86_64-pc-windows-msvc.exe` is built. |
 | Signed installers, release CI, updater | Absent | `ci.yml` and `integration.yml` exist; there is no `release.yml`, no signing, no updater. |
@@ -242,6 +299,10 @@ Listed with what is missing, not with an excuse.
 
 ### Known defects, open
 
+- **Scheduled sweeps used to run nowhere on a desktop install.** `PeriodicScheduler` skipped
+  every crontab entry, so `sync.detect_ghosted` and `cleanup.expire_postings` never fired —
+  an application the employer never answered stayed "submitted" forever. Fixed; both are now
+  translated to an interval that fires within a real session.
 - **Only a "before" screenshot is captured.** For a rehearsal — whose entire purpose is
   showing what would be submitted — the filled state is the half that matters, and it is the
   half that is missing.

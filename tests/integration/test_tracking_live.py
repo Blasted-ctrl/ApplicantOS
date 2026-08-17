@@ -7,13 +7,18 @@ the confidence floor, the transition — but none of that proves an IMAP connect
 read-only, that a real message parses, or that the incremental cursor advances.
 
 **The exact remaining prerequisite is a mailbox credential**, which no amount of code can
-supply. Set these and the test runs:
+supply. Put these in the repository's ``.env`` — or export them — and the test runs:
 
 ```
 APPLICANTOS_TEST_IMAP_HOST=imap.gmail.com
 APPLICANTOS_TEST_IMAP_ADDRESS=you@example.com
 APPLICANTOS_TEST_IMAP_SECRET=<app-specific password>
 ```
+
+``.env`` is read directly here rather than through :class:`~app.config.settings.Settings`.
+pydantic-settings loads that file into the *settings object*, never into ``os.environ``, so a
+credential written where every other secret in this project lives would otherwise be invisible
+and the suite would skip while looking configured — the worst of both outcomes.
 
 For Gmail the secret must be an **app password**, not the account password, and 2FA must be
 on for one to exist. Nothing here sends, deletes, moves or re-flags a message: the tracker
@@ -29,6 +34,7 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -48,20 +54,68 @@ ENV_SECRET = "APPLICANTOS_TEST_IMAP_SECRET"
 LOOKBACK_DAYS = 30
 
 
+#: The repository's ``.env``, read as a fallback for each variable below.
+ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+
+
+def _from_env_file(name: str) -> str:
+    """Read one ``KEY=value`` line out of the repository's ``.env``.
+
+    A deliberately small parser rather than a dependency: it handles ``KEY=value``, surrounding
+    whitespace, ``export`` prefixes, quotes and ``#`` comments, which is the whole of what a
+    credential line looks like. Anything more elaborate belongs in the settings loader, which
+    already exists and is not what this needs.
+
+    Args:
+        name: The variable to look for.
+
+    Returns:
+        The value, or ``""`` when the file or the key is absent.
+    """
+    if not ENV_FILE.is_file():
+        return ""
+    for raw in ENV_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip().removeprefix("export ").strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() != name:
+            continue
+        return value.strip().strip('"').strip("'")
+    return ""
+
+
+def _setting(name: str) -> str:
+    """Return *name* from the environment, falling back to ``.env``.
+
+    Args:
+        name: The variable to resolve.
+
+    Returns:
+        The value, or ``""`` when neither source has it.
+    """
+    return os.environ.get(name, "").strip() or _from_env_file(name)
+
+
 def _credentials() -> tuple[str, str, str]:
     """Return the configured mailbox, or skip with the prerequisite spelled out.
 
     Returns:
         ``(host, address, secret)``.
     """
-    host = os.environ.get(ENV_HOST, "").strip()
-    address = os.environ.get(ENV_ADDRESS, "").strip()
-    secret = os.environ.get(ENV_SECRET, "").strip()
+    host = _setting(ENV_HOST)
+    address = _setting(ENV_ADDRESS)
+    secret = _setting(ENV_SECRET)
     if not (host and address and secret):
+        missing = [
+            name
+            for name, value in ((ENV_HOST, host), (ENV_ADDRESS, address), (ENV_SECRET, secret))
+            if not value
+        ]
         pytest.skip(
-            "no live mailbox configured. Set "
-            f"{ENV_HOST}, {ENV_ADDRESS} and {ENV_SECRET} "
-            "(an app-specific password for Gmail) to run the live status-sync suite."
+            f"no live mailbox configured — missing {', '.join(missing)}. "
+            f"Add them to {ENV_FILE.name} (an app-specific password for Gmail, not the "
+            "account password) to run the live status-sync suite."
         )
     return host, address, secret
 

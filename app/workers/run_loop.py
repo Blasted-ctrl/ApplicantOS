@@ -239,11 +239,12 @@ async def _tick(session: AsyncSession, run: RunSession) -> dict[str, Any]:
 
     submitted = await sessions.submitted_count(run.id)
     daily_remaining = daily_cap - used_today
-    cap = run.application_cap(
-        configured_cap=int(settings.max_applications_per_session),
-        daily_remaining=daily_remaining,
-    )
-    remaining = cap - submitted
+    cap = run.application_cap(configured_cap=int(settings.max_applications_per_session))
+    # Each allowance is subtracted from the count it belongs to, then intersected. Folding
+    # the day's remainder into the run's total instead double-counts every application this
+    # run has already sent — they are inside both numbers — and with the shipped defaults
+    # that stopped a run at 25 of a daily 50.
+    remaining = min(cap - submitted, daily_remaining)
     if remaining <= 0:
         # Which limit actually bound matters, because the two promise different things: a
         # run cap means this run is done, and the daily cap means come back tomorrow. The

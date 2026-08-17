@@ -365,24 +365,29 @@ class RunSession(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         """
         return not self.is_running or self.stop_requested_at is not None
 
-    def application_cap(self, *, configured_cap: int, daily_remaining: int) -> int:
-        """Return how many more applications this run may submit.
+    def application_cap(self, *, configured_cap: int) -> int:
+        """Return the total number of applications this run may ever submit.
 
-        Three limits are in play and the smallest always wins, because every one of them is
-        a *narrowing*. The request's ``max_applications`` cannot raise the configured session
-        cap, and neither can raise what the user has left in the day. A cap that could be
-        widened from the request body would make ``max_applications_per_session`` advisory,
-        which is not what a setting called a maximum means.
+        A **total**, not a remainder, and the distinction is the bug this signature exists to
+        prevent. The daily allowance is a remainder — what is left of
+        ``max_applications_per_day`` after today's submissions — and folding it into this
+        ``min`` double-counts every application this run has already sent, because those are
+        inside the day's usage *and* inside this run's own count. With the shipped defaults
+        that halved the daily cap: a run stopped at 25 of 50 and told the user it had reached
+        a limit of 25 it had never been given. The two are intersected by the caller instead,
+        where each is subtracted from the count it actually belongs to.
+
+        The request's ``max_applications`` cannot raise the configured session cap: a cap
+        that could be widened from the request body would make ``max_applications_per_session``
+        advisory, which is not what a setting called a maximum means.
 
         Args:
             configured_cap: ``settings.max_applications_per_session``.
-            daily_remaining: ``max_applications_per_day`` minus what the user has already
-                submitted today, across every run.
 
         Returns:
-            The number of further submissions permitted, never negative.
+            The run's total allowance, never negative.
         """
-        limits = [int(configured_cap), int(daily_remaining)]
+        limits = [int(configured_cap)]
         if self.max_applications is not None:
             limits.append(int(self.max_applications))
         return max(COUNTER_FLOOR, min(limits))

@@ -304,7 +304,7 @@ def prepare(
     time_limit=APPLY_HARD_TIME_LIMIT_SECONDS,
 )
 @retryable()
-def submit(application_id: str) -> dict[str, Any]:
+def submit(application_id: str, *, requeued: bool = False) -> dict[str, Any]:
     """Attempt one real submission, behind the pipeline's full guard ladder.
 
     The task ``POST /reviews/{id}/resolve`` enqueues: a resolved review leaves the
@@ -323,6 +323,10 @@ def submit(application_id: str) -> dict[str, Any]:
 
     Args:
         application_id: The application to submit.
+        requeued: ``True`` when a person asked for this application specifically — which is
+            what ``POST /reviews/{id}/resolve`` is. It lifts the owning run's stop, and only
+            that: an answered review is always answered *after* its run has ended, so
+            without this the resolved application would leave the queue and never be sent.
 
     Returns:
         The :class:`~app.services.pipeline.PipelineResult` as a mapping. ``submitted`` is
@@ -331,7 +335,7 @@ def submit(application_id: str) -> dict[str, Any]:
     Raises:
         LookupError: If no such application exists.
     """
-    with task_span(TASK_APPLY_SUBMIT, application_id=application_id) as log:
+    with task_span(TASK_APPLY_SUBMIT, application_id=application_id, requeued=requeued) as log:
 
         async def _run() -> tuple[dict[str, Any], str | None]:
             """Submit inside one unit of work, publish, and report the owning run."""
@@ -342,7 +346,7 @@ def submit(application_id: str) -> dict[str, Any]:
             owning_session: str | None = None
             async with session_scope() as session:
                 pipeline = Pipeline(session, settings)
-                result = await pipeline.submit(application_id)
+                result = await pipeline.submit(application_id, requeued=requeued)
                 payload = result.as_dict()
 
                 if result.application_id is not None:
@@ -389,6 +393,7 @@ def run_one(
     user_id: str,
     *,
     session_id: str | None = None,
+    requeued: bool = False,
 ) -> dict[str, Any]:
     """Score, prepare and submit one posting, stopping at the first refusal.
 
@@ -400,6 +405,9 @@ def run_one(
         posting_id: The posting to apply to.
         user_id: The applicant.
         session_id: The run session to credit.
+        requeued: ``True`` when a person asked for this posting specifically — which is what
+            ``POST /applications/{id}/retry`` is. It lifts the owning run's stop and nothing
+            else; every guard protecting the employer still applies.
 
     Returns:
         The verdict of whichever stage stopped, as a mapping.
@@ -419,7 +427,9 @@ def run_one(
             settings = get_settings()
             async with session_scope() as session:
                 pipeline = Pipeline(session, settings)
-                result = await pipeline.run_one(posting_id, user_id, session_id=session_id)
+                result = await pipeline.run_one(
+                    posting_id, user_id, session_id=session_id, requeued=requeued
+                )
                 payload = result.as_dict()
                 if result.application_id is not None:
                     application = await session.get(Application, result.application_id)

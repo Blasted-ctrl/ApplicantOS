@@ -470,7 +470,11 @@ async def retry_application(
             detail=_ALREADY_SENT_DETAIL,
         )
 
-    outcome = await dispatch(TASK_APPLY_RUN_ONE, str(application.posting_id), str(user.id))
+    # `requeued`: the user pressed Retry on this application specifically, which outranks
+    # the stop of whatever run originally created it.
+    outcome = await dispatch(
+        TASK_APPLY_RUN_ONE, str(application.posting_id), str(user.id), requeued=True
+    )
     logger.info(
         "api.application_retry_requested",
         user_id=str(user.id),

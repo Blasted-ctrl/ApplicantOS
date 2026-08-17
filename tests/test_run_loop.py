@@ -271,16 +271,53 @@ async def test_a_spent_run_cap_ends_the_run(
 async def test_the_daily_cap_ends_the_run_and_says_it_resumes_tomorrow(
     session, applying, aged_run, make_posting, make_application, dispatched, monkeypatch
 ) -> None:
-    """The daily cap spans runs, so its sentence has to promise tomorrow rather than never."""
+    """The daily cap spans runs, so its sentence has to promise tomorrow rather than never.
+
+    ``submitted_at`` is stamped explicitly because that is the column
+    :meth:`~app.services.application_service.ApplicationService.daily_count` measures — the
+    cap bounds what was *sent*, not what was prepared.
+    """
     monkeypatch.setattr(applying, "max_applications_per_day", 1)
     spent = await make_posting(external_id="daily-spent")
-    await make_application(spent, session_id=aged_run.id, status=ApplicationStatus.SUBMITTED)
+    await make_application(
+        spent,
+        session_id=aged_run.id,
+        status=ApplicationStatus.SUBMITTED,
+        submitted_at=utcnow(),
+    )
 
     outcome = await _tick(session, aged_run)
 
     assert outcome["stop_reason"] == StopReason.DAILY_LIMIT_REACHED.value
     closed = await SessionService(session).get(aged_run.id)
     assert "resume tomorrow" in (closed.stop_sentence or "")
+
+
+async def test_a_run_is_not_stopped_at_half_the_daily_cap(
+    session, applying, aged_run, make_posting, make_application, make_score, dispatched, monkeypatch
+) -> None:
+    """Regression: the day's remainder and the run's total used to be subtracted together.
+
+    Twenty-five submissions against a daily cap of fifty left the run with a *computed*
+    allowance of zero, so it stopped at half of what the user had configured and then blamed
+    a limit of fifty it had never reached.
+    """
+    monkeypatch.setattr(applying, "max_applications_per_day", 50)
+    for index in range(25):
+        done = await make_posting(external_id=f"half-{index}")
+        await make_application(
+            done,
+            session_id=aged_run.id,
+            status=ApplicationStatus.SUBMITTED,
+            submitted_at=utcnow(),
+        )
+    waiting = await make_posting(external_id="half-next")
+    await make_score(waiting, normalized=95)
+
+    outcome = await _tick(session, aged_run)
+
+    assert outcome["outcome"] == OUTCOME_DISPATCHED
+    assert outcome["dispatched"] == 1
 
 
 async def test_a_stop_beats_a_cap_when_both_apply(

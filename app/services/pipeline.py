@@ -889,7 +889,12 @@ class Pipeline:
     # Submit — the guarded path
     # ----------------------------------------------------------------------------------
 
-    async def submit(self, application_id: uuid.UUID | str) -> PipelineResult:
+    async def submit(
+        self,
+        application_id: uuid.UUID | str,
+        *,
+        requeued: bool = False,
+    ) -> PipelineResult:
         """Attempt one real submission, behind the full guard ladder.
 
         The ladder is documented at the top of this module and implemented here in exactly
@@ -904,6 +909,14 @@ class Pipeline:
 
         Args:
             application_id: The application to submit.
+            requeued: ``True`` when a **person** asked for this specific application to be
+                sent — resolving its review, or pressing Retry. That skips rung 2 and only
+                rung 2: an application parked in the review queue outlives the run that
+                created it, and a run always ends before its review items are answered, so a
+                run-level stop applied to a human's explicit instruction would make the
+                review queue a place applications go to die. Every guard that protects the
+                *employer* rather than the run — never apply twice, the daily cap, the score
+                floor, the provider's posture, the kill switch — still applies in full.
 
         Returns:
             A :class:`PipelineResult` whose :attr:`~PipelineResult.verdict` says what
@@ -960,7 +973,15 @@ class Pipeline:
         #
         # It sits above the caps deliberately: a run that was told to stop should say it was
         # stopped, not that it was rate limited.
-        halt = await self._sessions.halt_reason(application.session_id)
+        #
+        # `requeued` is the one way past, and it is a person: resolving a review or pressing
+        # Retry. Without it this rung swallowed the review queue whole. A run concludes as
+        # soon as its remaining work is parked — `run_loop.OUTSTANDING_STATES` excludes
+        # NEEDS_REVIEW precisely so a run does not wait on a human — so by the time anyone
+        # answers the question, the owning run has ended and reads as halting forever. The
+        # application would leave the review queue for READY and then never be sent, and the
+        # user would be told it had been submitted.
+        halt = None if requeued else await self._sessions.halt_reason(application.session_id)
         if halt is not None:
             log.info(
                 "pipeline.submit_run_halted",
@@ -999,7 +1020,7 @@ class Pipeline:
                 payload={"submitted_today": used, "max_applications_per_day": daily_cap},
             )
 
-        run_cap = await self._run_capacity(application.session_id, daily_remaining=daily_cap - used)
+        run_cap = await self._run_capacity(application.session_id)
         if run_cap is not None and run_cap.remaining <= 0:
             await self._halt_run(application.session_id, StopReason.LIMIT_REACHED)
             log.info(
@@ -1448,6 +1469,7 @@ class Pipeline:
         user_id: uuid.UUID | str,
         *,
         session_id: uuid.UUID | str | None = None,
+        requeued: bool = False,
     ) -> PipelineResult:
         """Score, prepare and submit one posting, stopping at the first refusal.
 
@@ -1460,6 +1482,8 @@ class Pipeline:
             user_id: The applicant.
             session_id: The run this work belongs to, attributed to the application it
                 creates and consulted before any of the three stages begins.
+            requeued: ``True`` when a person asked for this posting specifically. Skips the
+                run-stop check here and in :meth:`submit`; see that method for why.
 
         Returns:
             The verdict of whichever stage stopped, with
@@ -1474,7 +1498,7 @@ class Pipeline:
 
         # Checked before scoring rather than only before submitting: a stopped run should
         # stop spending, and the submit ladder's rung 2 would refuse the result anyway.
-        halt = await self._sessions.halt_reason(session_uuid)
+        halt = None if requeued else await self._sessions.halt_reason(session_uuid)
         if halt is not None:
             logger.info(
                 "pipeline.run_one_halted",
@@ -1532,7 +1556,7 @@ class Pipeline:
                 error=application.last_error,
             )
 
-        result = await self.submit(application.id)
+        result = await self.submit(application.id, requeued=requeued)
         result.duration_seconds = time.monotonic() - started
         return result
 
@@ -2441,22 +2465,23 @@ class Pipeline:
     # Run limits
     # ----------------------------------------------------------------------------------
 
-    async def _run_capacity(
-        self,
-        session_id: uuid.UUID | None,
-        *,
-        daily_remaining: int,
-    ) -> _RunCapacity | None:
-        """Return how much of its allowance the owning run has left.
+    async def _run_capacity(self, session_id: uuid.UUID | None) -> _RunCapacity | None:
+        """Return how much of its own allowance the owning run has left.
+
+        The daily allowance is deliberately *not* folded in here. It is a remainder and this
+        is a total, and mixing them double-counts everything this run has already sent — see
+        :meth:`~app.models.session.RunSession.application_cap`. Rung 3 applies the daily cap
+        separately, against the count it actually belongs to.
 
         Args:
             session_id: The run this application belongs to, or ``None``.
-            daily_remaining: Submissions the user has left today, across every run.
 
         Returns:
             The run's cap, what it has submitted against it, and what is left. ``None`` when
-            the application belongs to no run — an application created by hand is governed
-            by the daily cap alone, which rung 3 has already applied.
+            the application belongs to no run, or to a run that has **ended**. An ended run's
+            cap is spent history: enforcing it forever would mean an application left ``ready``
+            when its run stopped could never be sent by anything, which is the opposite of
+            what leaving it ``ready`` is for.
         """
         if session_id is None:
             return None
@@ -2466,11 +2491,12 @@ class Pipeline:
             # A pruned run. The daily cap still governs; inventing a session cap for a run
             # that no longer exists would refuse work for a limit nobody set.
             return None
+        if not run.is_running:
+            return None
 
         submitted = await self._sessions.submitted_count(run.id)
         cap = run.application_cap(
             configured_cap=int(self._settings.max_applications_per_session),
-            daily_remaining=int(daily_remaining),
         )
         return _RunCapacity(cap=cap, submitted=submitted, remaining=cap - submitted)
 

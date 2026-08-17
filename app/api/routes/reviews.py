@@ -196,7 +196,11 @@ async def resolve_review(
     require_owner(existing.user_id, user.id, "application")
 
     application = await service.resolve(application_id, payload.answers)
-    outcome = await dispatch(TASK_APPLY_SUBMIT, str(application.id))
+    # `requeued`: a person just answered the question this application was parked on. Its
+    # run ended long before that — a run never waits on a human — so without this the submit
+    # ladder's run-stop rung would refuse it and the answered application would leave the
+    # queue without ever being sent.
+    outcome = await dispatch(TASK_APPLY_SUBMIT, str(application.id), requeued=True)
 
     item = ApplicationRead.model_validate(application)
     bus.publish_model(EVENT_APPLICATION_STATUS_CHANGED, item)

@@ -318,32 +318,50 @@ async def test_the_configured_session_cap_applies_without_a_per_run_cap(
 
 
 @pytest.mark.parametrize(
-    ("requested", "configured", "daily_remaining", "expected"),
+    ("requested", "configured", "expected"),
     [
-        (None, 200, 50, 50),
-        (10, 200, 50, 10),
-        (500, 200, 50, 50),
-        (500, 20, 50, 20),
-        (0, 200, 50, 0),
-        (10, 200, 0, 0),
-        (None, 200, -5, 0),
+        (None, 200, 200),
+        (10, 200, 10),
+        (500, 200, 200),
+        (500, 20, 20),
+        (0, 200, 0),
     ],
 )
-def test_the_smallest_limit_always_wins(
-    requested: int | None, configured: int, daily_remaining: int, expected: int
+def test_a_request_may_narrow_the_cap_and_never_widen_it(
+    requested: int | None, configured: int, expected: int
 ) -> None:
-    """A request may narrow a setting and may never widen one.
+    """The security-shaped case is the 500-against-200 rows.
 
-    The 500-against-200 rows are the security-shaped case: if a request could raise the cap,
-    ``max_applications_per_session`` would be advisory, which is not what a field called a
-    maximum means.
+    If a request could raise the cap, ``max_applications_per_session`` would be advisory,
+    which is not what a field called a maximum means.
     """
     run = RunSession(max_applications=requested)
 
-    assert (
-        run.application_cap(configured_cap=configured, daily_remaining=daily_remaining)
-        == expected
-    )
+    assert run.application_cap(configured_cap=configured) == expected
+
+
+def test_the_cap_is_a_total_and_the_day_is_a_remainder() -> None:
+    """The arithmetic bug this signature exists to prevent.
+
+    ``application_cap`` used to take ``daily_remaining`` and fold it into the same ``min`` as
+    the two run *totals*. Every application the run had already sent is inside both numbers —
+    the day's usage and the run's own count — so subtracting the run's count from that
+    minimum subtracted the same work twice. With the shipped defaults it halved the daily
+    allowance: after 25 submissions a run reported "this run's limit of 25 was reached",
+    a limit nobody had configured, and the next tick then blamed a daily limit of 50.
+
+    Each allowance now belongs to its own count, and the caller intersects the remainders.
+    """
+    run = RunSession(max_applications=None)
+    configured, daily_cap = 200, 50
+
+    for submitted in range(daily_cap):
+        # One run, nothing else today, so the day's usage *is* this run's output.
+        cap = run.application_cap(configured_cap=configured)
+        remaining = min(cap - submitted, daily_cap - submitted)
+        assert remaining > 0, f"refused at {submitted} of a daily {daily_cap}"
+
+    assert min(run.application_cap(configured_cap=configured) - daily_cap, 0) <= 0
 
 
 @pytest.mark.parametrize(
@@ -402,7 +420,7 @@ async def test_none_and_zero_are_different_requests(session, user) -> None:
     await service.finish(unset.id, SessionStatus.COMPLETED)
     zeroed = await service.start(user.id, "manual", max_applications=0)
     assert zeroed.max_applications == 0
-    assert zeroed.application_cap(configured_cap=200, daily_remaining=200) == 0
+    assert zeroed.application_cap(configured_cap=200) == 0
 
 
 # ======================================================================================
@@ -514,3 +532,110 @@ async def test_submitted_count_reads_the_rows_not_the_counter(
 async def _fake_generate(self, application, user, posting) -> dict[str, int]:
     """Stand in for document generation, which is not what this file is testing."""
     return {"bullets": 4, "facts": 4}
+
+
+# ======================================================================================
+# 6. A run's stop is not a life sentence on the applications it left behind
+# ======================================================================================
+
+
+async def test_resolving_a_review_can_still_submit_after_its_run_ended(
+    session, submission_allowed, posting, make_application, make_score, run, monkeypatch
+) -> None:
+    """The review queue is not a place applications go to die.
+
+    Found by an adversarial review of the commit that introduced the stop rung, and the
+    failure is quiet, which is the worst kind. A run concludes as soon as its remaining work
+    is *parked* — ``run_loop.OUTSTANDING_STATES`` excludes ``NEEDS_REVIEW`` precisely so a run
+    never waits on a human — so every review item is answered *after* its run has ended. The
+    ended run read as halting forever, so resolving the review moved the application to
+    ``READY``, out of the queue, and then the submit ladder refused it. The user was told
+    they had applied and nothing had been sent.
+    """
+    await make_score(posting, normalized=95)
+    application = await make_application(posting, session_id=run.id)
+    spy = SpyProvider()
+    monkeypatch.setattr(Pipeline, "_provider", staticmethod(lambda _name: spy))
+    await SessionService(session).conclude(run.id, StopReason.NO_ELIGIBLE_JOBS)
+
+    refused = await Pipeline(session, submission_allowed).submit(application.id)
+    assert refused.verdict == VERDICT_BLOCKED
+    assert spy.calls == 0
+
+    result = await Pipeline(session, submission_allowed).submit(application.id, requeued=True)
+
+    assert spy.calls == 1
+    assert result.submitted is True
+
+
+async def test_a_requeue_still_obeys_every_guard_that_protects_the_employer(
+    session, submission_allowed, posting, make_application, make_score, run, monkeypatch
+) -> None:
+    """``requeued`` lifts the run's stop and nothing else.
+
+    Never-apply-twice in particular: a person pressing Retry on an application that was
+    already sent must not send it again, whatever else they are permitted to override.
+    """
+    await make_score(posting, normalized=95)
+    application = await make_application(
+        posting, session_id=run.id, status=ApplicationStatus.SUBMITTED
+    )
+    spy = SpyProvider()
+    monkeypatch.setattr(Pipeline, "_provider", staticmethod(lambda _name: spy))
+
+    result = await Pipeline(session, submission_allowed).submit(application.id, requeued=True)
+
+    assert spy.calls == 0
+    assert result.verdict == "already_applied"
+
+
+async def test_a_requeue_still_obeys_the_daily_cap(
+    session, submission_allowed, make_posting, make_application, make_score, run, monkeypatch
+) -> None:
+    """The cap that protects the user from themselves is not a run-level limit."""
+    from app.database.types import utcnow
+
+    monkeypatch.setattr(submission_allowed, "max_applications_per_day", 1)
+    spent = await make_posting(external_id="requeue-daily-spent")
+    await make_application(
+        spent,
+        session_id=run.id,
+        status=ApplicationStatus.SUBMITTED,
+        submitted_at=utcnow(),
+    )
+    target = await make_posting(external_id="requeue-daily-next")
+    await make_score(target, normalized=95)
+    application = await make_application(target, session_id=run.id)
+
+    spy = SpyProvider()
+    monkeypatch.setattr(Pipeline, "_provider", staticmethod(lambda _name: spy))
+    result = await Pipeline(session, submission_allowed).submit(application.id, requeued=True)
+
+    assert spy.calls == 0
+    assert result.verdict == VERDICT_BLOCKED
+    assert "Daily limit" in (result.message or "")
+
+
+async def test_an_ended_runs_cap_does_not_outlive_it(
+    session, submission_allowed, make_posting, make_application, make_score, user, monkeypatch
+) -> None:
+    """An application left ``ready`` when its run stopped can still be sent later.
+
+    Leaving it ``ready`` rather than failing it is the whole point of a cap refusal. If the
+    ended run's cap kept applying, "ready" would mean "ready forever, for nobody".
+    """
+    service = SessionService(session)
+    ended = await service.start(user.id, "manual", max_applications=1)
+    spent = await make_posting(external_id="ended-cap-spent")
+    await make_application(spent, session_id=ended.id, status=ApplicationStatus.SUBMITTED)
+    left = await make_posting(external_id="ended-cap-left")
+    await make_score(left, normalized=95)
+    application = await make_application(left, session_id=ended.id)
+    await service.conclude(ended.id, StopReason.LIMIT_REACHED)
+
+    spy = SpyProvider()
+    monkeypatch.setattr(Pipeline, "_provider", staticmethod(lambda _name: spy))
+    result = await Pipeline(session, submission_allowed).submit(application.id, requeued=True)
+
+    assert spy.calls == 1
+    assert result.submitted is True

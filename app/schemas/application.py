@@ -180,7 +180,21 @@ class ApplicationDetail(ApplicationRead):
 
     resume_version: ResumeVersionRead | None = Field(
         default=None,
-        description="The resume version actually submitted.",
+        description=(
+            "The generated resume version. Actually submitted **unless** "
+            "`submitted_resume_filename` is set, in which case the applicant's own upload "
+            "went instead and this is history rather than evidence."
+        ),
+    )
+    submitted_resume_filename: str | None = Field(
+        default=None,
+        description=(
+            "Name of the applicant's own uploaded resume, when `resume_source='master'` "
+            "sent that rather than the generated view. None means `resume_version` is what "
+            "the employer received — **or** that nothing was sent at all: this is populated "
+            "only once the application reaches a post-submit status, so a rehearsal never "
+            "reports a submission."
+        ),
     )
     cover_letter: CoverLetterRead | None = Field(
         default=None,

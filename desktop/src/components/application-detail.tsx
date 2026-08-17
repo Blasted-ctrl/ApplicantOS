@@ -250,6 +250,22 @@ export function ApplicationDetailPanel({
             <FixedPlaceholder height={220} pending={isPending} />
           ) : (
             <>
+              {/*
+                Under `resume_source='master'` the applicant's own upload is what the employer
+                received, and `resume_version` names a generated view nobody saw. Saying so
+                first matters: the card below would otherwise present a document that was
+                never sent as the one that was.
+              */}
+              {detail.submitted_resume_filename !== null &&
+                detail.submitted_resume_filename !== undefined && (
+                  <Card>
+                    <CardHeader
+                      title="Your own résumé was submitted"
+                      subtitle={detail.submitted_resume_filename}
+                    />
+                  </Card>
+                )}
+
               {detail.resume_version === null || detail.resume_version === undefined ? (
                 <EmptyState
                   title="No résumé was generated"
@@ -258,7 +274,12 @@ export function ApplicationDetailPanel({
               ) : (
                 <Card>
                   <CardHeader
-                    title={`Résumé v${String(detail.resume_version.version_number)}`}
+                    title={
+                      detail.submitted_resume_filename === null ||
+                      detail.submitted_resume_filename === undefined
+                        ? `Résumé v${String(detail.resume_version.version_number)}`
+                        : `Generated résumé v${String(detail.resume_version.version_number)} (not sent)`
+                    }
                     subtitle={`${String(detail.resume_version.bullet_count)} bullets · ${String(detail.resume_version.fact_ids.length)} facts · ${detail.resume_version.render_format}`}
                     actions={
                       detail.resume_version.download_url === null ||

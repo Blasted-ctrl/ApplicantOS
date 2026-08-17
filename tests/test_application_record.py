@@ -180,3 +180,154 @@ async def test_a_human_settled_answer_is_still_the_resolvers_input(
     await Pipeline(session, submission_allowed).submit(application.id)
 
     assert seen == [{"Salary expectation": "80000"}]
+
+
+# ======================================================================================
+# Which résumé the employer actually received
+# ======================================================================================
+
+
+async def test_master_mode_records_the_upload_that_was_sent(
+    session, submission_allowed, posting, make_application, make_score, user, monkeypatch
+) -> None:
+    """`resume_source='master'` sends the applicant's own file, and now says so.
+
+    `_materialize_documents` returned the uploaded path and returned early, while
+    `resume_version_id` went on naming a generated `ResumeVersion` no employer received. The
+    detail screen presented that as the résumé used.
+    """
+    from app.models.enums import DocumentKind
+    from app.models.file import UploadedFile
+
+    monkeypatch.setattr(submission_allowed, "resume_source", "master")
+    stored = submission_allowed.storage_root / "master.pdf"
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    stored.write_bytes(b"%PDF-1.7 the applicant's own resume")
+    upload = UploadedFile(
+        user_id=user.id,
+        kind=DocumentKind.MASTER_RESUME,
+        filename="Ada Lovelace Resume.pdf",
+        storage_key="master.pdf",
+        content_type="application/pdf",
+        size_bytes=stored.stat().st_size,
+    )
+    session.add(upload)
+    await session.commit()
+
+    await make_score(posting, normalized=95)
+    application = await make_application(posting)
+    monkeypatch.setattr(
+        Pipeline, "_provider", staticmethod(lambda _name: _AnsweringProvider({}))
+    )
+
+    await Pipeline(session, submission_allowed).submit(application.id)
+
+    assert application.submitted_resume_file_id == upload.id
+
+
+async def test_the_generated_path_records_no_upload(
+    session, submission_allowed, posting, make_application, make_score, monkeypatch
+) -> None:
+    """NULL keeps its meaning: `resume_version_id` names what was sent."""
+    await make_score(posting, normalized=95)
+    application = await make_application(posting)
+    monkeypatch.setattr(
+        Pipeline, "_provider", staticmethod(lambda _name: _AnsweringProvider({}))
+    )
+
+    await Pipeline(session, submission_allowed).submit(application.id)
+
+    assert application.submitted_resume_file_id is None
+
+
+async def test_a_rehearsal_never_reports_a_submission(
+    session, settings, posting, make_application, make_score, user, monkeypatch, api_client
+) -> None:
+    """A dry run attaches the file to the form and stops at the button. Nothing was sent.
+
+    Found by an adversarial review that ran it: the column was written before the claim, so a
+    rehearsal persisted it, and the detail screen said "Your own résumé was submitted" for a
+    row that was still `ready` with `submitted_at` unset. That is the exact confusion this
+    field exists to remove.
+    """
+    from app.models.enums import ApplicationStatus
+
+    await make_score(posting, normalized=95)
+    application = await make_application(
+        posting,
+        status=ApplicationStatus.READY,
+        submitted_resume_file_id=None,
+    )
+    # Simulate what a rehearsal leaves behind: the document was chosen and recorded, and the
+    # application was never sent.
+    upload_id = await _seed_master_upload(session, settings, user)
+    application.submitted_resume_file_id = upload_id
+    await session.commit()
+
+    response = await api_client.get(f"/api/v1/applications/{application.id}")
+
+    assert response.status_code == 200
+    assert response.json()["submitted_resume_filename"] is None
+
+
+async def test_a_sent_application_does_report_its_upload(
+    session, settings, posting, make_application, make_score, user, api_client
+) -> None:
+    """The other half: once it really went out, the screen must name the right document."""
+    from app.models.enums import ApplicationStatus
+
+    await make_score(posting, normalized=95)
+    application = await make_application(posting, status=ApplicationStatus.SUBMITTED)
+    application.submitted_resume_file_id = await _seed_master_upload(session, settings, user)
+    await session.commit()
+
+    response = await api_client.get(f"/api/v1/applications/{application.id}")
+
+    assert response.json()["submitted_resume_filename"] == "Ada Lovelace Resume.pdf"
+
+
+async def test_falling_back_to_the_generated_resume_clears_the_attribution(
+    session, submission_allowed, posting, make_application, make_score, user, monkeypatch
+) -> None:
+    """Set-once attribution inverted itself in both directions.
+
+    An application that used the master résumé and then fell back to the generated one — the
+    upload deleted, or `resume_source` changed — went on naming the upload, so the screen
+    said "your own résumé was submitted" *and* "generated résumé (not sent)" for a submission
+    where the employer received exactly the generated one.
+    """
+    await make_score(posting, normalized=95)
+    application = await make_application(posting)
+    application.submitted_resume_file_id = await _seed_master_upload(
+        session, submission_allowed, user
+    )
+    await session.commit()
+
+    # `resume_source` is the default here, so this attempt uses the generated résumé.
+    monkeypatch.setattr(
+        Pipeline, "_provider", staticmethod(lambda _name: _AnsweringProvider({}))
+    )
+    await Pipeline(session, submission_allowed).submit(application.id)
+
+    assert application.submitted_resume_file_id is None
+
+
+async def _seed_master_upload(session, settings, user):
+    """Persist a master résumé upload and return its id."""
+    from app.models.enums import DocumentKind
+    from app.models.file import UploadedFile
+
+    stored = settings.storage_root / "seeded-master.pdf"
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    stored.write_bytes(b"%PDF-1.7 the applicant's own resume")
+    upload = UploadedFile(
+        user_id=user.id,
+        kind=DocumentKind.MASTER_RESUME,
+        filename="Ada Lovelace Resume.pdf",
+        storage_key="seeded-master.pdf",
+        content_type="application/pdf",
+        size_bytes=stored.stat().st_size,
+    )
+    session.add(upload)
+    await session.flush()
+    return upload.id

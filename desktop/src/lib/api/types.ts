@@ -782,7 +782,13 @@ export interface ApplicationRead {
 
 /** Everything the application detail screen renders. */
 export interface ApplicationDetail extends ApplicationRead {
+  /**
+   * The generated resume version. Actually submitted **unless** `submitted_resume_filename`
+   * is set, in which case the applicant's own upload went instead and this is history.
+   */
   resume_version?: ResumeVersionRead | null;
+  /** The applicant's own uploaded resume, when `resume_source='master'` sent that instead. */
+  submitted_resume_filename?: string | null;
   cover_letter?: CoverLetterRead | null;
   events: ApplicationEventRead[];
   artifacts: ArtifactRead[];

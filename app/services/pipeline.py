@@ -2035,15 +2035,21 @@ class Pipeline:
             (FALLBACK_TEMPLATE, FALLBACK_RENDER_FORMAT),
         )
 
-    async def _master_resume_path(self, application: Application) -> Path | None:
+    async def _master_resume_path(
+        self, application: Application
+    ) -> tuple[Path, uuid.UUID] | None:
         """Return the applicant's own uploaded résumé, if there is one on disk.
+
+        The upload's **id** travels with the path because the caller has to record which
+        document it sent. Returning the path alone is what left the application naming a
+        generated ``ResumeVersion`` no employer ever received.
 
         Args:
             application: The application being submitted, for its owning user.
 
         Returns:
-            The path to the most recent live ``master_resume`` upload, or ``None`` when the
-            user has not uploaded one or the bytes are gone.
+            ``(path, uploaded_file_id)`` for the most recent live ``master_resume`` upload,
+            or ``None`` when the user has not uploaded one or the bytes are gone.
         """
         from app.models.enums import DocumentKind
         from app.models.file import UploadedFile
@@ -2076,7 +2082,7 @@ class Pipeline:
         named = directory / _safe_upload_name(record.filename, stored.suffix)
         if not named.is_file() or named.stat().st_size != stored.stat().st_size:
             shutil.copyfile(stored, named)
-        return named
+        return named, record.id
 
     async def _materialize_documents(
         self,
@@ -2115,20 +2121,40 @@ class Pipeline:
         # problems, and being blocked on the first is a poor reason to be unable to do the
         # second. A user whose knowledge graph is still being cleaned up can apply today with
         # the document they already trust.
+        # Rewritten on **every** attempt, not set once. The first version only ever assigned
+        # inside the master branch, so an application that used the master résumé and then
+        # fell back to the generated one — because the upload was deleted, or `resume_source`
+        # changed — went on naming the upload. That inverts the attribution in both
+        # directions at once and is worse than the bug this column was added to fix.
+        chosen_upload: uuid.UUID | None = None
+
         if self._settings.resume_source == _RESUME_SOURCE_MASTER:
             master = await self._master_resume_path(application)
             if master is not None:
+                master_path, chosen_upload = master
+                application.submitted_resume_file_id = chosen_upload
+                await self._session.flush()
                 logger.info(
                     "pipeline.using_master_resume",
                     application_id=str(application.id),
-                    path=str(master),
+                    uploaded_file_id=str(chosen_upload),
+                    path=str(master_path),
                 )
-                return master, None
+                return master_path, None
             logger.warning(
                 "pipeline.master_resume_missing",
                 application_id=str(application.id),
                 detail="falling back to the generated résumé",
             )
+
+        if application.submitted_resume_file_id is not None:
+            logger.info(
+                "pipeline.master_resume_attribution_cleared",
+                application_id=str(application.id),
+                previous=str(application.submitted_resume_file_id),
+            )
+            application.submitted_resume_file_id = None
+            await self._session.flush()
 
         version: ResumeVersion | None = None
         if application.resume_version_id is not None:

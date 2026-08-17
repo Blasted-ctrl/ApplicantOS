@@ -345,6 +345,23 @@ async def read_application(
     if detail.resume_version is not None and detail.resume_version.file_id is not None:
         detail.resume_version.download_url = resume_download_url(detail.resume_version.id)
 
+    # Which résumé the employer actually received. Under `resume_source="master"` the
+    # applicant's own upload is sent and `resume_version` names a generated view nobody saw,
+    # so the screen has to be able to tell them apart (``docs/CONTRACTS.md`` §11).
+    #
+    # Gated on the application having actually been sent. The column records the document
+    # handed to the provider, which a **rehearsal** also does — a dry run attaches the file
+    # to the form and stops at the button — and a failed attempt may have got that far too.
+    # Reporting either as "your résumé was submitted" tells the user an employer holds their
+    # application when nothing was clicked, which is precisely the confusion this field was
+    # added to remove.
+    if application.submitted_resume_file_id is not None and application.status.is_post_submit():
+        detail.submitted_resume_filename = await session.scalar(
+            select(UploadedFile.filename).where(
+                UploadedFile.id == application.submitted_resume_file_id
+            )
+        )
+
     return detail
 
 

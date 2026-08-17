@@ -321,12 +321,25 @@ def test_the_threshold_is_honoured() -> None:
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
+        # Job-specific endpoints from every provider this project supports.
         ("https://job-boards.greenhouse.io/airbnb/jobs/7380185", True),
         ("https://jobs.lever.co/calstart/8f3a1c22-1d40-4c11-9c2e-77", True),
+        ("https://jobs.ashbyhq.com/acme/9911", True),
+        ("https://jobs.ashbyhq.com/openai/a1b2c3d4-e5f6", True),
+        ("https://www.linkedin.com/jobs/view/4012345678", True),
+        ("https://acme.wd1.myworkdayjobs.com/en-US/External/job/Ann-Arbor/Engineer_R-12345", True),
+        ("https://acme.com/jobs/4417", True),
+        # One URL for a whole board. Merging on any of these would collapse an employer's
+        # entire feed into a single posting.
+        ("https://acme.wd1.myworkdayjobs.com/en-US/External", False),
+        ("https://www.linkedin.com/jobs/search", False),
+        ("https://boards.greenhouse.io/acme", False),
         ("https://acme.com/careers", False),
         ("https://jobs.acme.com", False),
         ("https://acme.com/careers/apply", False),
-        ("https://acme.com/jobs/4417", True),
+        # A Workday job path carrying no digit: refused, which is a false *negative* and
+        # costs nothing — the fuzzy title comparison still runs behind it.
+        ("https://acme.wd5.myworkdayjobs.com/External/job/Remote/Analyst", False),
         ("", False),
     ],
 )

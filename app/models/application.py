@@ -272,6 +272,17 @@ class Application(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         index=True,
         doc="Proof-of-submission screenshot captured by ApplicationVerifier.",
     )
+    submitted_resume_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("uploaded_files.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        doc=(
+            "The applicant's own uploaded résumé, when `resume_source='master'` sent that "
+            "instead of the generated view. NULL means `resume_version_id` names what was "
+            "sent. Without this the row records a ResumeVersion that was never uploaded."
+        ),
+    )
     confirmation_id: Mapped[str | None] = mapped_column(
         String(CONFIRMATION_ID_MAX_LENGTH),
         nullable=True,

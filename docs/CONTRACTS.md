@@ -204,10 +204,11 @@ ATSProviderName:  linkedin greenhouse lever ashby workday manual
 PostingStatus:    discovered deduped scored queued processing applied skipped
                   needs_review failed expired
 ApplicationStatus: draft preparing ready submitting submitted confirmed needs_review
-                   failed abandoned rejected interview offer ghosted
+                   failed abandoned rejected interview offer accepted ghosted
 ReviewReason:     too_many_essays unknown_field login_required captcha mfa
                   file_upload_failed ambiguous_answer low_confidence policy_block
                   submit_not_found unsupported_flow verification_failed rate_limited
+                  insufficient_knowledge
 DocumentKind:     master_resume tailored_resume cover_letter screenshot transcript
                   portfolio source_document other
 EmploymentType:   full_time part_time internship contract new_grad unknown
@@ -215,6 +216,9 @@ WorkArrangement:  remote hybrid onsite unknown
 FieldKind:        text textarea select multiselect radio checkbox file date
                   number email phone url unknown
 PluginKind:       provider model template analyzer tracker
+SessionStatus:    running completed failed cancelled
+StopReason:       user_stopped limit_reached daily_limit_reached no_eligible_jobs
+                  submission_disabled stalled infrastructure_failure
 EntityKind:       person skill technology project organization role education award
                   certification course leadership publication interest goal language
 RelationKind:     used_in worked_at built studied_at earned led contributed_to
@@ -224,6 +228,7 @@ SourceKind:       github_repo github_profile portfolio_page personal_website pro
                   user_correction generated_resume blog_post video manual_entry
 FactKind:         accomplishment responsibility metric skill_usage award education_item
                   leadership_item publication_item
+MemoryKind:       correction outcome feedback preference note
 IndexStatus:      pending indexing indexed failed skipped stale
 SessionStatus:    running completed failed cancelled
 CheckpointStatus: pending running succeeded failed compensated
@@ -231,6 +236,24 @@ WorkAuthStatus:   citizen permanent_resident visa_holder needs_sponsorship unkno
 ```
 
 `ApplicationStatus.terminal_states()`, `.is_post_submit()`, `.is_active()` helpers required.
+
+`accepted` is the end of the funnel and the only inbound edge is from `offer`; `offer` is
+therefore **not** terminal. `accepted` keeps one outgoing edge back to `offer`, so a wrongly
+recorded acceptance is correctable — nothing else leaves it, and the pair reaches no
+pre-submit state.
+
+**User-facing statuses.** The thirteen internal states roll up into the four the product
+shows, through `UserFacingStatus` and the exhaustive `USER_FACING_STATUS` mapping:
+
+```python
+UserFacingStatus: applied rejected offered accepted
+```
+
+`failed` and `abandoned` map to **none of the four**: they describe applications that were
+never sent, and counting either as "Applied" would tell a user they had applied for a job
+nobody received. The mapping is a *view*. Nothing routes, gates or enables an affordance on
+it; `is_post_submit()` remains the sole authority on whether an employer holds an
+application.
 
 ---
 
@@ -246,6 +269,13 @@ All tables: UUID PK, `created_at`, `updated_at`.
 | `UserPreferences` | *pydantic only* | see §5 |
 
 EEO fields are nullable, never inferred, and always answerable as "decline to self-identify".
+
+`applications.answers` and `applications.submitted_answers` are opposites and must not be
+conflated. `answers` is an **input**: the pipeline hands it to the field answerer, where
+`_explicit` returns any match at confidence `1.0` — ahead of the profile, ahead of the EEO
+branch, ahead of the model — so only values a *human* settled may be written there.
+`submitted_answers` is the **record** of what the browser actually wrote, keyed by the
+question as the page asked it, and nothing reads it back into a later attempt.
 
 ### Knowledge engine
 | Model | Table | Key columns |
@@ -269,7 +299,7 @@ EEO fields are nullable, never inferred, and always answerable as "decline to se
 | `Resume` | `resumes` | `user_id`, `name`, `variant_label`, `template`, `is_default`, `config` JSON |
 | `ResumeVersion` | `resume_versions` | `resume_id` FK, `application_id` FK nullable, `version_number`, `content_json` (ResumeDocument), `render_format`, `file_id` FK nullable, `fact_ids` JSON, `token_usage` JSON, `reasoning`, `deleted_at`, **UNIQUE(resume_id, version_number)** |
 | `CoverLetter` | `cover_letters` | `user_id`, `posting_id` FK, `application_id` FK nullable, `body`, `tone`, `file_id` FK nullable, `token_usage` JSON |
-| `Application` | `applications` | `user_id`, `posting_id`, `company_id`, `session_id` FK nullable, `status`, `resume_version_id`, `cover_letter_id`, `submitted_at`, `duration_seconds`, `confirmation_screenshot_id`, `confirmation_id`, `confirmation_text`, `review_reason`, `review_payload` JSON, `attempt_count`, `last_error`, `external_application_id`, `answers` JSON, `ai_reasoning`, `browser_log` JSON, `notes`, **UNIQUE(user_id, posting_id)** |
+| `Application` | `applications` | `user_id`, `posting_id`, `company_id`, `session_id` FK nullable, `status`, `resume_version_id`, `cover_letter_id`, `submitted_at`, `duration_seconds`, `confirmation_screenshot_id`, `confirmation_id`, `confirmation_text`, `review_reason`, `review_payload` JSON, `attempt_count`, `last_error`, `external_application_id`, `answers` JSON, `submitted_answers` JSON, `ai_reasoning`, `browser_log` JSON, `notes`, **UNIQUE(user_id, posting_id)** |
 | `ApplicationEvent` | `application_events` | `application_id` FK, `kind`, `message`, `payload` JSON, `at` |
 
 ### Runtime
@@ -916,7 +946,7 @@ app/tracking/
 PluginKind:      + TRACKER = "tracker"
 SignalSource:    email_gmail email_imap email_outlook ats_portal manual webhook
 SignalKind:      application_received viewed assessment_requested interview_invite
-                 offer rejection withdrawn ghosted_inferred unknown
+                 offer offer_accepted rejection withdrawn ghosted_inferred unknown
 MailProvider:    gmail outlook imap
 StatusSource:    manual email portal inferred pipeline
 ```
@@ -995,11 +1025,30 @@ sets per `SignalKind`, matched case-insensitively with word boundaries:
 | `assessment_requested` | "coding challenge", "online assessment", "take-home", "HackerRank", "CodeSignal" | `NEEDS_REVIEW` |
 | `interview_invite` | "schedule an interview", "phone screen", "invite you to interview", "availability for a call" | `INTERVIEW` |
 | `offer` | "pleased to offer", "offer of employment", "extend an offer" | `OFFER` |
+| `offer_accepted` | "received your acceptance", "acceptance has been received", "thank you for accepting", "your acceptance of the offer" | `ACCEPTED` |
 | `rejection` | "move forward with other candidates", "not moving forward", "no longer under consideration", "pursue other applicants", "decided not to proceed" | `REJECTED` |
 
 The LLM is consulted **only** when rules return `unknown` or confidence `< 0.7`, and may never
 override a high-confidence rule match. It never sees more than the subject plus the first 2,000
 characters of the body.
+
+**Precedence, not score, decides between kinds that both matched.** `rejection` outranks
+everything because rejections restate the vocabulary of what they refuse ("we will not be
+extending an offer" contains "extending an offer"); `offer_accepted` outranks `offer` for the
+same reason in the other direction. A kind whose matches are all *weak* is discarded before
+precedence is consulted, so a strong phrase is the only thing that can anchor a verdict.
+
+An `offer_accepted` phrase must name an act that is **completed** (not "once you have
+accepted"), in the **second person** (not "the candidate we selected has accepted our
+offer"), and about the **acceptance** rather than the offer document ("signed offer letter"
+and "your first day" appear in offers being *made*). Everything else corroborates and can
+never anchor.
+
+**`ACCEPTED` is never auto-applied.** It is the sole member of `NEVER_AUTO_APPLIED`: every
+other status a signal can produce is recoverable, and a wrong acceptance records a hire that
+did not happen in the analytics, the memory weights and the dashboard. It parks for one-click
+confirmation however confident the phrase match was — golden rule #2 for the one outcome
+nothing can walk back.
 
 ### 17.5 Matching
 

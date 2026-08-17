@@ -156,7 +156,7 @@ async def test_a_real_mailbox_can_be_read(session, settings, live_account) -> No
         since=datetime.now(UTC) - timedelta(days=LOOKBACK_DAYS),
     )
 
-    assert report.error is None, report.error
+    assert report.errors == [], report.errors
     assert report.fetched >= 0
 
 
@@ -178,9 +178,14 @@ async def test_the_cursor_advances_and_a_second_run_is_idempotent(
     first = await service.sync_account(live_account.id, since=since)
     second = await service.sync_account(live_account.id, since=since)
 
-    assert first.error is None and second.error is None
-    # Nothing new the second time: every signal the first run created is a duplicate now.
-    assert second.created == 0
+    assert first.errors == [], first.errors
+    assert second.errors == [], second.errors
+    # Nothing new the second time. The cursor advanced past what the first run read, so the
+    # second fetches nothing rather than re-reading and re-skipping — and any message it did
+    # re-read would collide with UNIQUE(user_id, source, external_ref) inside its own
+    # SAVEPOINT and be counted as a skip.
+    assert second.fetched <= first.fetched
+    assert second.applied == 0
 
 
 async def test_a_real_recruiter_email_moves_a_real_application(

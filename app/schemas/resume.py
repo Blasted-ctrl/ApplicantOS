@@ -45,6 +45,7 @@ __all__ = [
     "ResumePreviewRequest",
     "ResumeRead",
     "ResumeSectionSchema",
+    "ResumeUpdate",
     "ResumeVersionRead",
 ]
 
@@ -276,6 +277,45 @@ class ResumeCreate(Schema):
         description="Make this the variant chosen when a request names none.",
     )
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResumeUpdate(Schema):
+    """Partial update of a resume variant — ``PATCH /resumes/{id}``.
+
+    Every field is optional and ``None`` means "leave it alone", which is what makes this a
+    patch rather than a replace. That distinction matters most for ``variant_label``: it is
+    nullable on the model, so "clear the label" and "do not touch the label" would be the
+    same request under a replace, and a rename would silently untarget the variant.
+    Clearing is therefore an explicit empty string.
+    """
+
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        description="New display name. Omit to leave it unchanged.",
+    )
+    variant_label: str | None = Field(
+        default=None,
+        description="New targeting label. Pass an empty string to clear it.",
+    )
+    template: str | None = Field(
+        default=None,
+        min_length=1,
+        description="TemplatePlugin used to render versions of this variant.",
+    )
+    is_default: bool | None = Field(
+        default=None,
+        description=(
+            "Make this the variant chosen when a request names none. Setting it clears the "
+            "flag on every other variant; `false` is refused, because "
+            "'no variant is default' is not something a user can usefully ask for — they "
+            "make a different one default instead."
+        ),
+    )
+    config: dict[str, Any] | None = Field(
+        default=None,
+        description="Generation overrides. Replaces the stored mapping wholesale.",
+    )
 
 
 class ResumeVersionRead(Schema):

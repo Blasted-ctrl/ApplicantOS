@@ -52,7 +52,15 @@ export {
 } from './use-prefetch';
 export { useCompleteOnboarding, useOnboardingStatus, useOnboardingSteps, useSubmitOnboardingStep } from './use-onboarding';
 export { useDismissReview, useResolveReview, useReviewCount, useReviews } from './use-reviews';
-export { useCreateResume, usePreviewResume, useResumeVersion, useResumes } from './use-resumes';
+export {
+  useCreateResume,
+  useDeleteResume,
+  usePreviewResume,
+  useResume,
+  useResumeVersion,
+  useResumes,
+  useUpdateResume,
+} from './use-resumes';
 export {
   useActiveSession,
   useHydrateActiveSession,

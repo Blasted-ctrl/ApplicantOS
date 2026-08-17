@@ -931,6 +931,24 @@ export interface ResumeCreate {
   config?: JsonObject;
 }
 
+/**
+ * Partial update of a resume variant — `PATCH /resumes/{id}`.
+ *
+ * Every field is optional and omitting one leaves it alone, which is what makes a rename
+ * safe: `variant_label` is nullable, so under a replace "clear the label" and "say nothing
+ * about the label" would be the same request. Clearing is an explicit empty string.
+ *
+ * `is_default: false` is refused by the server — a user does not want *no* default, they
+ * want a different one, expressed as a PATCH on that other variant.
+ */
+export interface ResumeUpdate {
+  name?: string;
+  variant_label?: string | null;
+  template?: string;
+  is_default?: boolean;
+  config?: JsonObject;
+}
+
 /** Body of `POST /resumes/preview` — tailor a resume without applying to anything. */
 export interface ResumePreviewRequest {
   posting_id?: Uuid | null;

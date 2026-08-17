@@ -51,16 +51,18 @@ from app.api.routes._support import (
     resume_download_url,
     storage_path,
 )
-from app.models.enums import ATSProviderName, DocumentKind
+from app.models.application import Application
+from app.models.enums import APPLICATION_POST_SUBMIT_STATES, ATSProviderName, DocumentKind
 from app.models.file import UploadedFile
 from app.models.posting import JobPosting
 from app.models.resume import Resume, ResumeVersion
-from app.schemas.common import Page, paginate
+from app.schemas.common import OkResponse, Page, paginate
 from app.schemas.resume import (
     DEFAULT_RESUME_TEMPLATE,
     ResumeCreate,
     ResumePreviewRequest,
     ResumeRead,
+    ResumeUpdate,
     ResumeVersionRead,
 )
 
@@ -97,6 +99,13 @@ _NO_ARTIFACT_DETAIL: Final[str] = (
     "This version has no rendered file. The structured document it was generated from is "
     "retained and can be rendered again; the PDF itself is disposable and was reclaimed "
     "after submission."
+)
+
+#: Deterministic ordering of the post-submit statuses for the ``IN`` clause in
+#: :func:`_submitted_version_count`. Frozenset iteration order varies between processes,
+#: which would defeat SQLAlchemy's compiled-statement cache.
+_POST_SUBMIT_ORDERED: Final[tuple[Any, ...]] = tuple(
+    sorted(APPLICATION_POST_SUBMIT_STATES, key=lambda status_: status_.value)
 )
 
 router = APIRouter()
@@ -311,6 +320,239 @@ async def _clear_other_defaults(
     )
     for other in rows.scalars().all():
         other.is_default = False
+
+
+async def _load_owned(session: DbSession, user: CurrentUser, resume_id: uuid.UUID) -> Resume:
+    """Load one variant, or refuse.
+
+    Args:
+        session: The request's database session.
+        user: The acting user.
+        resume_id: The variant to load.
+
+    Returns:
+        The row.
+
+    Raises:
+        LookupError: If no such variant exists — mapped to 404. A variant belonging to
+            somebody else is reported the same way rather than as a 403: "not found" is the
+            honest answer to give about a row the caller may not know exists.
+    """
+    resume = await session.scalar(select(Resume).where(Resume.id == resume_id).limit(1))
+    if resume is None:
+        raise LookupError(f"resume {resume_id} not found")
+    require_owner(resume.user_id, user.id, "resume")
+    return resume
+
+
+async def _submitted_version_count(session: DbSession, resume_id: uuid.UUID) -> int:
+    """Count this variant's versions that an employer actually received.
+
+    Args:
+        session: The request's database session.
+        resume_id: The variant to check.
+
+    Returns:
+        How many of its versions are attached to a post-submit application.
+    """
+    total = await session.scalar(
+        select(func.count(ResumeVersion.id))
+        .join(Application, Application.resume_version_id == ResumeVersion.id)
+        .where(
+            ResumeVersion.resume_id == resume_id,
+            Application.status.in_(_POST_SUBMIT_ORDERED),
+        )
+    )
+    return int(total or 0)
+
+
+@router.get(
+    "/{resume_id}",
+    response_model=ResumeRead,
+    summary="One resume variant",
+)
+async def read_resume(
+    resume_id: uuid.UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> ResumeRead:
+    """Return one variant with its version count and latest generation.
+
+    Args:
+        resume_id: The variant to read.
+        user: The acting user.
+        session: The request's database session.
+
+    Returns:
+        The variant.
+
+    Raises:
+        LookupError: If no such variant exists — mapped to 404.
+    """
+    return await _to_read(session, await _load_owned(session, user, resume_id))
+
+
+@router.patch(
+    "/{resume_id}",
+    response_model=ResumeRead,
+    summary="Rename, retarget or reconfigure a variant",
+)
+async def update_resume(
+    resume_id: uuid.UUID,
+    payload: ResumeUpdate,
+    user: CurrentUser,
+    session: DbSession,
+) -> ResumeRead:
+    """Apply a partial update.
+
+    Only the fields present in the body are touched, which is what makes a rename safe:
+    ``variant_label`` is nullable, so under a replace "clear the label" and "say nothing
+    about the label" would be the same request, and renaming a variant would silently
+    untarget it. Clearing is an explicit empty string.
+
+    Making this variant default clears the flag on the others through the same helper the
+    create path uses, so "exactly one default" is enforced in one place. Unsetting default
+    is refused: a user does not want *no* default, they want a different one, and the request
+    that expresses that is a PATCH on the other variant.
+
+    Args:
+        resume_id: The variant to update.
+        payload: The fields to change.
+        user: The acting user.
+        session: The request's database session.
+
+    Returns:
+        The updated variant.
+
+    Raises:
+        LookupError: If no such variant exists — mapped to 404.
+        ValueError: If the body asks to unset ``is_default`` — mapped to 400.
+    """
+    resume = await _load_owned(session, user, resume_id)
+
+    if payload.is_default is False:
+        raise ValueError(
+            "is_default cannot be unset directly; make another variant the default instead."
+        )
+
+    if payload.name is not None:
+        resume.name = payload.name
+    if payload.variant_label is not None:
+        resume.variant_label = payload.variant_label.strip() or None
+    if payload.template is not None:
+        resume.template = payload.template
+    if payload.config is not None:
+        # Reassigned wholesale: JSON columns are not change tracked, so mutating in place
+        # would never be flushed.
+        resume.config = dict(payload.config)
+    if payload.is_default:
+        resume.is_default = True
+        await _clear_other_defaults(session, user.id, resume.id)
+
+    await session.commit()
+    logger.info(
+        "api.resume_variant_updated",
+        user_id=str(user.id),
+        resume_id=str(resume.id),
+        fields=sorted(payload.model_dump(exclude_none=True)),
+    )
+    return await _to_read(session, resume)
+
+
+@router.delete(
+    "/{resume_id}",
+    response_model=OkResponse,
+    summary="Delete a resume variant",
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "description": "The variant has versions an employer already received."
+        }
+    },
+)
+async def delete_resume(
+    resume_id: uuid.UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> OkResponse:
+    """Delete a variant, unless doing so would erase what was submitted.
+
+    **``resumes`` cascades onto ``resume_versions``, which is why this refuses.** The chain
+    is easy to miss and its end is severe: deleting a variant deletes its versions, and
+    ``applications.resume_version_id`` is ``ON DELETE SET NULL`` — so a submitted application
+    would quietly stop knowing which résumé the employer received. That is golden rule #6
+    exactly (``content_json`` is the permanent artefact, the rendered file the disposable
+    one) and ``docs/CONTRACTS.md`` §11 requires the résumé *used*.
+
+    So a variant with a version an employer received cannot be deleted at all. Drafts are
+    another matter: a version generated and never sent is working material, and taking it
+    with the variant is what deleting a variant means.
+
+    When the deleted variant was the default and others remain, the oldest is promoted, so
+    the picker is never left with no default while variants exist.
+
+    Args:
+        resume_id: The variant to delete.
+        user: The acting user.
+        session: The request's database session.
+
+    Returns:
+        Confirmation, with how many versions went with it.
+
+    Raises:
+        LookupError: If no such variant exists — mapped to 404.
+        HTTPException: ``409`` when a version of this variant was actually submitted.
+    """
+    resume = await _load_owned(session, user, resume_id)
+
+    submitted = await _submitted_version_count(session, resume.id)
+    if submitted:
+        logger.info(
+            "api.resume_variant_delete_refused",
+            user_id=str(user.id),
+            resume_id=str(resume.id),
+            submitted_versions=submitted,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This variant has {submitted} version(s) an employer already received. "
+                "Deleting it would erase the record of what was submitted, so it is kept. "
+                "Rename it instead if it is no longer in use."
+            ),
+        )
+
+    versions = await _version_count(session, resume.id)
+    was_default = resume.is_default
+    await session.delete(resume)
+    await session.flush()
+
+    promoted: Resume | None = None
+    if was_default:
+        promoted = await session.scalar(
+            select(Resume)
+            .where(Resume.user_id == user.id)
+            .order_by(Resume.created_at.asc())
+            .limit(1)
+        )
+        if promoted is not None:
+            promoted.is_default = True
+
+    await session.commit()
+    logger.info(
+        "api.resume_variant_deleted",
+        user_id=str(user.id),
+        resume_id=str(resume_id),
+        versions=versions,
+        promoted=str(promoted.id) if promoted is not None else None,
+    )
+    return OkResponse(
+        message=(
+            f"Deleted the variant and {versions} unsent version(s)."
+            if versions
+            else "Deleted the variant."
+        ),
+        data={"resume_id": str(resume_id), "versions_deleted": versions},
+    )
 
 
 # ======================================================================================

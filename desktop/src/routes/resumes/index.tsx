@@ -12,7 +12,7 @@
  * ships in one chunk; this one is split because most sessions never open it.
  */
 
-import { Download, Plus } from 'lucide-react';
+import { Download, Plus, Star, Trash2 } from 'lucide-react';
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 
 import { Page, SectionHeading } from '@/components/page';
@@ -31,12 +31,21 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  ConfirmDialog,
   Sheet,
   SheetContent,
   Skeleton,
   Tooltip,
 } from '@/components/ui';
-import { useCreateResume, usePostings, usePreviewResume, useResumeVersion, useResumes } from '@/hooks';
+import {
+  useCreateResume,
+  useDeleteResume,
+  usePostings,
+  usePreviewResume,
+  useResumeVersion,
+  useResumes,
+  useUpdateResume,
+} from '@/hooks';
 import { downloadResumeVersion } from '@/lib/api/endpoints';
 import { notifyError, notifyFileWritten } from '@/lib/notify';
 import type { ResumeRead } from '@/lib/api/types';
@@ -70,6 +79,9 @@ export function ResumesRoute() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [versionId, setVersionId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [deleting, setDeleting] = useState<ResumeRead | null>(null);
+  const updateResume = useUpdateResume();
+  const deleteResume = useDeleteResume();
   const [newName, setNewName] = useState('');
   const [newTemplate, setNewTemplate] = useState<string>('modern');
   const [previewPostingId, setPreviewPostingId] = useState<string>('');
@@ -157,6 +169,43 @@ export function ResumesRoute() {
                         </Badge>
                       )}
                     </button>
+
+                    {/*
+                      Outside the selection button, not inside it: a button nested in a
+                      button is invalid markup and the inner click would also select the
+                      row, so "make default" would silently change what is on screen.
+                    */}
+                    <div className="flex items-center gap-1 px-2 pb-1.5">
+                      {!variant.is_default && (
+                        <Tooltip content="Use this variant when a run names none">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            leadingIcon={<Star aria-hidden="true" />}
+                            loading={updateResume.isPending}
+                            onClick={() => {
+                              updateResume.mutate({
+                                id: variant.id,
+                                body: { is_default: true },
+                              });
+                            }}
+                          >
+                            Make default
+                          </Button>
+                        </Tooltip>
+                      )}
+                      <Tooltip content="Delete this variant">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Delete ${variant.name}`}
+                          leadingIcon={<Trash2 aria-hidden="true" />}
+                          onClick={() => {
+                            setDeleting(variant);
+                          }}
+                        />
+                      </Tooltip>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -284,6 +333,44 @@ export function ResumesRoute() {
           </section>
         </div>
       )}
+
+      {/*
+        A confirm, because the server may refuse and because the drafts really do go. The
+        copy names the number rather than saying "and its versions": "and 4 unsent versions"
+        is a fact the user can weigh, and the refusal for a submitted one comes from the
+        server as a 409 they will see as an error toast.
+      */}
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null);
+        }}
+        title={deleting === null ? 'Delete variant?' : `Delete “${deleting.name}”?`}
+        description={
+          deleting === null ? null : deleting.version_count === 0 ? (
+            'This variant has generated nothing yet, so nothing else is lost.'
+          ) : (
+            <>
+              Its <span className="font-mono">{deleting.version_count}</span> unsent{' '}
+              {deleting.version_count === 1 ? 'version goes' : 'versions go'} with it. A
+              version an employer actually received cannot be deleted — the record of what
+              was submitted is kept.
+            </>
+          )
+        }
+        confirmLabel="Delete"
+        loading={deleteResume.isPending}
+        onConfirm={() => {
+          const target = deleting;
+          if (target === null) return;
+          deleteResume.mutate(target.id, {
+            onSuccess: () => {
+              setDeleting(null);
+              if (selectedId === target.id) setSelectedId(null);
+            },
+          });
+        }}
+      />
 
       <Sheet open={newOpen} onOpenChange={setNewOpen}>
         <SheetContent

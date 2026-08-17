@@ -131,6 +131,7 @@ export const qk = {
   resumes: () => [...qk.all, 'resumes'] as const,
   resumeList: (params: PageParams = {}) =>
     [...qk.resumes(), 'list', normalizeFilters(params)] as const,
+  resumeDetail: (id: Uuid) => [...qk.resumes(), 'detail', id] as const,
   resumeVersion: (id: Uuid) => [...qk.resumes(), 'version', id] as const,
 
   // ── Profile and settings ──────────────────────────────────────────────────────────

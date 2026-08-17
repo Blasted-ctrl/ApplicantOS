@@ -55,6 +55,7 @@ import type {
   ResumeCreate,
   ResumePreviewRequest,
   ResumeRead,
+  ResumeUpdate,
   ResumeVersionRead,
   ReviewDismiss,
   ReviewItem,
@@ -474,6 +475,30 @@ export function listResumes(
 /** `POST /resumes`. */
 export function createResume(body: ResumeCreate, signal?: AbortSignal): Promise<ResumeRead> {
   return post<ResumeRead>('/resumes', body, undefined, signal);
+}
+
+/** `GET /resumes/{id}` — one variant, with its version count and latest generation. */
+export function getResume(resumeId: Uuid, signal?: AbortSignal): Promise<ResumeRead> {
+  return get<ResumeRead>(`/resumes/${resumeId}`, undefined, signal);
+}
+
+/** `PATCH /resumes/{id}` — rename, retarget, retemplate, or make default. */
+export function updateResume(
+  resumeId: Uuid,
+  body: ResumeUpdate,
+  signal?: AbortSignal,
+): Promise<ResumeRead> {
+  return patch<ResumeRead>(`/resumes/${resumeId}`, body, signal);
+}
+
+/**
+ * `DELETE /resumes/{id}`.
+ *
+ * Answers 409 when the variant has a version an employer already received: deleting it
+ * would erase the record of what was submitted, so the server keeps it.
+ */
+export function deleteResume(resumeId: Uuid, signal?: AbortSignal): Promise<OkResponse> {
+  return del<OkResponse>(`/resumes/${resumeId}`, undefined, signal);
 }
 
 /** `GET /resumes/versions/{id}` — one immutable generation with its fact provenance. */

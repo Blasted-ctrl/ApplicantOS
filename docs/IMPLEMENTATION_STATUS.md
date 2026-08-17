@@ -16,7 +16,7 @@ Last verified: 2026-08-16.
 |---|---|---|
 | Lint | `ruff check app/ tests/ scripts/` | clean |
 | Types | `mypy app` | clean, 180 source files |
-| Tests | `pytest` (SQLite, `LLM_PROVIDER=null`) | **874 passed** |
+| Tests | `pytest` (SQLite, `LLM_PROVIDER=null`) | **924 passed** |
 | Desktop types | `npm run typecheck` | clean |
 | Desktop lint | `npm run lint` | clean |
 
@@ -243,6 +243,64 @@ recorded answer set (4 questions):
    Email       = ada@example.com
    Phone       = +44 7700 900123
 ```
+
+### The record names the résumé the employer received
+
+`resume_source="master"` submits the applicant's own upload rather than the generated view,
+and the row went on naming a generated `ResumeVersion` nobody saw. The product's one real
+submission proves it: the confirmed application to Instead was sent with
+`RESUME_SOURCE=master` and `autofill.uploaded filename='Ali F Resume (1).pdf'`, and its row
+reads
+
+```
+the one confirmed application: Software Engineering Intern
+  status                   = confirmed
+  resume_version_id        = b11803f7…
+  submitted_resume_file_id = None        <- before migration 0005
+```
+
+An adversarial review then ran the fix and found two defects in it, both since corrected: a
+rehearsal — which attaches the file and stops at the button — persisted the attribution and
+the screen reported a submission that never happened; and the column was set once and never
+cleared, so an attempt falling back to the generated résumé still named the upload, inverting
+the attribution in both directions.
+
+### The apply URL is compared, and cannot collapse a board
+
+`apply_url` was written on ingest and read by nothing. Of 400 real postings carrying one,
+**not one** has an apply URL equal to its own `url` — the `url` is the employer's careers
+page and the `apply_url` is the ATS endpoint, so a syndicated copy arrives with a different
+`url` and an identical `apply_url`, invisible to the canonical-URL comparison.
+
+The guard against the opposite failure — collapsing an employer's whole board — is checked
+against every provider shape:
+
+```
+YES  https://job-boards.greenhouse.io/airbnb/jobs/7380185
+YES  https://acme.wd1.myworkdayjobs.com/en-US/External/job/Ann-Arbor/Engineer_R-12345
+YES  https://www.linkedin.com/jobs/view/4012345678
+no   https://acme.wd1.myworkdayjobs.com/en-US/External     <- one URL, whole board
+no   https://www.linkedin.com/jobs/search
+no   https://boards.greenhouse.io/acme
+```
+
+Across all 2,889 postings in the development database, zero distinguishing URLs are shared by
+more than one posting at one employer: the tier can cause no false merge on this data, and
+currently fires on nothing. It is a correctness fix for a case that has not arisen yet, which
+is the honest description of it.
+
+The title floor beside it was set from measurement, not judgement — the first guess (0.4)
+rejected "Software Engineering Intern" against "SWE Intern" (0.25), which is the syndication
+case itself. Every unrelated pair measured scores exactly 0.00 and every related pair at
+least 0.25.
+
+### The binding spec is verified, not merely declared
+
+CLAUDE.md calls `docs/CONTRACTS.md` binding and §3 freezes every enum value, and nothing
+checked it. `tests/test_contracts_spec.py` parses the document and compares all 24 enums
+against `app/models/enums.py`. It found drift beyond the two values that prompted it:
+`ReviewReason.insufficient_knowledge` had been undocumented since it was added, and
+`MemoryKind`, `SessionStatus` and `StopReason` were never listed at all.
 
 ### Prompt-injection defence
 

@@ -311,3 +311,165 @@ def test_the_threshold_is_honoured() -> None:
 
     assert is_duplicate(backend, frontend, threshold=0.99) is False
     assert is_duplicate(backend, backend, threshold=0.99) is True
+
+
+# ======================================================================================
+# The apply URL — the signal §6 names and the canonical-URL tier cannot see
+# ======================================================================================
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://job-boards.greenhouse.io/airbnb/jobs/7380185", True),
+        ("https://jobs.lever.co/calstart/8f3a1c22-1d40-4c11-9c2e-77", True),
+        ("https://acme.com/careers", False),
+        ("https://jobs.acme.com", False),
+        ("https://acme.com/careers/apply", False),
+        ("https://acme.com/jobs/4417", True),
+        ("", False),
+    ],
+)
+def test_only_a_job_specific_apply_url_is_identity(url: str, expected: bool) -> None:
+    """A company-wide portal is shared by every role at that employer.
+
+    Treating one as identity would collapse an employer's whole board into a single posting
+    and the user would apply to exactly one of them. The test is crude on purpose and errs
+    towards *refusing*: a false negative costs nothing, because the fuzzy title comparison
+    still runs behind it.
+
+    Lever's UUID slugs pass, which is right: they name one posting. The honest cost of the
+    crudeness is the reverse — a job path with no digit anywhere would be refused — and that
+    is the direction to err in.
+    """
+    from app.services.dedupe_service import _distinguishing_url
+
+    assert _distinguishing_url(url) is expected
+
+
+async def test_one_opening_on_two_boards_collapses_on_its_apply_url(
+    session, company, make_posting
+) -> None:
+    """The real shape, read off the development database.
+
+    Every posting there with an ``apply_url`` has one that differs from its ``url``: the
+    ``url`` is the employer's own careers page and the ``apply_url`` is the ATS endpoint. A
+    syndicated copy therefore arrives with a *different* ``url`` and an *identical*
+    ``apply_url`` — invisible to the canonical-URL comparison, which comparesigned ``url``
+    alone.
+    """
+    from app.jobs.base import RawPosting
+    from app.models.enums import ATSProviderName
+    from app.services.dedupe_service import DedupeService
+
+    existing = await make_posting(
+        external_id="gh-7380185",
+        url="https://careers.airbnb.com/positions/7380185",
+        apply_url="https://job-boards.greenhouse.io/airbnb/jobs/7380185",
+        title="Software Engineering Intern",
+    )
+
+    syndicated = RawPosting(
+        provider=ATSProviderName.LEVER,
+        external_id="lever-different-id",
+        url="https://jobs.lever.co/airbnb/7380185",
+        apply_url="https://job-boards.greenhouse.io/airbnb/jobs/7380185",
+        title="SWE Intern",
+        company_name=company.name,
+    )
+
+    assert await DedupeService(session).find_existing(syndicated) is existing
+
+
+async def test_a_shared_portal_never_merges_unrelated_roles(
+    session, company, make_posting
+) -> None:
+    """The failure this tier must not cause.
+
+    An employer routing every role through one apply page would otherwise collapse their
+    whole board into one posting — and the user would apply to exactly one job at a company
+    advertising twenty.
+    """
+    from app.jobs.base import RawPosting
+    from app.models.enums import ATSProviderName
+    from app.services.dedupe_service import DedupeService
+
+    await make_posting(
+        external_id="portal-1",
+        url="https://acme.com/roles/software-engineer",
+        apply_url="https://acme.com/careers",
+        title="Software Engineer",
+    )
+
+    other = RawPosting(
+        provider=ATSProviderName.GREENHOUSE,
+        external_id="portal-2",
+        url="https://acme.com/roles/warehouse-associate",
+        apply_url="https://acme.com/careers",
+        title="Warehouse Associate",
+        company_name=company.name,
+    )
+
+    assert await DedupeService(session).find_existing(other) is None
+
+
+async def test_a_distinguishing_url_still_refuses_an_unrelated_title(
+    session, company, make_posting
+) -> None:
+    """Belt and braces: the URL looks job-specific but the roles plainly are not the same.
+
+    A distinguishing apply URL is strong evidence, not proof — an employer could route
+    unrelated roles through a path that happens to carry a digit — so the title floor stays.
+    """
+    from app.jobs.base import RawPosting
+    from app.models.enums import ATSProviderName
+    from app.services.dedupe_service import DedupeService
+
+    await make_posting(
+        external_id="mixed-1",
+        url="https://acme.com/roles/1",
+        apply_url="https://acme.com/apply/2026",
+        title="Software Engineer",
+    )
+
+    unrelated = RawPosting(
+        provider=ATSProviderName.GREENHOUSE,
+        external_id="mixed-2",
+        url="https://acme.com/roles/2",
+        apply_url="https://acme.com/apply/2026",
+        title="Warehouse Associate",
+        company_name=company.name,
+    )
+
+    assert await DedupeService(session).find_existing(unrelated) is None
+
+
+async def test_a_listing_url_matching_the_other_boards_apply_url_collapses(
+    session, company, make_posting
+) -> None:
+    """Syndication is not symmetric: one board's listing URL is another's apply URL.
+
+    All four pairings are compared rather than apply-to-apply alone, which is what catches
+    the board that links straight to the ATS.
+    """
+    from app.jobs.base import RawPosting
+    from app.models.enums import ATSProviderName
+    from app.services.dedupe_service import DedupeService
+
+    existing = await make_posting(
+        external_id="ashby-1",
+        url="https://jobs.ashbyhq.com/acme/9911",
+        apply_url=None,
+        title="Backend Engineer",
+    )
+
+    aggregated = RawPosting(
+        provider=ATSProviderName.GREENHOUSE,
+        external_id="aggregator-1",
+        url="https://aggregator.example.com/listing/abc",
+        apply_url="https://jobs.ashbyhq.com/acme/9911",
+        title="Backend Engineer",
+        company_name=company.name,
+    )
+
+    assert await DedupeService(session).find_existing(aggregated) is existing

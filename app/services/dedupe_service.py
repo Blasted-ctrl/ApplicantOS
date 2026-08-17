@@ -80,6 +80,8 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.jobs.base import RawPosting
 
 __all__ = [
+    "APPLY_URL_MIN_SEGMENTS",
+    "APPLY_URL_TITLE_FLOOR",
     "COMPANY_HINT_FIELDS",
     "FUZZY_CANDIDATE_LIMIT",
     "FUZZY_WINDOW_DAYS",
@@ -99,6 +101,33 @@ logger = structlog.get_logger(__name__)
 #: that a role reposted to a second board a fortnight later still collapses, short enough
 #: that next quarter's identically-titled opening at the same employer does not.
 FUZZY_WINDOW_DAYS: Final[int] = 30
+
+#: Fewest path segments an apply URL must have before it is treated as identifying one
+#: opening rather than one employer. ``acme.com/careers`` is a portal every role at that
+#: company shares; ``job-boards.greenhouse.io/airbnb/jobs/7380185`` is a job.
+APPLY_URL_MIN_SEGMENTS: Final[int] = 2
+
+#: Title similarity an apply-URL match must still clear. Its job is not to judge similarity —
+#: the URL has already done that — but to refuse the one pathological case a distinguishing
+#: URL cannot: an employer routing unrelated roles through a path that happens to carry a
+#: digit.
+#:
+#: The value is measured rather than guessed, and the first guess (0.4) was wrong in the
+#: expensive direction — it rejected the syndication case this whole tier exists for.
+#: Measured with :func:`_title_similarity`:
+#:
+#: ===================================================  =====
+#: "Software Engineering Intern" / "SWE Intern"          0.25
+#: "Software Engineering Intern" / "Software Engineer Intern"  0.50
+#: "Robotics Software Engineer" / "Software Engineer, Robotics" 1.00
+#: "Software Engineer" / "Warehouse Associate"           0.00
+#: "Software Engineer" / "Marketing Manager"             0.00
+#: "Data Scientist" / "Software Engineer"                0.00
+#: ===================================================  =====
+#:
+#: Every unrelated pair scores exactly zero and every related pair at least 0.25, so the
+#: floor belongs in that gap and means "shares some vocabulary at all".
+APPLY_URL_TITLE_FLOOR: Final[float] = 0.15
 
 #: Ceiling on rows the fuzzy tier examines for one incoming posting. A large employer can
 #: have thousands of open roles; comparing against the most recent
@@ -162,6 +191,35 @@ class _TextView:
     title: str
     company_name: str = ""
     description: str | None = None
+
+
+def _distinguishing_url(url: str) -> bool:
+    """Return whether *url* identifies one opening rather than one employer.
+
+    A company-wide apply portal — ``acme.com/careers``, ``jobs.acme.com`` — is shared by
+    every role at that employer, so treating it as identity would collapse all of them into
+    one posting and the user would apply to exactly one. A job-specific endpoint —
+    ``job-boards.greenhouse.io/airbnb/jobs/7380185`` — cannot do that.
+
+    The test is deliberately crude and deliberately conservative: at least
+    :data:`APPLY_URL_MIN_SEGMENTS` path segments, and a digit somewhere in the path. Every
+    ATS this project supports puts the job id in the path, and a false *negative* here costs
+    nothing — the fuzzy title comparison still runs.
+
+    Args:
+        url: A canonical URL.
+
+    Returns:
+        ``True`` when the path looks like it names a job.
+    """
+    if not url:
+        return False
+    from urllib.parse import urlparse
+
+    segments = [segment for segment in urlparse(url).path.split("/") if segment]
+    if len(segments) < APPLY_URL_MIN_SEGMENTS:
+        return False
+    return any(character.isdigit() for character in "".join(segments))
 
 
 def _title_similarity(left: str, right: str) -> float:
@@ -486,9 +544,10 @@ class DedupeService:
         1. ``(provider, external_id)`` — the provider's own identity for the posting.
         2. :func:`~app.jobs.dedupe.dedupe_key` — the cross-parse identity key.
         3. Fuzzy — same employer, publication dates within :data:`FUZZY_WINDOW_DAYS`, and
-           either identical canonical URLs or a title similarity at or above the configured
-           threshold. This is the tier that merges one opening syndicated to two ATSs, and
-           the only tier whose mistakes are visible and reversible.
+           then, in order: identical canonical URLs, a shared **apply** URL, or a title
+           similarity at or above the configured threshold. This is the tier that merges one
+           opening syndicated to two ATSs, and the only tier whose mistakes are visible and
+           reversible.
 
         Args:
             raw: The freshly discovered posting.
@@ -581,6 +640,7 @@ class DedupeService:
         )
 
         incoming_url = canonical_url(raw.url)
+        incoming_apply = canonical_url(getattr(raw, "apply_url", None))
         for candidate in result.scalars().all():
             if not self._within_window(candidate, reference):
                 continue
@@ -593,6 +653,33 @@ class DedupeService:
                     url=incoming_url,
                 )
                 return candidate
+
+            shared = self._shared_apply_url(
+                incoming_url=incoming_url,
+                incoming_apply=incoming_apply,
+                candidate=candidate,
+            )
+            if shared is not None:
+                score = _title_similarity(raw.title, candidate.title)
+                if score >= APPLY_URL_TITLE_FLOOR:
+                    logger.info(
+                        "dedupe.matched",
+                        tier="apply_url",
+                        provider=raw.provider.value,
+                        posting_id=str(candidate.id),
+                        apply_url=shared,
+                        title_score=round(score, 4),
+                    )
+                    return candidate
+                logger.info(
+                    "dedupe.apply_url_rejected",
+                    provider=raw.provider.value,
+                    posting_id=str(candidate.id),
+                    apply_url=shared,
+                    title_score=round(score, 4),
+                    floor=APPLY_URL_TITLE_FLOOR,
+                )
+
             score = _title_similarity(raw.title, candidate.title)
             if score >= self._threshold:
                 logger.info(
@@ -605,6 +692,48 @@ class DedupeService:
                     existing_title=candidate.title[:120],
                 )
                 return candidate
+        return None
+
+    @staticmethod
+    def _shared_apply_url(
+        *,
+        incoming_url: str,
+        incoming_apply: str,
+        candidate: JobPosting,
+    ) -> str | None:
+        """Return the apply URL two postings share, if they share a distinguishing one.
+
+        The signal ``docs/CONTRACTS.md`` §9 and directive §6 both name, and the one the
+        canonical-URL comparison above cannot see. On the development machine every posting
+        with an ``apply_url`` has one that differs from its ``url``: the ``url`` is the
+        employer's own careers page and the ``apply_url`` is the ATS endpoint. The same
+        opening syndicated to a second board therefore arrives with a *different* ``url`` and
+        an *identical* ``apply_url``, which is exactly the case this tier exists for.
+
+        Compared **crosswise**, because syndication is not symmetric: one board's listing URL
+        is another's apply URL, so all four pairings are checked rather than apply-to-apply
+        alone.
+
+        Args:
+            incoming_url: The incoming posting's canonical URL.
+            incoming_apply: The incoming posting's canonical apply URL.
+            candidate: A stored posting from the same employer and window.
+
+        Returns:
+            The shared URL, or ``None``. ``None`` when neither side has a *distinguishing*
+            apply URL — a company-wide portal like ``acme.com/careers`` is shared by every
+            role at that employer, and treating it as identity would merge all of them.
+        """
+        candidate_apply = canonical_url(candidate.apply_url)
+        candidate_url = canonical_url(candidate.url)
+
+        for left, right in (
+            (incoming_apply, candidate_apply),
+            (incoming_apply, candidate_url),
+            (incoming_url, candidate_apply),
+        ):
+            if left and left == right and _distinguishing_url(left):
+                return left
         return None
 
     def _within_window(self, candidate: JobPosting, reference: datetime) -> bool:

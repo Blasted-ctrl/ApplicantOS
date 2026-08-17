@@ -16,7 +16,7 @@ Last verified: 2026-08-16.
 |---|---|---|
 | Lint | `ruff check app/ tests/ scripts/` | clean |
 | Types | `mypy app` | clean, 180 source files |
-| Tests | `pytest` (SQLite, `LLM_PROVIDER=null`) | **924 passed** |
+| Tests | `pytest` (SQLite, `LLM_PROVIDER=null`) | **942 passed** |
 | Desktop types | `npm run typecheck` | clean |
 | Desktop lint | `npm run lint` | clean |
 
@@ -301,6 +301,39 @@ checked it. `tests/test_contracts_spec.py` parses the document and compares all 
 against `app/models/enums.py`. It found drift beyond the two values that prompted it:
 `ReviewReason.insufficient_knowledge` had been undocumented since it was added, and
 `MemoryKind`, `SessionStatus` and `StopReason` were never listed at all.
+
+### A run chooses its résumé
+
+Several variants were storable and only one was reachable: `_resume_container` selected
+strictly by `is_default`, so a user with four variants had three that could never be applied
+with. `prefs.resume_variant` — documented as "the Resume variant to tailor from" — resolved
+to nothing at all, being passed to the engine as free text with no query ever looking a row
+up by it.
+
+Four fallbacks, resolved live against the real database and the real user:
+
+```
+variants this user already has: 1
+   'Tailored'   template=modern  default=True
+(added a second variant for this demonstration)
+
+1. the run names one    -> 'Robotics Engineering'  template='technical'
+2. preference names one -> 'Robotics Engineering'
+3. neither, so default  -> 'Tailored'  default=True
+
+run 45cee92e… -> _run_resume_id == robotics: True
+an unknown variant     -> LookupError: resume 37d4cc69… not found
+```
+
+The variant supplies its own template, which its column always claimed and never did.
+Ownership is checked at the API and again in the selector; a foreign variant is refused
+rather than ignored, because a run that quietly tailored from a résumé the user did not
+choose would send documents they never picked.
+
+**Not done:** variant CRUD. `app/api/routes/resumes.py` still exposes only list, create,
+version read, version download and preview — there is no rename, no delete, no set-default
+and no `GET /resumes/{id}`. Selection works among variants a user creates; managing them
+afterwards does not.
 
 ### Prompt-injection defence
 

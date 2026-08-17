@@ -24,9 +24,14 @@ import {
   Field,
   Input,
   Kbd,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Switch,
 } from '@/components/ui';
-import { usePlugins } from '@/hooks';
+import { usePlugins, useResumes } from '@/hooks';
 import {
   ATS_PROVIDER_NAMES,
   AUTO_APPLY_PROVIDERS,
@@ -36,6 +41,15 @@ import {
   type SessionStartRequest,
 } from '@/lib/api/types';
 import { cn, formatRelative, providerLabel } from '@/lib/utils';
+
+/**
+ * The picker's "use my default" option.
+ *
+ * A sentinel rather than an empty string, because Radix treats `''` as "no value" and would
+ * render the placeholder instead of this choice — and "use my default" is a real answer the
+ * user should see selected, not an absence.
+ */
+const DEFAULT_RESUME_VALUE = '__default__';
 
 /** Split a comma- or newline-separated field into a clean list. */
 function toList(value: string): string[] {
@@ -71,6 +85,9 @@ export function StartRunDialog({
   const [runDryRun, setRunDryRun] = useState(dryRun);
   const [maxApplications, setMaxApplications] = useState('');
   const [matchThreshold, setMatchThreshold] = useState('');
+  const [resumeId, setResumeId] = useState(DEFAULT_RESUME_VALUE);
+  const { data: resumes } = useResumes();
+  const variants = resumes?.items ?? [];
 
   const effectiveAuto = overrideSafety ? autoApply : autoApplyEnabled;
   const effectiveDry = overrideSafety ? runDryRun : dryRun;
@@ -102,6 +119,7 @@ export function StartRunDialog({
                   max_applications: Number.isFinite(cap) && cap > 0 ? cap : null,
                   match_threshold:
                     Number.isFinite(floor) && floor > 0 && floor <= 100 ? floor : null,
+                  resume_id: resumeId === DEFAULT_RESUME_VALUE ? null : resumeId,
                 });
               }}
             >
@@ -134,6 +152,34 @@ export function StartRunDialog({
               </>
             )}
           </p>
+
+          {/*
+            Only shown when there is a choice to make. A user with one variant is told
+            nothing by a dropdown containing one item, and a first run should not have to
+            answer a question that has one answer.
+          */}
+          {variants.length > 1 && (
+            <Field
+              label="Résumé"
+              help="Which variant this run tailors from."
+              htmlFor="run-resume"
+            >
+              <Select value={resumeId} onValueChange={setResumeId}>
+                <SelectTrigger id="run-resume" aria-label="Résumé variant">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={DEFAULT_RESUME_VALUE}>Use my default</SelectItem>
+                  {variants.map((variant) => (
+                    <SelectItem key={variant.id} value={variant.id}>
+                      {variant.name}
+                      {variant.is_default ? ' (default)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
 
           {/*
             Both fields narrow and neither widens: the server takes the *lower* cap and the

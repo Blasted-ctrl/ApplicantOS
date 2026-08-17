@@ -241,7 +241,7 @@ async def test_prepare_returns_the_same_row_it_created(
     of the row rather than the resume engine, which has its own file.
     """
 
-    async def _fake_generate(self, application, user_, posting_):
+    async def _fake_generate(self, application, user_, posting_, resume_id=None):
         return {"bullets": 6, "facts": 4, "sections": 2, "cover_letter": False}
 
     monkeypatch.setattr(Pipeline, "_generate_documents", _fake_generate)

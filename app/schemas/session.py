@@ -88,6 +88,10 @@ class SessionRead(Schema):
         default=None,
         description="Cap for this run alone; None means the configured session cap governs.",
     )
+    resume_id: uuid.UUID | None = Field(
+        default=None,
+        description="The resume variant this run tailors from; None means the default.",
+    )
     match_threshold: int | None = Field(
         default=None,
         description="Minimum normalised score for this run; None means use the setting.",
@@ -201,6 +205,14 @@ class SessionStartRequest(Schema):
         default=None,
         ge=0,
         description="Cap for this run; the lower of this and the configured cap wins.",
+    )
+    resume_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "The resume variant this run tailors from. Omit to fall back to the preference "
+            "in settings and then to the default variant. A variant belonging to another "
+            "user is refused rather than ignored."
+        ),
     )
     match_threshold: int | None = Field(
         default=None,

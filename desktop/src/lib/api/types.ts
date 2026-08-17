@@ -1176,6 +1176,8 @@ export interface SessionRead {
   stop_sentence?: string | null;
   /** Cap for this run alone; `null` means the configured session cap governs. */
   max_applications?: number | null;
+  /** The resume variant this run tailors from; `null` means the default. */
+  resume_id?: Uuid | null;
   /** Minimum normalised score for this run; `null` means use the setting. */
   match_threshold?: number | null;
   jobs_found: number;
@@ -1212,6 +1214,12 @@ export interface SessionStartRequest {
   dry_run?: boolean | null;
   /** Cap for this run; the lower of this and the configured cap wins. */
   max_applications?: number | null;
+  /**
+   * The resume variant this run tailors from. Omit to fall back to the preference in
+   * settings and then to the default variant. A variant belonging to another user is
+   * refused rather than ignored.
+   */
+  resume_id?: Uuid | null;
   /**
    * Minimum normalised score (0-100) for this run. The *higher* of this and
    * `auto_apply_min_score` wins — a run can only ever be pickier than the setting.

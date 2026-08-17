@@ -174,6 +174,7 @@ class SessionService:
         config_snapshot: Mapping[str, Any] | None = None,
         max_applications: int | None = None,
         match_threshold: int | None = None,
+        resume_id: uuid.UUID | str | None = None,
     ) -> RunSession:
         """Open a run for *user_id*, or return the one already running.
 
@@ -195,17 +196,25 @@ class SessionService:
             match_threshold: Minimum normalised score for this run, or ``None`` for the
                 configured floor. Narrowing only — see
                 :meth:`~app.models.session.RunSession.score_floor`.
+            resume_id: The résumé variant this run tailors from, or ``None`` to fall back to
+                the user's preference and then their default. **Must belong to this user**:
+                a variant somebody else owns is refused rather than ignored, because a run
+                that silently used a different résumé than the one asked for would be worse
+                than one that refused to start.
 
         Returns:
             The running session, committed.
 
         Raises:
-            LookupError: If *user_id* is malformed.
+            LookupError: If *user_id* is malformed, or *resume_id* names no variant this
+                user owns.
             ValueError: If either narrowing is negative, or *match_threshold* exceeds 100.
         """
         identifier = _as_uuid(user_id, "user id")
         cap = _validated_narrowing(max_applications, "max_applications")
         threshold = _validated_narrowing(match_threshold, "match_threshold", ceiling=MAX_SCORE)
+
+        resume = await self._owned_resume(identifier, resume_id)
 
         existing = await self.current(identifier)
         if existing is not None:
@@ -225,6 +234,7 @@ class SessionService:
             config_snapshot=dict(config_snapshot or {}),
             max_applications=cap,
             match_threshold=threshold,
+            resume_id=resume,
         )
         self._session.add(run)
         await self._session.flush()
@@ -237,8 +247,44 @@ class SessionService:
             trigger=run.trigger,
             max_applications=cap,
             match_threshold=threshold,
+            resume_id=str(resume) if resume is not None else None,
         )
         return run
+
+    async def _owned_resume(
+        self,
+        user_id: uuid.UUID,
+        resume_id: uuid.UUID | str | None,
+    ) -> uuid.UUID | None:
+        """Validate that *resume_id* names a variant *user_id* owns.
+
+        Args:
+            user_id: The user starting the run.
+            resume_id: The requested variant, or ``None``.
+
+        Returns:
+            The validated id, or ``None`` when none was requested.
+
+        Raises:
+            LookupError: If the id is malformed, or names a variant this user does not own.
+                Refusing rather than falling back is deliberate: a run that quietly tailored
+                from a different résumé than the one asked for would send documents the user
+                did not choose, and they would have no way to tell from the result.
+        """
+        if resume_id is None:
+            return None
+
+        from app.models.resume import Resume
+
+        identifier = _as_uuid(resume_id, "resume id")
+        owned = await self._session.scalar(
+            select(Resume.id)
+            .where(Resume.id == identifier, Resume.user_id == user_id)
+            .limit(1)
+        )
+        if owned is None:
+            raise LookupError(f"resume {identifier} not found")
+        return identifier
 
     async def finish(
         self,

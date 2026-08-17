@@ -529,7 +529,7 @@ async def test_submitted_count_reads_the_rows_not_the_counter(
     assert await service.submitted_count(run.id) == 3
 
 
-async def _fake_generate(self, application, user, posting) -> dict[str, int]:
+async def _fake_generate(self, application, user, posting, resume_id=None) -> dict[str, int]:
     """Stand in for document generation, which is not what this file is testing."""
     return {"bullets": 4, "facts": 4}
 

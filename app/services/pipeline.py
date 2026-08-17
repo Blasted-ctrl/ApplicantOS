@@ -583,7 +583,17 @@ class Pipeline:
                 message="Generating tailored documents.",
                 payload={"created": created},
             )
-            summary = await self._generate_documents(application, user, posting)
+            # `application.session_id` as the fallback, not just the caller's. A retry
+            # (`POST /applications/{id}/retry`) dispatches without a session id, so an
+            # application that a robotics run prepared would re-tailor from the *default*
+            # variant on retry — a different résumé than the one the run chose, with nothing
+            # saying so. The row remembers which run it belongs to; that is the answer.
+            summary = await self._generate_documents(
+                application,
+                user,
+                posting,
+                await self._run_resume_id(session_id or application.session_id),
+            )
 
             # Golden rule #7 has a corollary nobody wrote down: if the knowledge graph holds
             # nothing relevant, the honest output is an *empty* resume — and we may not fill
@@ -671,13 +681,21 @@ class Pipeline:
         application: Application,
         user: User,
         posting: JobPosting,
+        resume_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
         """Tailor, render and persist this application's resume and optional cover letter.
+
+        The chosen variant supplies its **own** template and targeting label. Those columns
+        existed and were ignored: the template came from ``prefs.resume_template`` and the
+        label from ``prefs.resume_variant``, so selecting a "Robotics" variant configured for
+        a different template rendered it under the software one. A variant that cannot carry
+        its own configuration is a name, not a variant.
 
         Args:
             application: The application being prepared, already ``preparing``.
             user: The applicant, with their profile loaded.
             posting: The posting being applied to.
+            resume_id: The variant this run was started with, if it named one.
 
         Returns:
             A JSON-ready summary of what was produced, recorded on the ``ready`` event:
@@ -695,7 +713,23 @@ class Pipeline:
         prefs: UserPreferences = user.prefs
         posting_dto = JobPostingDTO.from_model(posting)
         user_dto = UserProfileDTO.from_model(user)
-        template = (prefs.resume_template or self._settings.resume_template).strip()
+
+        # Resolved before rendering rather than after, because the variant decides *how* to
+        # render. Doing it the other way round is how the container ended up being chosen to
+        # match a template that had already been picked without it.
+        fallback_template = (prefs.resume_template or self._settings.resume_template).strip()
+        container = await self._resume_container(user, fallback_template, resume_id)
+        template = (container.template or fallback_template).strip()
+        variant_label = container.variant_label or container.name or prefs.resume_variant
+
+        logger.info(
+            "pipeline.resume_variant_selected",
+            application_id=str(application.id),
+            resume_id=str(container.id),
+            name=container.name,
+            template=template,
+            requested=str(resume_id) if resume_id is not None else None,
+        )
 
         engine = ResumeEngine(
             self._session,
@@ -709,7 +743,7 @@ class Pipeline:
                 posting=posting_dto,
                 prefs=prefs,
                 template=template,
-                variant_label=prefs.resume_variant,
+                variant_label=variant_label,
             )
         )
 
@@ -723,7 +757,7 @@ class Pipeline:
         )
 
         version = await self._persist_resume_version(
-            application, user, tailored, render, stored, template
+            application, user, tailored, render, stored, template, container
         )
         application.resume_version_id = version.id
         application.ai_reasoning = tailored.reasoning or None
@@ -809,6 +843,7 @@ class Pipeline:
         render: RenderResult,
         stored: UploadedFile,
         template: str,
+        container: Resume,
     ) -> ResumeVersion:
         """Write the generated resume to the database.
 
@@ -823,11 +858,14 @@ class Pipeline:
             render: What the renderer produced.
             stored: The catalogued file holding the rendered bytes.
             template: The template requested (which may differ from the one that rendered).
+            container: The variant this version belongs to, already resolved by the caller.
+                Passed in rather than re-resolved: resolving twice could pick two different
+                variants for one generation — the caller's choice decides the template, and
+                a second lookup here would silently file the version under a third.
 
         Returns:
             The persisted, flushed :class:`~app.models.resume.ResumeVersion`.
         """
-        container = await self._resume_container(user, template)
         version = ResumeVersion(
             resume_id=container.id,
             application_id=application.id,
@@ -2542,6 +2580,25 @@ class Pipeline:
         )
         return _RunCapacity(cap=cap, submitted=submitted, remaining=cap - submitted)
 
+    async def _run_resume_id(self, session_id: uuid.UUID | str | None) -> uuid.UUID | None:
+        """Return the résumé variant the owning run was started with, if it named one.
+
+        Args:
+            session_id: The run this work belongs to, or ``None``.
+
+        Returns:
+            The variant id, or ``None`` when the work belongs to no run, the run is gone, or
+            the run named none — all three of which mean the same thing here: fall back to
+            the user's preference and then to their default.
+        """
+        if session_id is None:
+            return None
+        try:
+            run = await self._sessions.get(session_id)
+        except LookupError:
+            return None
+        return run.resume_id
+
     async def _score_floor(self, session_id: uuid.UUID | None) -> int:
         """Return the normalised score a posting must reach to be submitted.
 
@@ -2589,20 +2646,72 @@ class Pipeline:
                 error=str(exc),
             )
 
-    async def _resume_container(self, user: User, template: str) -> Resume:
+    async def _resume_container(
+        self,
+        user: User,
+        template: str,
+        requested: uuid.UUID | None = None,
+    ) -> Resume:
         """Return the :class:`~app.models.resume.Resume` variant new versions belong to.
 
         A ``Resume`` holds no content — it is the configuration a family of versions was
         generated under. Users who have never opened the resume screen have none, so one is
         created on first use rather than making every caller check.
 
+        **Four fallbacks, most specific first**, because "which résumé?" has four possible
+        answers and only the first is an instruction:
+
+        1. the variant this *run* was started with;
+        2. the variant named by ``prefs.resume_variant`` — which was documented as "the
+           Resume variant to tailor from" and, until now, resolved to nothing at all: it was
+           passed to the engine as a free-text label and no query ever looked a row up by it,
+           so a user who set it got their default variant anyway;
+        3. the user's default variant;
+        4. their oldest, or a new one.
+
+        A *requested* variant belonging to somebody else is ignored rather than honoured —
+        the ownership filter is in the query — and falls through to the same chain. The API
+        refuses it before this point; this is the second lock on the same door.
+
         Args:
             user: The owning user.
             template: The template this generation used.
+            requested: A specific variant to use, from the run or the request.
 
         Returns:
-            The user's default variant, created if there was none.
+            The chosen variant, created if the user had none.
         """
+        if requested is not None:
+            container = await self._session.scalar(
+                select(Resume)
+                .where(Resume.id == requested, Resume.user_id == user.id)
+                .limit(1)
+            )
+            if container is not None:
+                return container
+            logger.warning(
+                "pipeline.resume_variant_not_found",
+                user_id=str(user.id),
+                resume_id=str(requested),
+                detail="falling back to the preferred or default variant",
+            )
+
+        # Names are not unique — `resumes` constrains nothing but its primary key — so two
+        # variants may legitimately share one. Oldest-first makes the choice deterministic
+        # rather than dependent on row order, which is what matters: a preference that
+        # resolved to a different résumé on different runs would be worse than one that
+        # resolved to the "wrong" one consistently.
+        preferred = (user.prefs.resume_variant or "").strip()
+        if preferred:
+            container = await self._session.scalar(
+                select(Resume)
+                .where(Resume.user_id == user.id, Resume.name == preferred)
+                .order_by(Resume.created_at.asc())
+                .limit(1)
+            )
+            if container is not None:
+                return container
+
         container = await self._session.scalar(
             select(Resume)
             .where(Resume.user_id == user.id, Resume.is_default.is_(True))

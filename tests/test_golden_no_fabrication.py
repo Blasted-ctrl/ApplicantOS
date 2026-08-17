@@ -341,7 +341,7 @@ async def test_prepare_escalates_with_insufficient_knowledge_on_an_empty_tailor(
     """
     from app.services.pipeline import Pipeline
 
-    async def _empty_documents(self, application, user_, posting_):
+    async def _empty_documents(self, application, user_, posting_, resume_id=None):
         return {"bullets": 0, "facts": 0, "sections": 0, "cover_letter": False}
 
     monkeypatch.setattr(Pipeline, "_generate_documents", _empty_documents)
@@ -367,7 +367,7 @@ async def test_either_zero_bullets_or_zero_facts_escalates(
     """Both halves of the emptiness check are load-bearing."""
     from app.services.pipeline import Pipeline
 
-    async def _documents(self, application, user_, posting_):
+    async def _documents(self, application, user_, posting_, resume_id=None):
         return dict(summary)
 
     monkeypatch.setattr(Pipeline, "_generate_documents", _documents)
@@ -385,7 +385,7 @@ async def test_a_non_empty_tailor_reaches_ready(
     """The control: a real resume is not escalated."""
     from app.services.pipeline import Pipeline
 
-    async def _documents(self, application, user_, posting_):
+    async def _documents(self, application, user_, posting_, resume_id=None):
         return {"bullets": 9, "facts": 5, "sections": 2, "cover_letter": False}
 
     monkeypatch.setattr(Pipeline, "_generate_documents", _documents)

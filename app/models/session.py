@@ -20,11 +20,12 @@ without the application loading rows to sort them.
 from __future__ import annotations
 
 import operator
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
-from sqlalchemy import ColumnElement, Float, Integer, String, func
+from sqlalchemy import ColumnElement, Float, ForeignKey, Integer, String, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -33,7 +34,7 @@ from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.functions import FunctionElement
 
 from app.database.base import Base
-from app.database.types import utcnow
+from app.database.types import GUID, utcnow
 from app.models.enums import (
     STOP_REASON_SENTENCES,
     SessionStatus,
@@ -219,6 +220,17 @@ class RunSession(UUIDPrimaryKeyMixin, TimestampMixin, UserOwnedMixin, Base):
         Integer,
         nullable=True,
         doc="Minimum normalised score (0-100) for this run. NULL means use the setting.",
+    )
+    resume_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("resumes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        doc=(
+            "The résumé variant this run tailors from. NULL falls back to the user's "
+            "preference and then to their default variant — which is what every run did "
+            "before a run could be given one."
+        ),
     )
 
     # -- rollup counters ----------------------------------------------------------------

@@ -170,12 +170,20 @@ async def start_session(
         is unreachable: the run exists and is visible, but nothing is driving it yet — which
         is exactly what the user needs to be told, and is not a server error.
     """
+    # Asked *before* starting, because `start` is idempotent: it hands back the run already
+    # in flight rather than opening a second one. That is the right behaviour and it makes
+    # the response ambiguous — "Run started and queued." was returned either way, while the
+    # trigger, the caps and (now) the résumé variant this request named were quietly dropped.
+    # Silently ignoring a résumé choice is a much bigger thing to be vague about than a cap.
+    adopted = await service.current(user.id)
+
     run = await service.start(
         user.id,
         payload.trigger,
         config_snapshot=_config_snapshot(settings, user, payload),
         max_applications=payload.max_applications,
         match_threshold=payload.match_threshold,
+        resume_id=payload.resume_id,
     )
     item = SessionRead.model_validate(run)
     bus.publish_model(EVENT_SESSION_STARTED, item)
@@ -200,18 +208,31 @@ async def start_session(
         discover=payload.discover is not None,
         submission_allowed=settings.is_submission_allowed,
         degraded=outcome.degraded,
+        adopted=adopted is not None,
+        resume_id=str(payload.resume_id) if payload.resume_id else None,
     )
+
+    if adopted is not None:
+        message = (
+            "A run is already in flight, so this request joined it rather than starting a "
+            "second one. Anything you chose here — the résumé, the caps, the threshold — "
+            "applies to a new run, not to the one already going. Stop it first to change them."
+        )
+    elif outcome.dispatched:
+        message = "Run started and queued."
+    else:
+        message = (
+            "Run started, but the background worker is not running, so nothing is driving "
+            "it yet."
+        )
+
     return OkResponse(
-        message=(
-            "Run started and queued."
-            if outcome.dispatched
-            else "Run started, but the background worker is not running, so nothing is "
-            "driving it yet."
-        ),
+        message=message,
         data={
             **outcome.as_dict(),
             "session": item.model_dump(mode="json"),
             "submission_allowed": settings.is_submission_allowed,
+            "adopted": adopted is not None,
         },
     )
 
